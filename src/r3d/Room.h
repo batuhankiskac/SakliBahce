@@ -2,7 +2,8 @@
 // The kıraathane interior in 3D: architecture, furniture, background tables & chairs, the tea counter
 // (ocak) with çaydanlık, TV with football, clock, pictures, windows/street, lamps (the lights), ceiling fan,
 // stove, coat rack, chalkboards (prices + the SCOREBOARD), the shared ashtray, and the room atmosphere
-// (fog/haze settings, ambient smoke, dust in light shafts). PUBLIC API FROZEN.
+// (fog/haze settings, ambient smoke, dust in light shafts), the weather and passers-by outside the windows and
+// the kahvehane cat. PUBLIC API FROZEN (additions only).
 // Implementation: src/r3d/Room*.cpp — room owner (struct Room::Impl).
 #include "r3d/Gfx.h"
 #include "ui/Audio.h"
@@ -33,6 +34,10 @@ public:
     void setScoreboard(const std::string& title, const std::vector<std::string>& lines);
     void setTitleMode(bool on);             // menu backdrop (may dim/stage lighting differently)
     bool consumeTvGoal();                   // true once after a goal on the TV (banter hook)
+    // Rain outside tonight: 0 on a dry night, else 0..1 and drifting slowly (App feeds it to Audio::setRain).
+    float rainAmount() const;
+    // True once after the cat meowed; `where` = about its head (people at the tables glance over).
+    bool consumeCatMeow(Vector3& where);
     std::function<void(ui::Sfx)> playSfx;   // occasional room sounds (e.g. Chair, Dice, GlassSet)
 
 private:

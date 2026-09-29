@@ -618,6 +618,44 @@ Vector3 solveTwoBone(Vector3 s, Vector3& w, float l1, float l2, Vector3 pole) {
     return Vector3Add(Vector3Add(s, Vector3Scale(dir, a)), Vector3Scale(pp, hh));
 }
 
+namespace {
+// Velocity of one channel (`get`: position, fingers or palm) at key i, arriving (in) or leaving (out):
+// the time-weighted mean of the neighbouring slopes, slowed on turns and capped (no overshoot); zero at
+// turning points, at the last key and at keys that ease out (1); into a slam key (2) at speed, out of it
+// from rest. The first key leaves with the motion the hand had when the track began.
+template <class Get>
+Vector3 keyVelocity(const Track& tr, size_t i, bool in, Get get, Vector3 first) {
+    const std::vector<Key>& k = tr.keys;
+    const Vector3 zero{0, 0, 0};
+    if (i + 1 >= k.size()) {
+        if (!in || i == 0 || k[i].ease != 2) return zero;
+    }
+    if (i == 0) return first;
+    const Key& b = k[i];
+    const Vector3 sIn = Vector3Scale(Vector3Subtract(get(b), get(k[i - 1])), 1.f / std::max(b.t - k[i - 1].t, 1e-3f));
+    if (b.ease == 2) return in ? Vector3Scale(sIn, 1.8f) : zero;
+    if (b.ease == 1 || i + 1 >= k.size()) return zero;
+    const Key& c = k[i + 1];
+    const float dIn = std::max(b.t - k[i - 1].t, 1e-3f), dOut = std::max(c.t - b.t, 1e-3f);
+    const Vector3 sOut = Vector3Scale(Vector3Subtract(get(c), get(b)), 1.f / dOut);
+    const float lIn = Vector3Length(sIn), lOut = Vector3Length(sOut);
+    if (lIn < 1e-5f || lOut < 1e-5f) return zero;
+    const float cosT = Vector3DotProduct(sIn, sOut) / (lIn * lOut);
+    if (cosT <= 0.f) return zero;
+    Vector3 v = Vector3Scale(Vector3Add(Vector3Scale(sIn, dOut), Vector3Scale(sOut, dIn)), 1.f / (dIn + dOut));
+    if (b.ease != 3) v = Vector3Scale(v, 0.5f + 0.5f * cosT);
+    const float cap = 1.5f * std::min(lIn, lOut), lv = Vector3Length(v);
+    return lv > cap ? Vector3Scale(v, cap / lv) : v;
+}
+
+Vector3 hermite(Vector3 p0, Vector3 m0, Vector3 p1, Vector3 m1, float span, float u) {
+    const float u2 = u * u, u3 = u2 * u;
+    const float h00 = 2.f * u3 - 3.f * u2 + 1.f, h10 = u3 - 2.f * u2 + u, h01 = -2.f * u3 + 3.f * u2, h11 = u3 - u2;
+    return Vector3Add(Vector3Add(Vector3Scale(p0, h00), Vector3Scale(m0, h10 * span)),
+                      Vector3Add(Vector3Scale(p1, h01), Vector3Scale(m1, h11 * span)));
+}
+} // namespace
+
 void evalTrack(const Track& tr, float t, Key& out) {
     const std::vector<Key>& k = tr.keys;
     if (k.empty()) return;
@@ -633,20 +671,20 @@ void evalTrack(const Track& tr, float t, Key& out) {
     while (i < k.size() && k[i].t < t) ++i;
     const Key& a = k[i - 1];
     const Key& b = k[i];
-    float span = std::max(b.t - a.t, 1e-4f);
-    float u = clampf((t - a.t) / span, 0.f, 1.f);
-    float e;
-    switch (b.ease) {
-    case 1: e = easeOut3(u); break;
-    case 2: e = easeIn2(u); break;
-    case 3: e = u; break;
-    default: e = smoother01(u); break;
-    }
+    const float span = std::max(b.t - a.t, 1e-4f);
+    const float u = clampf((t - a.t) / span, 0.f, 1.f);
+    auto pos = [](const Key& q) { return q.pos; };
+    auto fin = [](const Key& q) { return q.fingers; };
+    auto pal = [](const Key& q) { return q.palm; };
     out = b;
-    out.pos = Vector3Lerp(a.pos, b.pos, e);
-    if (b.lift != 0.f) out.pos.y += b.lift * std::sin(PI_F * e);
-    out.fingers = vnorm(Vector3Lerp(a.fingers, b.fingers, e));
-    out.palm = vnorm(Vector3Lerp(a.palm, b.palm, e));
+    out.pos = hermite(a.pos, keyVelocity(tr, i - 1, false, pos, tr.v0), b.pos, keyVelocity(tr, i, true, pos, tr.v0), span, u);
+    // the arc over obstacles: a bump with flat ends, so the path stays smooth through the keys
+    if (b.lift != 0.f) out.pos.y += b.lift * 16.f * u * u * (1.f - u) * (1.f - u);
+    out.fingers = vnorm(hermite(a.fingers, keyVelocity(tr, i - 1, false, fin, tr.f0), b.fingers,
+                                keyVelocity(tr, i, true, fin, tr.f0), span, u));
+    out.palm = vnorm(hermite(a.palm, keyVelocity(tr, i - 1, false, pal, tr.p0), b.palm,
+                             keyVelocity(tr, i, true, pal, tr.p0), span, u));
+    const float e = smoother01(u);
     out.pose = u < 0.55f ? a.pose : b.pose;
     out.elbowOut = lerpf(a.elbowOut, b.elbowOut, e);
     out.relax = lerpf(a.relax, b.relax, e);

@@ -541,6 +541,7 @@ void TableState::advanceVisuals(float dt) {
             float delay = v.flying && v.ft < 0 ? -v.ft : 0.f;
             if (phase == Phase::Gather) delay = hashF((uint32_t)id * 331u) * 0.22f;
             else if (dealPending && v.cont == C_HEAP) delay = dealDelay[id];
+            else if (delay == 0.f) delay = botLead(v.cont, t.cont);
             startFlight(id, v.cont, t.cont, t.pose, delay, false);
             v.clickOnLand = t.cont == C_HAND + human && !dealPending;
             v.cont = t.cont;
@@ -581,6 +582,17 @@ void TableState::advanceVisuals(float dt) {
         const bool hot = id == selected || (id == hoverTile && press.kind == Press::None);
         v.glow = lerpf(v.glow, hot ? 1.f : 0.f, 1.f - std::exp(-16.f * dt));
     }
+}
+
+// Tiles an opponent moves wait for its hand (w3d::BOT_*_LEAD): taken ones lift off when the fingers reach them,
+// given ones leave the rack once picked.
+float TableState::botLead(int fromCont, int toCont) const {
+    auto botRack = [&](int c) { return isRack(c) && c - C_HAND != human; };
+    const bool fromTable = fromCont == C_PILE || (fromCont >= C_DISC && fromCont < C_MELD);
+    if (botRack(toCont)) return fromTable ? w3d::BOT_TAKE_LEAD : fromCont >= C_MELD ? w3d::BOT_SWAPBACK_LEAD : 0.f;
+    if (botRack(fromCont) && toCont >= C_MELD) return layingMelds ? w3d::BOT_MELD_LEAD : w3d::BOT_GIVE_LEAD;
+    if (botRack(fromCont) && toCont >= C_DISC) return w3d::BOT_GIVE_LEAD;
+    return 0.f;
 }
 
 bool TableState::anyFlying() const {
@@ -1303,6 +1315,7 @@ void TableState::onEvent(const okey::GameEvent& e) {
     case EvType::HandEnd: pushToast("hand", e.text, gold, 4.5f); break;
     case EvType::MatchEnd: pushToast("match", e.text, gold, 5.0f); break;
     }
+    if (e.type != EvType::TurnStart) layingMelds = e.type == EvType::Open || e.type == EvType::LayMelds;
     pendingSync = true;
 }
 

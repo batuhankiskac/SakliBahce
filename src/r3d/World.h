@@ -55,6 +55,16 @@ constexpr RectXZ MELD_ZONE[4] = {
     {-0.26f, 0.14f, 0.26f, 0.40f}, {0.14f, -0.26f, 0.40f, 0.26f},
     {-0.26f, -0.40f, 0.26f, -0.14f}, {-0.40f, -0.26f, -0.14f, 0.26f}};
 
+// An opponent's hand and the tile it moves share one timeline (seconds after the game event, at animation
+// speed 1): a tile a bot takes lifts off when the fingers have reached it, a tile it gives leaves the rack
+// once picked. Table3D holds those flights back by these leads, Characters times the reaches to them and
+// App delays the tile sounds by them.
+constexpr float BOT_TAKE_LEAD = 0.40f;      // drawing from the pile / taking the left neighbour's discard
+constexpr float BOT_GIVE_LEAD = 0.26f;      // discarding, adding to a meld, giving a tile back
+constexpr float BOT_MELD_LEAD = 0.22f;      // opening / laying melds: the tiles leave the rack together
+constexpr float BOT_SWAPBACK_LEAD = 0.84f;  // the joker a bot swapped out of a meld, back to its rack
+constexpr float BOT_TILE_FLIGHT = 0.50f;    // about how long those flights take (Table3D computes the exact time)
+
 // Personal props on the table (owned by Characters; the human's glass too) and the shared ashtray (Room).
 // Keep-out: nothing else may be placed within the radius.
 constexpr Vector3 GLASS_POS[4] = {           // 0 human tea, 1 Rıza tea, 2 Mahmut tea, 3 Nuri ORALET

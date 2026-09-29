@@ -1,5 +1,5 @@
 #pragma once
-// Procedural audio: every sound is synthesised at init (no asset files). PUBLIC API FROZEN.
+// Procedural audio: every sound is synthesised at init (no asset files). PUBLIC API FROZEN (additions only).
 // Implementation: src/ui/Audio.cpp (audio owner) defines struct Audio::Impl.
 // App calls InitAudioDevice() before Audio::init() and CloseAudioDevice() after shutdown().
 #include "core/Game.h"
@@ -22,6 +22,8 @@ enum class Sfx {
     Error,        // soft negative blip
     Dice,         // backgammon dice from a neighbouring table (tavla zarı)
     Chair,        // chair scrape / creak
+    CarPass,      // a car hissing past on the street outside (wet tyres on rainy nights), from the left
+    Meow,         // the kahvehane cat, from across the room ("mrrp", "miyav")
     Count
 };
 
@@ -42,6 +44,7 @@ public:
     void setAmbientEnabled(bool on);  // crowd murmur, ceiling fan, distant dice/tavla, TV football
     void setMusicEnabled(bool on);    // old radio: synthesized Turkish folk (makam) melodies, lo-fi
     void setMasterVolume(float v01);
+    void setRain(float amount01);     // rain outside the windows (ambience bus): 0 = a dry night
 
 private:
     struct Impl;

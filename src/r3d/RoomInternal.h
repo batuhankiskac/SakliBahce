@@ -5,6 +5,8 @@
 //   RoomBuild.cpp  all static geometry (architecture, furniture, counter, props, lamps, TV...)
 //   RoomTex.cpp    procedural textures (floor, walls, ceiling, glass) and the static canvases
 //   RoomCanvas.cpp dynamic canvases (scoreboard, TV football) and the TV match simulation
+//   RoomWeather.cpp rainy nights (drops on the glass, rain outside), passers-by on the street
+//   RoomCat.cpp    the kahvehane cat: procedural rig, naps, walks, jumps onto an empty chair
 #include "core/Rng.h"
 #include "r3d/Room.h"
 #include "r3d/World.h"
@@ -201,6 +203,7 @@ void drawLetteringCanvas(RenderTexture2D& rt);
 
 namespace rm {
 struct Builders;  // all static geometry builders, one per material/flag group (RoomBuild.cpp)
+struct Cat;       // the kahvehane cat (RoomCat.cpp)
 }
 
 // ============================================================================ Room::Impl
@@ -347,6 +350,73 @@ struct Room::Impl {
     // ---- data used by both the builder and the wall texture
     std::vector<rm::Opening> openings;
     std::vector<rm::WallMark> marks;
+
+    // ---- weather & street life (RoomWeather.cpp): some nights it rains (seed): drops run down the outside of
+    //      the window glass, rain streaks fall past the street lamp, passers-by hurry past under umbrellas
+    float rainBase = 0.f;         // tonight's rain, 0 = a dry night
+    float rain = 0.f;             // current intensity (drifts slowly; the audio's rain bed follows it)
+    // raindrops on the glass (animated), one slot per window; double-buffered: redrawing a render texture the GPU
+    // may still be reading from the last frame stalls the pipeline for a whole frame
+    RenderTexture2D cvDrops[2]{};
+    int dropsFront = 0;
+    RenderTexture2D cvWalkers{};  // passer-by silhouettes, 4 walk frames per figure (static)
+    Texture2D texStreak{};        // rain streaks for the upright billboards outside
+    Texture2D texDropSprite{};    // one raindrop, stamped onto the drops canvas
+    Mat mDrops;
+    struct Bead {
+        float x, y, r;
+    };
+    struct Runner {
+        float x, y, r, v, pause, wob;
+        std::vector<Vector2> trail;
+    };
+    struct Trail {
+        std::vector<Vector2> pts;
+        float w, age;
+    };
+    struct DropSlot {
+        Rectangle rect{};  // canvas pixels
+        std::vector<Bead> beads;
+        std::vector<Runner> runners;
+        std::vector<Trail> trails;
+        float beadAcc = 0.f;
+    };
+    std::vector<DropSlot> dropSlots;
+    std::vector<Pane> dropPanes;
+    float dropRedraw = 0.f;
+    struct Streak {
+        Vector3 p;
+        float speed, bright;
+        int var;
+    };
+    std::vector<Streak> streaks;
+    struct Walker {
+        int type = 0;
+        Vector3 p{}, dir{};
+        float speed = 1.3f, dist = 0.f, left = 0.f;
+    };
+    std::vector<Walker> walkers;
+    float walkerT = 6.f;
+    bool carSoundDone = false;
+
+    // ---- the kahvehane cat (RoomCat.cpp)
+    rm::Cat* cat = nullptr;
+    int catChair = -1;  // the chair the cat is on: the chair-scrape animation leaves it alone
+    bool catMeowed = false;  // for Room::consumeCatMeow
+    Vector3 catMeowAt{};
+    void initCat();
+    void updateCat(float dt);
+    void submitCat(Renderer& r);
+    void freeCat(Renderer& r);
+
+    // RoomWeather.cpp
+    void initWeather();
+    void updateWeather(float dt);
+    void submitWeather(Renderer& r);
+    void freeWeather(Renderer& r);
+    void simDrops(DropSlot& s, float dt);
+    void placeStreak(Streak& s, okey::Rng& rng, bool anywhereY);
+    void drawDrops();
 
     // RoomBuild.cpp
     void planWalls();

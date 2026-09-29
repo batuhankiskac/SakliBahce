@@ -3,6 +3,9 @@
 Gece yarısı, dumanaltı bir mahalle kahvehanesi. Yeşil çuhalı okey masasına oturuyorsun; karşında Kel Mahmut
 sigarasını tüttürüyor, sağında Hacı Rıza tespih çekiyor, solunda Emekli Nuri oraletini yudumluyor. Çaycı askılı
 tepsisiyle masaların arasında dolaşıyor, arka masada tavla zarları şakırdıyor, köşedeki tüplü televizyonda maç var.
+Bazı geceler dışarıda yağmur yağar: damlalar cama vurup süzülür, olukta su tıpırdar, kaldırımdan şemsiyeli
+yolcular geçer. Kahvehanenin kedisi sobanın dibinde ya da boş bir sandalyede kıvrılıp uyur; arada bir uyanır,
+gerinir, yalanır, başka bir köşeye geçer, bazen de dönüp sana bakar.
 
 **Kıraathane 101**, üç bilgisayar rakibe karşı **101 Okey** oynadığın, birinci şahıs 3B bir masaüstü oyunudur
 (C++17 + raylib 6.0, macOS). Görüntülerin ve seslerin tamamı kodla üretilir: hiçbir resim, model ya da ses

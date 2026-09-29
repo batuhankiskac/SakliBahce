@@ -615,6 +615,8 @@ void App::updateWorld(float dt, float simDt, const Camera3D& cam, bool blocked) 
     for (int s = 0; s < 4; ++s) heads[s] = characters_.headPosition(s);
     table_.setHeadAnchors(heads);
     characters_.setActiveSeat(playing && !blocked ? game_.current() : -1);
+    Vector3 meowAt;
+    if (room_.consumeCatMeow(meowAt)) characters_.onCatMeow(meowAt);
     if (room_.consumeTvGoal()) {
         characters_.onTvGoal();
         // the room turns to the TV and so do we, unless we are busy with our own tiles
@@ -629,6 +631,7 @@ void App::updateWorld(float dt, float simDt, const Camera3D& cam, bool blocked) 
         renderer_.update(sub);
     }
     updateDelayedAudio(simDt);
+    if (audioOn_) audio_.setRain(room_.rainAmount());  // the rain bed follows tonight's weather outside
     if (audioOn_) audio_.update(dt);
     updateScoreboard();
     if (settingsDirty_ && screens_.current() != ui::ScreenId::Settings && !snapshot_ && !opt_.autoplay) {
@@ -730,6 +733,7 @@ void App::startMatch() {
     characters_.setNames(nm);
     setTitleMode(false);
     table_.setAnimationSpeed(st.animSpeed);
+    characters_.setAnimationSpeed(st.animSpeed);
     table_.setHints(st.hints);
     delayed_.clear();
     think_ = Think{};
@@ -772,6 +776,7 @@ void App::applySettings() {
         audio_.setMusicEnabled(st.music);
     }
     table_.setAnimationSpeed(st.animSpeed);
+    characters_.setAnimationSpeed(st.animSpeed);
     table_.setHints(st.hints);
     if (flow_ == Flow::Title) {
         characters_.setNames(names());
@@ -915,16 +920,23 @@ void App::pumpEvents() {
     }
 }
 
-// Tile sounds that belong to a tile landing are held back so the clack comes when the tile touches the felt.
+// Tile sounds that belong to a tile landing are held back so the clack comes when the tile touches the felt;
+// an opponent's tiles also wait for its hand (w3d::BOT_*_LEAD).
 void App::routeAudio(const okey::GameEvent& e) {
     if (!audioOn_) return;
     using okey::EvType;
+    const bool bot = e.player >= 0 && e.player < 4 && e.player != HUMAN;
     switch (e.type) {
+    case EvType::DrawPile:
+    case EvType::TakeLeft:
+        if (bot) delayed_.push_back({e, w3d::BOT_TAKE_LEAD / animSpeed()});
+        else audio_.onEvent(e);
+        break;
     case EvType::Discard:
     case EvType::AddToMeld:
-    case EvType::SwapJoker:
+    case EvType::SwapJoker: delayed_.push_back({e, (LANDING_LAG + (bot ? w3d::BOT_GIVE_LEAD : 0.f)) / animSpeed()}); break;
     case EvType::Open:
-    case EvType::LayMelds: delayed_.push_back({e, LANDING_LAG / animSpeed()}); break;
+    case EvType::LayMelds: delayed_.push_back({e, (LANDING_LAG + (bot ? w3d::BOT_MELD_LEAD : 0.f)) / animSpeed()}); break;
     default: audio_.onEvent(e); break;
     }
 }
@@ -964,7 +976,9 @@ void App::updateBots(float simDt) {
         think_.seat = s;
         think_.turn = game_.turnNumber();
         think_.actions = 0;
-        think_.wait = paceRng_.uniform(0.6f, 1.2f) / animSpeed();
+        // (the reach itself now takes its time — the hand goes to the tile before it moves — so a little less
+        // idle thinking keeps the table's rhythm)
+        think_.wait = paceRng_.uniform(0.45f, 1.0f) / animSpeed();
     }
     if (!think_.pending) launchThink(s);
     if (table_.isAnimating()) return;  // tiles still in the air: nobody moves
@@ -977,7 +991,7 @@ void App::updateBots(float simDt) {
     } else {
         applyBot(s, a);
     }
-    think_.wait = paceRng_.uniform(0.35f, 0.6f) / animSpeed();
+    think_.wait = paceRng_.uniform(0.25f, 0.5f) / animSpeed();
 }
 
 void App::launchThink(int seat) {

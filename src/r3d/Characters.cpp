@@ -129,6 +129,25 @@ void Characters::say(int seat, const std::string& text, float seconds) {
     m.pushLine(seat, text, seconds, 4.5f);
 }
 
+void Characters::onCatMeow(Vector3 where) {
+    Impl& m = *impl_;
+    // the regulars glance over unless they are busy with their own turn; patrons near it look too
+    for (int s = 1; s <= 3; ++s) {
+        chr::Opponent& o = m.opp[s];
+        if (s == m.activeSeat || !m.rng.chance(0.75f)) continue;
+        o.gazeGoal = where;
+        o.gazeHold = m.rng.f(1.2f, 2.4f);
+    }
+    for (chr::Patron& p : m.patrons) {
+        if (p.reading || Vector3Distance(p.pos, where) > 2.6f || !m.rng.chance(0.6f)) continue;
+        p.gazeGoal = where;
+        p.gazeHold = m.rng.f(1.f, 2.2f);
+    }
+    if (!m.titleMode) m.banter.catMeow();
+}
+
+void Characters::setAnimationSpeed(float speed) { impl_->animSpeed = std::clamp(speed, 0.25f, 4.f); }
+
 void Characters::setTitleMode(bool on) {
     Impl& m = *impl_;
     m.titleMode = on;
@@ -211,7 +230,7 @@ void Cast::pushLine(int who, const std::string& text, float seconds, float maxWa
     if (!cur.empty()) b.lines.push_back(cur);
     float w = 0.f;
     for (const std::string& l : b.lines) w = std::max(w, ui::measureText(ui::FontId::Ui, l, kBubbleFont).x);
-    w = std::max(w, ui::measureText(ui::FontId::UiBold, names[std::min(who, 3)], kNameFont).x);
+    w = std::max(w, ui::measureText(ui::FontId::UiBold, who <= 3 ? names[who] : std::string("Çaycı"), kNameFont).x);
     b.w = std::max(90.f, w + 2 * padX);
     b.h = (float)b.lines.size() * (kBubbleFont * 1.12f + 2.f) - 2.f + 22.f + kNameFont + 2.f;
     auto& q = bubbles.pending[who];
@@ -255,8 +274,8 @@ void Cast::updateBubbles(float dt) {
         B.on[best] = true;
         B.lastStart = time;
         ++visible;
+        banter.spoke(best);  // (the çaycı too: Banter spaces his lines as well)
         if (best <= 3) {
-            banter.spoke(best);
             Opponent& o = opp[best];
             o.talk = B.cur[best].text;
             o.jawKeys.clear();

@@ -41,6 +41,31 @@ bool insideRack(Vector3 l, float margin) {
            o > -kRackPlankT - margin && o < kRackFrontO + margin;
 }
 
+// Reaching across the table: the body leans in (up to kMaxExtraLean past its posture) and the shoulder rolls
+// forward (up to kProtract) before the arm is at full stretch.
+constexpr float kMaxExtraLean = 0.62f;
+constexpr float kProtract = 0.04f;
+constexpr float kReachFrac = 0.97f;  // of the arm's length: the elbow stays a little bent
+
+// Shoulder joint (character-local, upright seat frame) of side sd for a forward lean.
+Vector3 shoulderAt(const PersonLook& L, float sd, float lean) {
+    return {sd * L.shoulderW, L.hipPivot.y + L.shoulderY * std::cos(lean), L.hipPivot.z - L.shoulderY * std::sin(lean)};
+}
+// Extra lean (0..kMaxExtraLean) the body needs so that shoulder sd reaches the local wrist target w.
+float leanNeeded(const PersonLook& L, float leanBase, float sd, Vector3 w) {
+    const float reach = (L.upperArm + L.foreArm) * kReachFrac + kProtract;
+    if (w.z > shoulderAt(L, sd, leanBase).z + 0.05f) return 0.f;  // not in front of the body
+    auto out = [&](float extra) { return Vector3Distance(w, shoulderAt(L, sd, leanBase + extra)) > reach; };
+    if (!out(0.f)) return 0.f;
+    if (out(kMaxExtraLean)) return kMaxExtraLean;
+    float lo = 0.f, hi = kMaxExtraLean;
+    for (int i = 0; i < 8; ++i) {
+        const float m = 0.5f * (lo + hi);
+        (out(m) ? lo : hi) = m;
+    }
+    return hi;
+}
+
 // Fingertips of every pose (hand space, right hand, scale 1): [pose][0..3 index..little, 4 thumb].
 const std::array<std::array<Vector3, 5>, HAND_POSES>& handTips() {
     static const std::array<std::array<Vector3, 5>, HAND_POSES> tips = [] {
@@ -89,6 +114,11 @@ Key mk(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float
     k.lift = lift;
     k.ease = ease;
     k.event = ev;
+    return k;
+}
+
+Key touching(Key k) {
+    k.touch = true;
     return k;
 }
 
@@ -275,6 +305,7 @@ void Cast::restPose(Opponent& o, int a, int variant, Key& k) {
         const Vector3 onFace = rackPoint(sd * 0.105f, kRackTopS - 0.013f, kRackFrontO + 0.0065f * hs);
         k = mk(0.f, wristFor(onFace, f, p, tip, hs, left), f, p, pose);
         k.relax = 0.f;
+        k.touch = true;
         return;
     }
     case 2:  // forearms on the table edge, hands turned in toward the middle, in front of the rack
@@ -321,40 +352,70 @@ void Cast::startTrack(Seated& s, int a, int kind, std::vector<Key> keys) {
     keys[0].t = 0.f;
     keys[0].event = 0;
     keys[0].headRel = false;
-    if (s.who >= 1 && s.who <= 3) clearRack(opp[s.who], a, keys);
+    keys[0].ease = 0;
+    keys[0].lift = 0.f;
+    // fingers resting on the tiles come up off them first (up and back toward the owner), then go
+    if (keys[0].touch && keys.size() > 1 && !keys[1].touch && !keys[1].headRel && keys[1].t > 0.15f) {
+        Key off = keys[0];
+        off.t = std::min(0.12f, keys[1].t * 0.35f);
+        off.pos = Vector3Add(off.pos, {0.f, 0.025f, 0.02f});
+        off.touch = false;
+        keys.insert(keys.begin() + 1, off);
+    }
     A.track.keys = std::move(keys);
     A.track.t = 0.f;
     A.track.on = true;
     A.track.kind = kind;
     A.track.nextKey = 1;
+    // the hand keeps the motion it had (capped: a new track bends the path, it doesn't fling the arm)
+    auto cap = [](Vector3 v, float m) {
+        const float l = Vector3Length(v);
+        return l > m ? Vector3Scale(v, m / l) : v;
+    };
+    A.track.v0 = A.velInit ? cap(A.vel, 1.6f) : Vector3{0, 0, 0};
+    A.track.f0 = A.velInit ? cap(A.fVel, 6.f) : Vector3{0, 0, 0};
+    A.track.p0 = A.velInit ? cap(A.pVel, 6.f) : Vector3{0, 0, 0};
+    if (s.who >= 1 && s.who <= 3) clearRack(opp[s.who], a, A.track);
 }
 
 // Raises the arcs between keys until the fingertips pass over the owner's istaka instead of through it
 // (moving onto the tiles, back to the table, off to the discard pile...). Head-relative keys are left alone.
-void Cast::clearRack(const Opponent& o, int a, std::vector<Key>& keys) const {
+void Cast::clearRack(const Opponent& o, int a, Track& tr) const {
     const bool left = a == 1;
     const float hs = o.L.handScale;
-    auto pokes = [&](Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose) {
-        const Matrix H = handMatrix(pos, vnorm(fingers), vnorm(palm), hs);
-        for (const Vector3& t : handTips()[(size_t)pose])
+    auto pokes = [&](const Key& k) {
+        const Matrix H = handMatrix(k.pos, vnorm(k.fingers), vnorm(k.palm), hs);
+        for (const Vector3& t : handTips()[(size_t)k.pose])
             if (insideRack(xfPoint(H, mirrorL(t, left)), 0.007f)) return true;
         return false;
     };
-    for (size_t i = 1; i < keys.size(); ++i) {
-        const Key& k0 = keys[i - 1];
-        Key& k1 = keys[i];
-        if (k0.headRel || k1.headRel) continue;
-        for (int attempt = 0; attempt < 5; ++attempt) {
+    // test the curve the hand really follows (head-relative keys placed where the head is now: a hand coming
+    // down from the face must clear the rack too)
+    Track r = tr;
+    for (Key& k : r.keys)
+        if (k.headRel) {
+            k.pos = xfPoint(o.headLocal, k.pos);
+            k.fingers = vnorm(xfDir(o.headLocal, k.fingers));
+            k.palm = vnorm(xfDir(o.headLocal, k.palm));
+            k.headRel = false;
+        }
+    for (size_t i = 1; i < r.keys.size(); ++i) {
+        if (r.keys[i - 1].touch && r.keys[i].touch) continue;  // working on the rack itself
+        const float t0 = r.keys[i - 1].t, t1 = r.keys[i].t;
+        // an arc steeper than this would read as a twitch (the bump's peak speed is ~3 lift / span)
+        const float maxLift = 0.4f * (t1 - t0);
+        // (next to a key on the rack the fingers are on the tiles anyway: only the middle of the span must clear)
+        const int j0 = r.keys[i - 1].touch ? 3 : 1, j1 = r.keys[i].touch ? 7 : 9;
+        for (int attempt = 0; attempt < 12 && r.keys[i].lift < maxLift; ++attempt) {
             bool hit = false;
-            for (int j = 1; j < 10 && !hit; ++j) {
-                const float e = (float)j / 10.f;
-                Vector3 pos = Vector3Lerp(k0.pos, k1.pos, e);
-                pos.y += k1.lift * std::sin(PI_F * e);
-                hit = pokes(pos, Vector3Lerp(k0.fingers, k1.fingers, e), Vector3Lerp(k0.palm, k1.palm, e),
-                            e < 0.55f ? k0.pose : k1.pose);
+            for (int j = j0; j <= j1 && !hit; ++j) {
+                Key k;
+                evalTrack(r, lerpf(t0, t1, (float)j / 10.f), k);
+                hit = pokes(k);
             }
             if (!hit) break;
-            k1.lift += 0.035f;
+            r.keys[i].lift = std::min(r.keys[i].lift + 0.02f, std::max(maxLift, r.keys[i].lift));
+            tr.keys[i].lift = r.keys[i].lift;
         }
     }
 }
@@ -365,9 +426,9 @@ void Cast::setMood(Opponent& o, Mood m, float seconds) {
 }
 
 // ============================================================================ actions
-// Reaches synced with Table3D's tile flights (~0.45 s, starting at the event):
-//  mode 0 (draw / take): snatch the tile at `world`, then ride along with it back to the rack;
-//  mode 1 (discard / add to a meld): pick the tile off the rack, carry it to `world`, let go, return;
+// Reaches on the tiles' timeline (w3d::BOT_*_LEAD; Table3D holds the flights back until the fingers are there):
+//  mode 0 (draw / take): reach the tile at `world`, pinch it as it lifts off, carry it along back to the rack;
+//  mode 1 (discard / add to a meld): pick the tile off the rack, carry it to `world` as it flies, let go, return;
 //  mode 2 (swap a joker): carry a tile to `world`, then bring the joker back to the rack;
 //  mode 3 (give the tile back): a reluctant push toward `world`.
 void Cast::reachTo(Opponent& o, int a, Vector3 world, int mode) {
@@ -378,6 +439,18 @@ void Cast::reachTo(Opponent& o, int a, Vector3 world, int mode) {
     Vector3 flat = vnorm({tL.x - sd * 0.12f, 0, tL.z + 0.05f});
     Vector3 f = vnorm(Vector3Add(Vector3Scale(flat, 0.8f), {0, -0.6f, 0}));
     Vector3 p = vnorm(Vector3Subtract({0, -1, 0}, Vector3Scale(f, Vector3DotProduct({0, -1, 0}, f))));
+    // out of reach even leaning in (a meld across the table): the hand goes as far as it can and lets the tile
+    // slide on from there
+    const Vector3 shMax = shoulderAt(o.L, sd, o.leanBase + kMaxExtraLean);
+    const float reach = (o.L.upperArm + o.L.foreArm) * kReachFrac + kProtract - 0.01f;
+    bool far = false;
+    for (int it = 0; it < 12; ++it) {
+        const float d = Vector3Distance(wristFor(Vector3Add(tL, {0, 0.014f, 0}), f, p, PINCH_POINT, hs, left), shMax);
+        if (d <= reach) break;
+        const Vector3 back = vnorm({shMax.x - tL.x, 0.f, shMax.z - tL.z});
+        tL = Vector3Add(tL, Vector3Scale(back, d - reach + 0.005f));
+        far = true;
+    }
     Vector3 over = wristFor(Vector3Add(tL, {0, 0.050f, 0}), f, p, PINCH_POINT, hs, left);
     Vector3 at = wristFor(Vector3Add(tL, {0, 0.014f, 0}), f, p, PINCH_POINT, hs, left);
     // the rack: a slot on the hand's own side, the tile held from the owner's side against the upper row's
@@ -389,45 +462,53 @@ void Cast::reachTo(Opponent& o, int a, Vector3 world, int mode) {
     Vector3 rackUp = Vector3Add(rack, {0, 0.035f, 0.01f});
     Key rest;
     restPose(o, a, (o.kind == 1 && a == 0) ? 11 : (o.kind == 0 && a == 1 ? 10 : 0), rest);
+    constexpr float TAKE = w3d::BOT_TAKE_LEAD, GIVE = w3d::BOT_GIVE_LEAD, FLY = w3d::BOT_TILE_FLIGHT;
     std::vector<Key> k;
     k.push_back(Key{});
     float tAt = 0.f;
+    // from the rack out to the table: the pinch on the rack (the hand settles on the tile), up out of the
+    // istaka, over to the target as the tile flies, and down with it
+    auto carryOut = [&](HandPose arrive) {
+        k.push_back(touching(mk(GIVE, rack, rf, rp, HandPose::Pinch, 0.f, 1)));
+        k.push_back(touching(mk(GIVE + 0.10f, rackUp, rf, rp, HandPose::Pinch)));
+        k.push_back(mk(GIVE + 0.36f, over, f, p, HandPose::Pinch, 0.04f));
+        k.push_back(mk(GIVE + FLY, at, f, p, arrive, 0.f, 1));
+    };
+    // and back: lifted with the tile, over the rack as it lands, fingers opening on it
+    auto carryBack = [&](float t0) {
+        k.push_back(mk(t0 + 0.12f, Vector3Add(at, {0, 0.045f, 0}), f, p, HandPose::Pinch));
+        k.push_back(touching(mk(t0 + 0.34f, rackUp, rf, rp, HandPose::Pinch, 0.03f)));
+        k.push_back(touching(mk(t0 + 0.46f, rack, rf, rp, HandPose::Pinch, 0.f, 1)));
+        k.push_back(touching(mk(t0 + 0.60f, Vector3Add(rack, {0, 0.012f, 0}), rf, rp, HandPose::Rest)));
+    };
     switch (mode) {
     case 0:
-        k.push_back(mk(0.12f, over, f, p, HandPose::Pinch, 0.035f, 1));
-        k.push_back(mk(0.17f, at, f, p, HandPose::Pinch, 0.f, 0));
-        k.push_back(mk(0.26f, Vector3Add(at, {0, 0.03f, 0}), f, p, HandPose::Pinch, 0.f, 1));
-        k.push_back(mk(0.50f, rackUp, rf, rp, HandPose::Pinch, 0.05f, 0));
-        k.push_back(mk(0.60f, rack, rf, rp, HandPose::Pinch));
-        k.push_back(mk(0.74f, Vector3Add(rack, {0, 0.012f, 0}), rf, rp, HandPose::Rest));
-        rest.t = 1.2f;
-        tAt = 0.17f;
+        k.push_back(mk(TAKE - 0.11f, over, f, p, HandPose::Pinch, 0.02f));
+        k.push_back(mk(TAKE, at, f, p, HandPose::Pinch, 0.f, 1));
+        carryBack(TAKE);
+        rest.t = TAKE + 1.05f;
+        tAt = TAKE;
         break;
     case 1:
-    case 2:
-        k.push_back(mk(0.08f, rack, rf, rp, HandPose::Pinch, 0.f, 1));
-        k.push_back(mk(0.16f, rackUp, rf, rp, HandPose::Pinch, 0.f, 0));
-        k.push_back(mk(0.40f, over, f, p, HandPose::Pinch, 0.05f, 0));
-        k.push_back(mk(0.47f, at, f, p, HandPose::Pinch, 0.f, 0));
-        if (mode == 1) {
-            k.push_back(mk(0.60f, Vector3Add(at, {0, 0.035f, 0.02f}), f, p, HandPose::Rest, 0.f, 1));
-            rest.t = 1.05f;
-        } else {
-            k.push_back(mk(0.62f, Vector3Add(at, {0, 0.03f, 0}), f, p, HandPose::Pinch, 0.f, 1));
-            k.push_back(mk(0.92f, rackUp, rf, rp, HandPose::Pinch, 0.05f, 0));
-            k.push_back(mk(1.02f, rack, rf, rp, HandPose::Pinch));
-            k.push_back(mk(1.14f, Vector3Add(rack, {0, 0.012f, 0}), rf, rp, HandPose::Rest));
-            rest.t = 1.55f;
-        }
-        tAt = 0.47f;
+        carryOut(far ? HandPose::Open : HandPose::Pinch);
+        k.push_back(mk(GIVE + FLY + 0.14f, Vector3Add(at, {0, 0.035f, 0.02f}), f, p, HandPose::Rest));
+        rest.t = GIVE + FLY + 0.6f;
+        tAt = GIVE + FLY;
         break;
+    case 2: {
+        carryOut(HandPose::Pinch);
+        const float back = w3d::BOT_SWAPBACK_LEAD;  // the joker lifts off: the fingers are on it
+        k.push_back(mk(back, Vector3Add(at, {0, 0.004f, 0}), f, p, HandPose::Pinch));
+        carryBack(back);
+        rest.t = back + 1.05f;
+        tAt = GIVE + FLY;
+        break;
+    }
     default:
-        k.push_back(mk(0.10f, rack, rf, rp, HandPose::Pinch, 0.f, 1));
-        k.push_back(mk(0.45f, over, f, p, HandPose::Pinch, 0.04f, 0));
-        k.push_back(mk(0.55f, at, f, p, HandPose::Pinch, 0.f, 0));
-        k.push_back(mk(0.75f, Vector3Add(at, {0, 0.04f, 0.03f}), f, p, HandPose::Open, 0.f, 1));
-        rest.t = 1.3f;
-        tAt = 0.55f;
+        carryOut(far ? HandPose::Open : HandPose::Pinch);
+        k.push_back(mk(GIVE + FLY + 0.2f, Vector3Add(at, {0, 0.04f, 0.03f}), f, p, HandPose::Open));
+        rest.t = GIVE + FLY + 0.75f;
+        tAt = GIVE + FLY;
         break;
     }
     k.push_back(rest);
@@ -459,11 +540,13 @@ void Cast::slamMelds(Opponent& o, int zoneSeat, bool proud) {
         restPose(o, a, (o.kind == 1 && a == 0) ? 11 : (o.kind == 0 && a == 1 ? 10 : 0), rest);
         std::vector<Key> k;
         k.push_back(Key{});
-        k.push_back(mk(0.16f + 0.03f * a, grab, gf, gp, HandPose::Pinch, 0.02f, 1));
-        k.push_back(mk(0.40f + 0.03f * a, above, f, p, HandPose::Hold, 0.05f, 0));
-        k.push_back(mk(0.50f + 0.03f * a, down, f, p, HandPose::Open, 0.f, 2, a == 0 ? KE_Slam : 0));
-        k.push_back(mk(0.95f, Vector3Add(down, {0, 0.004f, 0}), f, p, HandPose::Open));
-        rest.t = proud ? 1.35f : 1.4f;
+        // the tiles leave the rack at BOT_MELD_LEAD and land about a flight later: the slap lands with them
+        constexpr float M = w3d::BOT_MELD_LEAD, FLY = w3d::BOT_TILE_FLIGHT;
+        k.push_back(touching(mk(M - 0.03f + 0.03f * a, grab, gf, gp, HandPose::Pinch, 0.02f, 1)));
+        k.push_back(mk(M + 0.30f + 0.03f * a, above, f, p, HandPose::Hold, 0.05f, 0));
+        k.push_back(mk(M + FLY + 0.03f * a, down, f, p, HandPose::Open, 0.f, 2, a == 0 ? KE_Slam : 0));
+        k.push_back(mk(M + FLY + 0.35f, Vector3Add(down, {0, 0.004f, 0}), f, p, HandPose::Open));
+        rest.t = M + FLY + (proud ? 0.8f : 0.85f);
         k.push_back(rest);
         startTrack(o, a, TK_Reach, k);
     }
@@ -552,28 +635,29 @@ void Cast::startSmoke(Opponent& o, bool ashTap) {
         o.gazeHold = 1.2f;
         return;
     }
-    // filter at the lips, cigarette pointing away (head space)
-    Vector3 c = vnorm({0.28f, -0.18f, -1.f});           // cigarette axis = hand +Y
+    // filter at the corner of the lips, cigarette pointing away (head space); the two fingers holding it point up
+    // and out past his cheek, so the hand sits by the mouth and the chin instead of over the nose and eyes
+    Vector3 c = vnorm({0.34f, -0.18f, -1.f});           // cigarette axis = hand +Y
     Vector3 p = Vector3Negate(c);                        // palm faces the face
-    Vector3 f = vnorm({-0.35f, 1.f, 0.f});
+    Vector3 f = vnorm({0.42f, 1.f, 0.f});
     f = vnorm(Vector3Subtract(f, Vector3Scale(p, Vector3DotProduct(f, p))));
-    Vector3 lips = Vector3Add(o.pm->face.mouth, {0.004f, -0.002f, -0.008f});
+    Vector3 lips = Vector3Add(o.pm->face.mouth, {0.012f, -0.003f, -0.008f});  // the corner of the mouth
     Vector3 filterOff = Vector3Add(CIG_HOLD, {0, -0.020f, 0});
     Vector3 w = wristFor(lips, f, p, filterOff, hs, false);
     Key at = mk(0.62f, w, f, p, HandPose::Cig, 0.f, 0, KE_Drag);
     at.headRel = true;
     at.pole = {0.6f, -0.8f, -0.1f};
     Key hold = at;
-    hold.t = 1.55f;
+    hold.t = 1.35f;
     hold.event = 0;
     Key away = at;
-    away.t = 1.9f;
+    away.t = 1.7f;
     away.pos = Vector3Add(w, {0.05f, -0.06f, -0.08f});
     away.event = KE_Exhale;
     k.push_back(at);
     k.push_back(hold);
     k.push_back(away);
-    rest.t = 2.55f;
+    rest.t = 2.35f;
     k.push_back(rest);
     startTrack(o, a, TK_Smoke, k);
 }
@@ -593,6 +677,8 @@ void Cast::startTespihFlip(Opponent& o) {
     flick.pos = Vector3Add(base.pos, {-0.02f, 0.03f, -0.06f});
     flick.palm = vnorm({0.7f, -0.7f, -0.2f});
     flick.ease = 2;
+    // the elbow stays down by his side (following the hand's line it would wing up over the shoulder)
+    up.pole = flick.pole = vnorm({-0.35f, -0.85f, 0.35f});
     Key back = base;
     back.t = 1.25f;
     k.push_back(up);
@@ -1243,7 +1329,8 @@ void Cast::idleOpponent(Opponent& o, float dt) {
     o.sipIn -= dt;
     TeaGlass& g = glass[o.seat];
     if (o.sipIn <= 0.f) {
-        bool armFree = !o.arm[1].track.on || o.arm[1].track.kind == TK_Idle || o.arm[1].track.kind == TK_Tespih;
+        bool armFree = (!o.arm[1].track.on || o.arm[1].track.kind == TK_Idle || o.arm[1].track.kind == TK_Tespih) &&
+                       !(o.arm[0].track.on && o.arm[0].track.kind == TK_Smoke);  // one hand at the face at a time
         // (not while the çaycı is on his round to our table: fresh tea is coming)
         const bool teaComing = boy.plan == 1 && (boy.state == 1 || boy.state == 2);
         if (armFree && g.level > 0.04f && g.holder < 0 && o.gest == G_None && !teaComing && !(myTurn && o.turnT < 0.5f)) {
@@ -1257,7 +1344,7 @@ void Cast::idleOpponent(Opponent& o, float dt) {
     if (o.kind == 1) {
         o.smokeIn -= dt;
         if (o.smokeIn <= 0.f) {
-            if (!o.arm[0].track.on && o.gest == G_None) {
+            if (!o.arm[0].track.on && o.gest == G_None && !(o.arm[1].track.on && o.arm[1].track.kind == TK_Sip)) {
                 startSmoke(o, rng.chance(0.3f));
                 o.smokeIn = rng.f(7.f, 16.f);
             } else {
@@ -1366,24 +1453,25 @@ void Cast::idleOpponent(Opponent& o, float dt) {
 // ============================================================================ per-frame posing
 void Cast::poseSeated(Seated& s, float dt, float headOmega) {
     const PersonLook& L = s.L;
-    // auto lean/twist so the hands can reach their targets
+    // auto lean/twist so the hands can reach their targets — for where a reach is going, too, so the body is
+    // already leaning in when the hand gets there (a hand stuck at arm's length, then pulled along by a late
+    // lean, reads as a jerk)
     float extraLean = 0.f, extraTwist = 0.f;
     for (int a = 0; a < 2; ++a) {
         const float sd = a == 0 ? 1.f : -1.f;
-        Vector3 w = s.arm[a].localWrist;
-        Vector3 sh{sd * L.shoulderW, L.hipPivot.y + L.shoulderY * std::cos(s.leanBase),
-                   L.hipPivot.z - L.shoulderY * std::sin(s.leanBase)};
-        float reach = (L.upperArm + L.foreArm) * 0.86f;
-        float d = Vector3Distance(w, sh);
-        if (d > reach && w.z < sh.z + 0.05f) {
-            extraLean = std::max(extraLean, clampf((d - reach) / (L.shoulderY * 0.95f), 0.f, 0.55f));
-            extraTwist += clampf(-(w.x - sd * 0.1f) * 0.5f, -0.3f, 0.3f) * clampf((d - reach) * 6.f, 0.f, 1.f);
+        const Vector3 sh = shoulderAt(L, sd, s.leanBase);
+        const float reach = (L.upperArm + L.foreArm) * 0.86f;
+        for (const Vector3& w : {s.arm[a].localWrist, s.arm[a].aheadWrist}) {
+            extraLean = std::max(extraLean, leanNeeded(L, s.leanBase, sd, w));
+            const float d = Vector3Distance(w, sh);
+            if (d > reach && w.z < sh.z + 0.05f)
+                extraTwist += 0.5f * clampf(-(w.x - sd * 0.1f) * 0.5f, -0.3f, 0.3f) * clampf((d - reach) * 6.f, 0.f, 1.f);
         }
     }
     float leanGoal = s.leanBase + s.leanAdd + extraLean;
     // straightening up after a long reach is quicker than bending into it (the hand coming back must not meet
     // a head still low over the rack)
-    spring(s.lean, s.leanV, leanGoal, leanGoal < s.lean ? 8.f : 5.5f, dt);
+    spring(s.lean, s.leanV, leanGoal, leanGoal < s.lean ? 8.f : 6.5f, dt);
     spring(s.twist, s.twistV, clampf(s.twistAdd + extraTwist + s.gazeTwist, -0.6f, 0.6f), 5.f, dt);
     spring(s.roll, s.rollV, s.rollAdd, 5.f, dt);
     spring(s.shrug, s.shrugV, s.shrugGoal, 9.f, dt);
@@ -1434,19 +1522,41 @@ void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
     Key k;
     if (A.track.on) {
         Track tmp;
+        tmp.v0 = A.track.v0;
+        tmp.f0 = A.track.f0;
+        tmp.p0 = A.track.p0;
         tmp.keys.reserve(A.track.keys.size());
         for (const Key& kk : A.track.keys) tmp.keys.push_back(resolve(kk));
         evalTrack(tmp, A.track.t, k);
+        Key ahead;
+        evalTrack(tmp, A.track.t + 0.45f, ahead);
+        A.aheadWrist = ahead.pos;
     } else {
         k = resolve(A.hold);
+        A.aheadWrist = k.pos;
+    }
+    // how the hand moves (a track started next frame carries this on)
+    if (dt > 0.f) {
+        if (A.velInit) {
+            const float inv = 1.f / dt;
+            A.vel = Vector3Scale(Vector3Subtract(k.pos, A.cur.pos), inv);
+            A.fVel = Vector3Scale(Vector3Subtract(k.fingers, A.cur.fingers), inv);
+            A.pVel = Vector3Scale(Vector3Subtract(k.palm, A.cur.palm), inv);
+        }
+        A.velInit = true;
     }
     A.cur = k;
     A.localWrist = k.pos;
     A.pose = k.pose;
-    // shoulders (torso space), slightly raised by a shrug
-    Vector3 shT{sd * L.shoulderW, L.shoulderY + 0.035f * s.shrug, 0.012f};
-    A.shoulder = xfPoint(s.torsoW, shT);
+    // shoulders (torso space), slightly raised by a shrug, rolled forward into a long reach
     Vector3 w = xfPoint(s.root, k.pos);
+    {
+        const Vector3 sh0 = xfPoint(s.torsoW, {sd * L.shoulderW, L.shoulderY, 0.012f});
+        const float over = Vector3Distance(w, sh0) - (L.upperArm + L.foreArm) * kReachFrac;
+        A.protract = dt > 0.f ? approachExp(A.protract, clampf(over / kProtract, 0.f, 1.f), 10.f, dt) : 0.f;
+    }
+    Vector3 shT{sd * L.shoulderW, L.shoulderY + 0.035f * s.shrug, 0.012f - kProtract * A.protract};
+    A.shoulder = xfPoint(s.torsoW, shT);
     Vector3 poleL = vnorm({sd * (0.40f + k.elbowOut), -0.80f, 0.42f});
     float pw = clampf(Vector3Length(k.pole), 0.f, 1.f);
     if (pw > 0.01f) {
@@ -1456,6 +1566,7 @@ void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
     Vector3 poleW = xfDir(s.root, poleL);
     const Vector3 w0 = w;
     A.elbow = solveTwoBone(A.shoulder, w, L.upperArm, L.foreArm, poleW);
+    Vector3 desiredPole = poleW;
     Vector3 f = xfDir(s.root, k.fingers), p = xfDir(s.root, k.palm);
     const bool held = k.pose == HandPose::Grip || k.pose == HandPose::Hold || k.pose == HandPose::Cig;
     // (eased, so the elbow never pops when a track switches between holding and free poses)
@@ -1465,7 +1576,8 @@ void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
         // elbow swings (around the shoulder-wrist line) toward where the forearm would continue the hand's
         // line, as much as the wrist is bent past a comfortable ~35°
         const float bend = std::acos(clampf(Vector3DotProduct(vnorm(f), vnorm(Vector3Subtract(w, A.elbow))), -1.f, 1.f));
-        const float wgt = A.heldW * clampf((bend - 35.f * DEG2RAD) / (45.f * DEG2RAD), 0.f, 0.8f);
+        // (a key with its own elbow pole — the glass at the lips — already says where the elbow goes)
+        const float wgt = A.heldW * clampf((bend - 35.f * DEG2RAD) / (45.f * DEG2RAD), 0.f, 0.8f) * (1.f - pw);
         if (wgt > 0.f) {
             const Vector3 ideal = Vector3Subtract(w, Vector3Scale(vnorm(f), L.foreArm));  // elbow on the hand's line
             const Vector3 axis = vnorm(Vector3Subtract(w, A.shoulder));
@@ -1477,9 +1589,45 @@ void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
                 const Vector3 upW = xfDir(s.root, {0, 1, 0}), backW = xfDir(s.root, {0, 0, 1});
                 if (Vector3DotProduct(pw, upW) > 0.2f) pw = vnorm(Vector3Subtract(pw, Vector3Scale(upW, Vector3DotProduct(pw, upW) - 0.2f)));
                 if (Vector3DotProduct(pw, backW) > 0.6f) pw = vnorm(Vector3Subtract(pw, Vector3Scale(backW, Vector3DotProduct(pw, backW) - 0.6f)));
-                w = w0;
-                A.elbow = solveTwoBone(A.shoulder, w, L.upperArm, L.foreArm, pw);
+                desiredPole = pw;
             }
+        }
+    }
+    // the elbow's swing plane follows its goal quickly but never in one frame (a new track, a glass tipping
+    // up to the lips or a pole key would otherwise flip the elbow)
+    if (dt <= 0.f || Vector3Length(A.pole) < 0.5f) A.pole = vnorm(desiredPole);
+    else A.pole = vnorm(approachExp(A.pole, vnorm(desiredPole), 16.f, dt));
+    w = w0;
+    A.elbow = solveTwoBone(A.shoulder, w, L.upperArm, L.foreArm, A.pole);
+    // With the hand close to the shoulder (a glass at the lips, a hand on the chin) the elbow's side of the
+    // shoulder-wrist line can flip within a frame or two: it swings over at a human pace instead.
+    {
+        const Vector3 axis = vnorm(Vector3Subtract(w, A.shoulder));
+        const float dist = Vector3Distance(w, A.shoulder);
+        const float along = (L.upperArm * L.upperArm - L.foreArm * L.foreArm + dist * dist) / (2.f * std::max(dist, 1e-4f));
+        const Vector3 foot = Vector3Add(A.shoulder, Vector3Scale(axis, along));
+        const Vector3 off = Vector3Subtract(A.elbow, foot);
+        const float hh = Vector3Length(off);
+        if (hh > 1e-4f) {
+            const Vector3 want = Vector3Scale(off, 1.f / hh);
+            Vector3 prev = Vector3Subtract(A.swing, Vector3Scale(axis, Vector3DotProduct(A.swing, axis)));
+            if (dt <= 0.f || Vector3Length(prev) < 0.2f) {
+                A.swing = want;
+            } else {
+                prev = vnorm(prev);
+                const float ang = std::acos(clampf(Vector3DotProduct(prev, want), -1.f, 1.f));
+                // eased, and never faster than ~290 deg/s
+                const float step = std::min(ang * (1.f - std::exp(-18.f * dt)), 5.f * dt);
+                if (ang > 1e-4f) {
+                    Vector3 side = Vector3Subtract(want, Vector3Scale(prev, std::cos(ang)));
+                    if (Vector3Length(side) < 1e-5f) side = Vector3CrossProduct(axis, prev);  // exactly opposite
+                    side = vnorm(side);
+                    A.swing = vnorm(Vector3Add(Vector3Scale(prev, std::cos(step)), Vector3Scale(side, std::sin(step))));
+                } else {
+                    A.swing = want;
+                }
+            }
+            A.elbow = Vector3Add(foot, Vector3Scale(A.swing, hh));
         }
     }
     A.wrist = w;
@@ -1489,9 +1637,12 @@ void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
     // relaxed poses let the hand follow the forearm a little, and no wrist bends past what a wrist can do
     // (hands holding things, or placed exactly, keep their orientation)
     const Vector3 fd = vnorm(Vector3Subtract(A.wrist, A.elbow));
-    if (k.pose == HandPose::Rest || k.pose == HandPose::Open || k.pose == HandPose::Fist) {
+    // (eased too: switching between a pinch and a relaxed hand must not snap the wrist)
+    const bool loose = k.pose == HandPose::Rest || k.pose == HandPose::Open || k.pose == HandPose::Fist;
+    A.looseW = dt > 0.f ? approachExp(A.looseW, loose ? 1.f : 0.f, 12.f, dt) : (loose ? 1.f : 0.f);
+    if (A.looseW > 0.001f) {
         Vector3 fdp = Vector3Subtract(fd, Vector3Scale(p, Vector3DotProduct(fd, p)));
-        const float r = 0.38f * clampf(k.relax, 0.f, 1.f);
+        const float r = 0.38f * clampf(k.relax, 0.f, 1.f) * A.looseW;
         if (Vector3Length(fdp) > 0.1f && r > 0.f) f = vnorm(Vector3Add(Vector3Scale(f, 1.f - r), Vector3Scale(vnorm(fdp), r)));
     }
     if (A.heldW < 0.99f) {  // (a held hand is never clamped: it must match the glass, the cigarette, the tespih)
@@ -1803,7 +1954,7 @@ void Cast::updateOpponent(Opponent& o, float dt) {
     for (int a = 0; a < 2; ++a) {
         Arm& A = o.arm[a];
         if (!A.track.on) continue;
-        A.track.t += dt;
+        A.track.t += A.track.kind == TK_Reach ? dt * animSpeed : dt;
         while (A.track.nextKey < (int)A.track.keys.size() && A.track.keys[A.track.nextKey].t <= A.track.t) {
             int ev = A.track.keys[A.track.nextKey].event;
             if (ev) onArmEvent(o, a, ev);

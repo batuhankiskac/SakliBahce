@@ -1103,6 +1103,105 @@ void roomize(Buf& b, float sr, float wet, float rt60) {
     }
 }
 
+// A car passing on the street outside, heard through the window glass: tyre roar on a dry night, or
+// the hiss and spray of wet tyres (plus a puddle splash) on a rainy one, over a low engine hum with a
+// slight Doppler drop. Variations 0-1 dry, 2-3 wet. The pass (closest approach) is ~1.3 s in.
+Buf sfxCarPass(Synth& s, int v) {
+    const float sr = s.sr();
+    const bool wet = v >= 2;
+    const float dur = 3.8f, tp = 1.3f;
+    const float vel = s.u(7.f, 10.f), d0 = s.u(5.5f, 7.f);  // speed (m/s), closest distance (m)
+    const float f0 = s.u(30.f, 42.f);                       // engine firing rate at idle-ish revs
+    Buf b = s.buf(dur);
+    Noise nz(s.seed32()), nz2(s.seed32());
+    Biquad tyre, tyreLp, hissHp, hissLp, engLp, glass, hp;
+    tyreLp.lowpass(sr, 2200.f, .7f);
+    hissHp.highpass(sr, 1700.f, .7f);
+    hissLp.lowpass(sr, 5200.f, .6f);
+    engLp.lowpass(sr, 230.f, .8f);
+    glass.lowpass(sr, wet ? 4200.f : 3200.f, .6f);
+    hp.highpass(sr, 38.f, .7f);
+    OnePole grain;
+    grain.lp(sr, 35.f);
+    double ph = 0.0;
+    float amp = 0.f, dop = 1.f;
+    for (int i = 0; i < (int)b.size(); ++i) {
+        const float t = (float)i / sr;
+        if (i % kCtrl == 0) {
+            const float x = (t - tp) * vel, dist = std::sqrt(x * x + d0 * d0);
+            amp = std::pow(d0 / dist, 2.2f) * std::min(1.f, t / .35f);  // fade in from the far end of the street
+            dop = 1.f - .9f * (vel * x / dist) / 343.f * 3.f;  // exaggerated a little so it reads through the wall
+            tyre.bandpass(sr, (520.f + 900.f * amp) * dop, .7f);
+        }
+        const float n = nz.next();
+        float y = tyreLp.process(tyre.process(n)) * (wet ? .55f : 1.f);
+        if (wet) {
+            const float g = 1.f + 1.4f * grain.process(nz2.next());
+            y += hissLp.process(hissHp.process(nz2.next())) * 1.3f * std::pow(amp, .3f) * g;
+        }
+        ph += (double)(f0 * dop) / sr;
+        if (ph >= 1.0) ph -= 1.0;
+        float e = 0.f;
+        for (int k = 1; k <= 6; ++k) e += std::sin(kTauF * (float)(ph * k)) / (float)k;
+        y = y * amp + engLp.process(e) * .55f * std::pow(amp, 1.2f);
+        b[(size_t)i] = hp.process(glass.process(y));
+    }
+    if (wet) s.noiseBurst(b, tp + s.u(.02f, .1f), 18.f, 220.f, 700.f, 3200.f, .22f);  // through a puddle
+    return b;
+}
+
+// The cat across the room: a voiced "mi-a-uw" (a glottal pulse train through moving formants), a
+// soft onset through the closed mouth ("m"), a little breath. v 0 = a short questioning "mrrp" with a
+// rolled r, 1 = "miyav", 2 = a long plaintive one.
+Buf sfxMeow(Synth& s, int v) {
+    const float sr = s.sr();
+    const float dur = v == 0 ? s.u(.26f, .34f) : (v == 1 ? s.u(.55f, .7f) : s.u(.85f, 1.05f));
+    const float fStart = s.u(430.f, 520.f), fPeak = s.u(680.f, 820.f) * (v == 2 ? .92f : 1.f);
+    const float fEnd = v == 0 ? s.u(640.f, 760.f) : s.u(360.f, 450.f);
+    const float peakAt = v == 0 ? .85f : s.u(.28f, .4f);
+    Buf b = s.buf(dur + .05f);
+    Biquad F1, F2, F3, br;
+    br.bandpass(sr, 3200.f, 1.2f);
+    Noise nz(s.seed32());
+    OnePole nasal;
+    nasal.lp(sr, 700.f);
+    double ph = 0.0;
+    auto ease = [](float x) { x = clampf(x, 0.f, 1.f); return x * x * (3.f - 2.f * x); };
+    const int N = s.at(dur);
+    for (int i = 0; i < N; ++i) {
+        const float t = (float)i / sr, u = t / dur;
+        float f0 = u < peakAt ? fStart + (fPeak - fStart) * ease(u / peakAt) : fPeak + (fEnd - fPeak) * ease((u - peakAt) / (1.f - peakAt));
+        f0 *= 1.f + .012f * std::sin(kTauF * 6.f * t);
+        if (i % kCtrl == 0) {
+            // m/i -> a -> u
+            float f1, f2;
+            if (u < .22f) f1 = 380.f + 520.f * ease(u / .22f), f2 = 2100.f - 450.f * ease(u / .22f);
+            else if (u < .62f) f1 = 900.f, f2 = 1650.f;
+            else f1 = 900.f - 430.f * ease((u - .62f) / .38f), f2 = 1650.f - 780.f * ease((u - .62f) / .38f);
+            if (v == 0) f1 = 420.f + 380.f * ease(u), f2 = 1700.f;
+            F1.bandpass(sr, f1, 4.f);
+            F2.bandpass(sr, f2, 6.f);
+            F3.bandpass(sr, 3100.f, 7.f);
+        }
+        ph += (double)f0 / sr;
+        if (ph >= 1.0) ph -= 1.0;
+        float src = 0.f;
+        for (int k = 1; k <= 14 && k * f0 < 7000.f; ++k) src += std::sin(kTauF * (float)(ph * k)) / std::pow((float)k, 1.1f);
+        float y = F1.process(src) * 1.4f + F2.process(src) * .9f + F3.process(src) * .35f;
+        const float m = clampf(t / .06f, 0.f, 1.f);  // the mouth opens: nasal hum first
+        y = nasal.process(src) * (1.f - m) * .5f + y * m;
+        y += br.process(nz.next()) * .06f;
+        float env = std::min(t / .025f, 1.f) * std::min((dur - t) / .09f, 1.f) * (.75f + .25f * std::sin((float)kPi * u));
+        if (v == 0) env *= u < .5f ? .65f + .35f * std::sin(kTauF * 26.f * t) : 1.f;  // the rolled "rr"
+        b[(size_t)i] = y * env;
+    }
+    Biquad lp;
+    lp.lowpass(sr, 5200.f, .7f);
+    filterBuf(b, lp);
+    roomize(b, sr, .38f, .7f);
+    return b;
+}
+
 // ------------------------------------------------------------------------------------------------
 // Sfx table
 // ------------------------------------------------------------------------------------------------
@@ -1114,6 +1213,7 @@ struct SfxDef {
     float peakDb;   // peak level of the stored wave
     float pitchJit; // +- relative pitch randomisation per play
     float volJit;   // 0..1: volume is scaled by 1 - volJit * rand
+    float pan = 0.f; // where play() puts it (-1 left .. 1 right): the street is on the player's left
 };
 
 constexpr SfxDef kSfx[(int)Sfx::Count] = {
@@ -1124,7 +1224,8 @@ constexpr SfxDef kSfx[(int)Sfx::Count] = {
     {"penalty", 2, 1, -6.f, .015f, .05f},      {"win", 2, 1, -5.f, 0.f, .03f},
     {"lose", 2, 1, -7.f, 0.f, .03f},           {"button", 2, 3, -15.f, .04f, .1f},
     {"error", 1, 2, -11.f, .02f, .05f},        {"dice", 4, 2, -13.f, .04f, .15f},
-    {"chair", 3, 1, -15.f, .04f, .15f},
+    {"chair", 3, 1, -15.f, .04f, .15f},        {"car_pass", 4, 1, -17.f, .05f, .2f, -.55f},
+    {"meow", 3, 1, -19.f, .07f, .25f, .15f},
 };
 
 Buf synthSfx(Sfx id, int v, Synth& s) {
@@ -1151,6 +1252,8 @@ Buf synthSfx(Sfx id, int v, Synth& s) {
         return b;
     }
     case Sfx::Chair: return sfxChair(s, v % 3);
+    case Sfx::CarPass: return sfxCarPass(s, v);
+    case Sfx::Meow: return sfxMeow(s, v % 3);
     default: return Buf(64, 0.f);
     }
 }
@@ -1182,7 +1285,9 @@ std::unique_ptr<SfxBank> buildSfxBank(float sr, uint64_t seed) {
 // Ambience: crowd murmur, TV football, ceiling fan, distant table sounds, room reverb
 // ------------------------------------------------------------------------------------------------
 
-enum AmbLayer : unsigned { LayerMurmur = 1, LayerTv = 2, LayerFan = 4, LayerEvents = 8, LayerRoom = 16, LayerAll = 31 };
+enum AmbLayer : unsigned {
+    LayerMurmur = 1, LayerTv = 2, LayerFan = 4, LayerEvents = 8, LayerRoom = 16, LayerRain = 32, LayerAll = 63
+};
 
 struct Vowel {
     float f1, f2, f3;
@@ -1196,9 +1301,14 @@ public:
     AmbienceGen(float sr, uint64_t seed, unsigned layers = LayerAll);
     void render(float* out, int frames); // interleaved stereo, overwrites
     std::atomic<float> target{0.f};      // written by the main thread
+    std::atomic<float> rainTarget{0.f};  // rain outside, 0..1 (main thread)
     void setImmediate(float g) {
         target.store(g);
         cur_ = g;
+    }
+    void setRainImmediate(float r) {
+        rainTarget.store(r);
+        rain_ = r;
     }
 
 private:
@@ -1261,6 +1371,12 @@ private:
     Biquad fanLp_;
     // room tone
     OnePole roomLp_;
+    // rain outside (heard through the glass and the open street door, from the left)
+    float rain_ = 0.f, rainCoef_ = 0.f, gust_ = 1.f, gustTarget_ = 1.f, gustTimer_ = 30.f, gustLeft_ = 0.f, dGust_ = 0.f;
+    Biquad rainBody_, rainBody2_, rainHissHp_, rainHissLp_;
+    OnePole rainGrain_;
+    std::array<Biquad, 3> patter_;
+    float dripTimer_ = 1.f, dripPh_ = 0.f, dripF_ = 1600.f, dripA_ = 0.f, dripDk_ = 0.f, dripGlide_ = 1.f;
 
     // events
     std::array<Bank, 8> banks_;
@@ -1291,6 +1407,17 @@ AmbienceGen::AmbienceGen(float sr, uint64_t seed, unsigned layers)
 
     fanLp_.lowpass(sr, 420.f, .8f);
     roomLp_.lp(sr, 260.f);
+    rainCoef_ = smoothCoef(sr, 2.f);
+    rainBody_.bandpass(sr, 420.f, .45f);
+    rainBody2_.lowpass(sr, 1400.f, .6f);
+    rainHissHp_.highpass(sr, 1600.f, .7f);
+    rainHissLp_.lowpass(sr, 5600.f, .6f);
+    rainGrain_.lp(sr, 45.f);
+    patter_[0].bandpass(sr, 2300.f, 7.f);
+    patter_[1].bandpass(sr, 3500.f, 8.f);
+    patter_[2].bandpass(sr, 4700.f, 8.f);
+    dripDk_ = std::exp(-1.f / (.028f * sr));
+    gustTimer_ = u(15.f, 45.f);
 
     // Distant table sounds, synthesised with the same code as the effects (in parallel: each
     // variant has its own seed).
@@ -1596,6 +1723,35 @@ void AmbienceGen::control() {
     }
     if (layers_ & LayerMurmur)
         for (auto& t : crowd_) talkerControl(t, dt, 0.f);
+    if ((layers_ & LayerRain) && rain_ > 1e-4f) {
+        // gusts: the rain swells against the glass for a few seconds now and then
+        if (gustLeft_ > 0.f) {
+            gustLeft_ -= dt;
+            if (gustLeft_ <= 0.f) gustTarget_ = 1.f;
+        } else {
+            gustTimer_ -= dt;
+            if (gustTimer_ <= 0.f) {
+                gustTarget_ = u(1.25f, 1.6f);
+                gustLeft_ = u(2.5f, 6.f);
+                gustTimer_ = u(20.f, 60.f);
+            }
+        }
+        const float gNext = gust_ + (gustTarget_ - gust_) * (1.f - std::exp(-dt / .9f));
+        dGust_ = (gNext - gust_) / (float)kCtrl;
+        // the gutter drips onto the tin sill by the door
+        dripTimer_ -= dt;
+        if (dripTimer_ <= 0.f) {
+            dripTimer_ = u(.45f, 1.5f) / std::max(rain_, .3f);
+            if (rain_ > .2f) {
+                dripA_ = u(.5f, 1.f) * std::min(1.f, rain_ * 1.4f);
+                dripPh_ = 0.f;  // starts at a zero crossing: the "plip" has a soft edge, not a click
+                dripF_ = u(1250.f, 2100.f);
+                dripGlide_ = 1.f - u(2.f, 6.f) / sr_;
+            }
+        }
+    } else {
+        dGust_ = 0.f;
+    }
     if (layers_ & LayerEvents) {
         for (auto& bk : banks_) {
             bk.timer -= dt;
@@ -1609,6 +1765,7 @@ void AmbienceGen::control() {
 
 void AmbienceGen::render(float* out, int frames) {
     const float tgt = target.load(std::memory_order_relaxed);
+    const float rainTgt = rainTarget.load(std::memory_order_relaxed);
     if (cur_ < 1e-5f && tgt < 1e-5f) {
         cur_ = 0.f;
         std::memset(out, 0, sizeof(float) * 2 * (size_t)frames);
@@ -1619,6 +1776,7 @@ void AmbienceGen::render(float* out, int frames) {
     constexpr float kTvDry = .12f, kTvSend = .12f;
     constexpr float kHum = .0064f, kWhoosh = .048f, kRoom = .035f;
     constexpr float kEvDry = .27f, kEvSend = .27f;
+    constexpr float kRainWash = .085f, kRainPatter = .085f, kRainDrip = .008f;
     constexpr float kWet = 1.f;
     const float humInc = 50.f / sr_, fanInc = 2.35f / sr_;
     const float tvGl = std::cos(1.25f * (float)kPi * .25f), tvGr = std::sin(1.25f * (float)kPi * .25f);
@@ -1678,6 +1836,35 @@ void AmbienceGen::render(float* out, int frames) {
             const float rt = roomLp_.process(nz_.next()) * kRoom;
             l += rt;
             r += rt * .9f + nz_.next() * kRoom * .02f;
+        }
+        if (layers_ & LayerRain) {
+            rain_ += (rainTgt - rain_) * rainCoef_;
+            gust_ += dGust_;
+            if (rain_ > 1e-4f) {
+                // a soft broadband wash (pavement, roofs) plus the higher hiss of drops, grainy rather than steady
+                const float n1 = nz_.next(), n2 = nz_.next();
+                const float grain = 1.f + 2.2f * rainGrain_.process(nz_.next());
+                const float wash = rainBody2_.process(rainBody_.process(n1)) * 1.1f + rainHissLp_.process(rainHissHp_.process(n2)) * .5f * grain;
+                // drops ticking on the window glass and the sill
+                float tick = 0.f;
+                if (rng_.uniform() < 90.f * rain_ / sr_) {
+                    const float a = u(.2f, 1.f) * (rng_.chance(.5f) ? 1.f : -1.f);
+                    tick = a;
+                }
+                const float pat = patter_[0].process(tick) + patter_[1].process(tick * .8f) + patter_[2].process(tick * .6f);
+                float drip = 0.f;
+                if (dripA_ > 1e-4f) {
+                    dripPh_ += dripF_ / sr_;
+                    if (dripPh_ >= 1.f) dripPh_ -= 1.f;
+                    drip = std::sin(kTauF * dripPh_) * dripA_;
+                    dripA_ *= dripDk_;
+                    dripF_ *= dripGlide_;
+                }
+                const float x = (wash * kRainWash * gust_ + pat * kRainPatter) * rain_ + drip * kRainDrip;
+                l += x * .9f;
+                r += x * .55f;
+                send += x * .25f;
+            }
         }
         if (layers_ & LayerEvents) {
             for (auto& v : voices_) {
@@ -2254,7 +2441,7 @@ struct Audio::Impl {
     };
 
     bool ready = false, sfxOn = true, ambOn = true, musicOn = true;
-    float master = 1.f;
+    float master = 1.f, rain = 0.f;
     float sr = 48000.f;
     okey::Rng rng;
     std::unique_ptr<SfxBank> bank;
@@ -2285,7 +2472,10 @@ void Audio::Impl::playNow(Sfx s, float vol, float pitch, float pan) {
     if (vars.empty()) return;
     const int nv = (int)vars.size();
     int v = 0;
-    if (nv > 1) { // any variation but the one heard last
+    if (s == Sfx::CarPass && nv >= 4) { // wet tyres on a rainy night, the other two on a dry one
+        const int base = rain > .05f ? 2 : 0;
+        v = base + (lastVar[(size_t)id] == base ? 1 : (lastVar[(size_t)id] == base + 1 ? 0 : rng.range(2)));
+    } else if (nv > 1) { // any variation but the one heard last
         if (lastVar[(size_t)id] < 0) {
             v = rng.range(nv);
         } else {
@@ -2456,7 +2646,10 @@ void Audio::update(float dt) {
     if (m.radioStreamOk && !IsAudioStreamPlaying(m.radioStream)) PlayAudioStream(m.radioStream);
 }
 
-void Audio::play(Sfx s, float volume, float pitch) { impl_->playNow(s, volume, pitch, 0.f); }
+void Audio::play(Sfx s, float volume, float pitch) {
+    const int id = (int)s;
+    impl_->playNow(s, volume, pitch, (id >= 0 && id < (int)Sfx::Count) ? kSfx[id].pan : 0.f);
+}
 
 void Audio::onEvent(const okey::GameEvent& e) {
     Impl& m = *impl_;
@@ -2526,6 +2719,12 @@ void Audio::setMasterVolume(float v01) {
     impl_->pushTargets();
 }
 
+void Audio::setRain(float amount01) {
+    Impl& m = *impl_;
+    m.rain = clampf(amount01, 0.f, 1.f);
+    if (m.amb) m.amb->rainTarget.store(m.rain, std::memory_order_relaxed);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Developer hooks (tools/audio_render.cpp)
 // ------------------------------------------------------------------------------------------------
@@ -2576,6 +2775,7 @@ void renderAmbience(int sampleRate, unsigned long long seed, double seconds, uns
     const float sr = (float)sampleRate;
     AmbienceGen g(sr, seed, layerMask);
     g.setImmediate(1.f);
+    if (layerMask & LayerRain) g.setRainImmediate(1.f);
     std::vector<float> warm;
     renderGen(g, 3.0, sr, false, seed, warm); // settle into the steady state (reverb, talkers)
     renderGen(g, seconds, sr, randomChunks, seed, stereoOut);

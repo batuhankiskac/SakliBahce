@@ -97,6 +97,8 @@ bool Room::init(Renderer& r, uint64_t seed) {
     I.mEmber = r.makeMat(Color{255, 120, 40, 255}, Texture2D{}, 0.f, 1.f, 1.f);
 
     I.buildAll();
+    I.initWeather();
+    I.initCat();
     for (Impl::Lamp& L : I.lamps) L.dust = r.makeMat(Color{255, 212, 158, 26}, I.texDust, 0.f, 1.f, 1.f);
     {
         MeshBuilder q;
@@ -135,6 +137,8 @@ bool Room::init(Renderer& r, uint64_t seed) {
 }
 
 void Room::Impl::freeAll(Renderer& r) {
+    freeWeather(r);
+    freeCat(r);
     auto um = [](Mesh& m) {
         if (m.vertexCount > 0) UnloadMesh(m);
         m = Mesh{};
@@ -188,6 +192,13 @@ void Room::setScoreboard(const std::string& title, const std::vector<std::string
     I.scoreDirty = true;
 }
 void Room::setTitleMode(bool on) { impl_->title = on; }
+bool Room::consumeCatMeow(Vector3& where) {
+    if (!impl_->catMeowed) return false;
+    impl_->catMeowed = false;
+    where = impl_->catMeowAt;
+    return true;
+}
+
 bool Room::consumeTvGoal() {
     bool g = impl_->tvGoal;
     impl_->tvGoal = false;
@@ -202,6 +213,8 @@ void Room::update(float dt) {
     I.updateLamps(dt);
     I.updateProps(dt);
     I.updateSmoke(dt);
+    I.updateWeather(dt);
+    I.updateCat(dt);
     if (I.scoreDirty) {
         drawScoreboardCanvas(I.cvScore, I.scoreTitle, I.scoreLines, I.seed + (uint32_t)I.scoreLines.size() * 31u);
         I.scoreDirty = false;
@@ -220,6 +233,8 @@ void Room::submit(Renderer& r) {
     for (const Impl::Static& s : I.statics) r.submit(&s.mesh, s.mat, s.xf, s.flags);
     I.submitLamps(r);
     I.submitProps(r);
+    I.submitWeather(r);
+    I.submitCat(r);
 }
 
 // ============================================================================ animation
@@ -310,7 +325,7 @@ void Room::Impl::updateProps(float dt) {
     if (chairT <= 0.f) {
         std::vector<int> empty;
         for (int i = 0; i < (int)chairs.size(); ++i)
-            if (!chairs[i].occupied) empty.push_back(i);
+            if (!chairs[i].occupied && i != catChair) empty.push_back(i);  // not from under the cat
         if (!empty.empty()) {
             Chair& c = chairs[empty[rng.range(0, (int)empty.size() - 1)]];
             c.offFrom = c.off;
@@ -348,11 +363,17 @@ void Room::Impl::updateProps(float dt) {
             carDir = rng.chance(0.5f) ? 1.f : -1.f;
             carZ = carDir > 0 ? -12.f : 10.f;
             carT = rng.uniform(16.f, 40.f);
+            carSoundDone = false;
         }
         sweepLevel = 0.f;
     } else {
         carZ += carDir * 7.5f * dt;
         if (carZ > 10.5f || carZ < -12.5f) carActive = 0.f;
+        // the tyres' hiss peaks ~1.3 s into the sound: start it so that it peaks as the car passes our seat
+        if (!carSoundDone && std::fabs(carZ - 0.8f) < 7.5f * 1.3f) {
+            carSoundDone = true;
+            sfx(ui::Sfx::CarPass);
+        }
         float s = 0.f;
         for (float zw : {-1.7f, 0.8f, 2.8f}) s = std::max(s, std::exp(-(carZ - zw) * (carZ - zw) / 2.2f));
         sweepLevel = s;

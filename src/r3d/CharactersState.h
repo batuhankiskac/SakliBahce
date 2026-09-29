@@ -207,6 +207,7 @@ struct Cast {
     uint64_t seed = 1;
     Rng rng{1};
     std::array<std::string, 4> names{{"Sen", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"}};
+    float animSpeed = 1.f;               // the table's animation speed: tile reaches keep pace with the tiles
     int activeSeat = -1;
     int lastTurnSeat = -1;               // the last real turn (activeSeat is -1 while paused, too)
     bool titleMode = false;
@@ -232,7 +233,7 @@ struct Cast {
     void poseSeated(Seated& s, float dt, float headOmega);
     void resolveArm(Seated& s, int a, float dt, float handScale);
     void startTrack(Seated& s, int arm, int kind, std::vector<Key> keys);
-    void clearRack(const Opponent& o, int arm, std::vector<Key>& keys) const;
+    void clearRack(const Opponent& o, int arm, Track& tr) const;
     void onArmEvent(Seated& s, int arm, int ev);
     void react(const okey::GameEvent& e, const okey::Game& g);
     void idleOpponent(Opponent& o, float dt);

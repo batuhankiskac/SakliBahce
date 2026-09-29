@@ -28,8 +28,10 @@ public:
     void setActiveSeat(int seat);                           // whose turn (-1 none)
     void onEvent(const okey::GameEvent& e, const okey::Game& g);
     void onTvGoal();                                        // someone reacts to the TV
+    void onCatMeow(Vector3 where);                          // heads turn to the kahvehane cat
     void say(int seat, const std::string& text, float seconds = 3.f);
     void setTitleMode(bool on);                             // menu backdrop: no bubbles, relaxed idles
+    void setAnimationSpeed(float speed);                    // Table3D's tile speed: reaches for tiles keep pace
 
     // `viewer` is the human's camera (for eye contact / glances toward the player).
     void update(float dt, const Camera3D& viewer);

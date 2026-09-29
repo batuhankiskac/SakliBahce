@@ -344,6 +344,8 @@ struct Key {
     Vector3 pole{0, 0, 0};    // explicit elbow pole direction (local); zero = default
     float relax = 1.f;        // 1: a relaxed hand follows the forearm a little; 0: placed exactly (fingertips on
                               // something), interpolated between keys so the wrist never pops
+    bool touch = false;       // the fingers are on the owner's istaka here on purpose (picking / placing a tile):
+                              // the rack clearance leaves the ends of the spans into and out of it alone
 };
 enum KeyEvent {
     KE_None = 0,
@@ -359,12 +361,18 @@ enum KeyEvent {
     KE_ReleaseSpoon = 10,
 };
 
+// A track is a C1 curve through its keys (cubic Hermite per span): the hand passes through intermediate keys
+// without stopping, comes to rest at turning points, at `ease` 1 keys and at the last key, and hits `ease` 2
+// keys at speed (slams, taps). It starts with the motion the hand already had (v0/f0/p0), so a new track
+// never jerks the arm out of the one it replaces.
 struct Track {
     std::vector<Key> keys;
     float t = 0.f;
     bool on = false;
     int kind = 0;          // what the track does (TrackKind)
     int nextKey = 1;       // next key whose event hasn't fired
+    Vector3 v0{0, 0, 0};   // velocity of the position / fingers / palm at the first key (per second)
+    Vector3 f0{0, 0, 0}, p0{0, 0, 0};
     float duration() const { return keys.empty() ? 0.f : keys.back().t; }
 };
 enum TrackKind {
@@ -386,10 +394,17 @@ struct Arm {
     Vector3 shoulder{}, elbow{}, wrist{};
     Matrix upper = MatrixIdentity(), fore = MatrixIdentity(), hand = MatrixIdentity();
     Vector3 localWrist{};  // resolved local target (for auto lean)
+    Vector3 aheadWrist{};  // where the track takes it a moment later (the body leans into a reach in time)
     HandPose pose = HandPose::Rest;
     Key cur;               // last evaluated key (local space) — new tracks start here
+    Vector3 vel{0, 0, 0}, fVel{0, 0, 0}, pVel{0, 0, 0};  // how cur moves (per second) — new tracks keep it
+    bool velInit = false;
     float idleIn = 3.f;
     float heldW = 0.f;     // 0..1, eases toward 1 while the hand holds something (the elbow follows the hand)
+    float looseW = 0.f;    // 0..1, eases toward 1 in relaxed poses (the hand droops along the forearm)
+    Vector3 pole{0, 0, 0}; // smoothed elbow pole (world): the elbow swings, it never pops
+    float protract = 0.f;  // 0..1 the shoulder rolls forward into a long reach
+    Vector3 swing{0, 0, 0}; // unit direction of the elbow off the shoulder-wrist line (world), rate limited
 };
 
 // Two-bone IK: returns the elbow for shoulder s, wrist target w (clamped to reach), pole direction.

@@ -70,6 +70,24 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
   under the ceiling), slow drifting smoke puffs around the room and in the lamp cones, dust motes in
   light shafts (additive cones under the lamps), smoke rising from the ashtray at `ASHTRAY_POS`.
   Keep our table readable (little haze below 1.4 m near the table).
+* Weather & street life (`RoomWeather.cpp`): about half the nights it rains (from the room seed; the intensity
+  drifts over minutes and `Room::rainAmount()` feeds `Audio::setRain`). Drops bead on the outside of the window
+  glass, merge, run down and leave clear trails (a double-buffered canvas, one slot per pane, redrawn at 12 Hz:
+  every render-to-texture pass makes the driver wait for the GPU, so keep canvas redraws rare); rain streaks
+  fall outside the windows and the door (upright additive billboards, brighter near the street lamps).
+  Passers-by walk the pavements of both streets (painted silhouettes on upright billboards, four walk frames,
+  mirrored by their screen direction): umbrellas and caps glide past above the café curtains; on rainy nights
+  umbrellas or a newspaper held over the head, on dry nights caps, a cane, a cigarette. The passing car's
+  tyres are heard (`Sfx::CarPass`, wet or dry) peaking as its headlights sweep past our seat.
+* The kahvehane cat (`RoomCat.cpp`, Room-owned): a procedural rig (two torso ellipsoids that pitch and bend, a
+  waist, neck, head with ears/muzzle/eyes, two-bone IK legs with paws, an 8-segment tail that sways free or
+  wraps round the body) posed by target poses the current pose eases toward (curl, loaf, sit, groom, bow,
+  stand), a lateral-sequence walk, jumps onto/off an empty chair (the chair-scrape animation leaves that chair
+  alone). Coat from the seed (ginger tabby / grey tabby / tuxedo). It naps by the stove or on an empty chair,
+  sits under the scoreboard (its eyes glint above the table edge from our seat), under the windows, or at the
+  street door watching the rain; now and then it looks at the camera; very rarely `Sfx::Meow`. Walks are
+  planned on a 10 cm occupancy grid of the floor (A* + string pulling) that keeps 1.35 m off our table and clear
+  of every table, chair, the counter, stove, coat rack and bench. ~25 draw submissions, no point light.
 * Title mode: same room; App drives a slow cinematic camera.
 
 ## 4. People (Characters)
@@ -82,7 +100,16 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
   racks). Stylised but characterful faces: eyes that blink and look at things (the active player, the
   speaker, the human's camera now and then), eyebrows, noses, mustaches, ears, mouths that move while
   their bubble is showing.
-* Animations tied to events (the tile itself flies via Table3D in ~0.45 s — sync the reach to it):
+* Animations tied to events. Hand and tile share one timeline (`w3d::BOT_*_LEAD` in World.h): Table3D holds
+  an opponent's tile flight back until the fingers are on the tile (taken tiles lift off at
+  `BOT_TAKE_LEAD`, given ones leave the rack at `BOT_GIVE_LEAD` / `BOT_MELD_LEAD`), Characters times the
+  reach to it (and follows Table3D's animation speed), App delays the tile sounds by the same lead.
+  Arm tracks are C1 curves through their keys (cubic Hermite: the hand passes through intermediate keys,
+  stops only at turning points, `ease` 1 keys and the end, hits `ease` 2 keys at speed) and start with the
+  hand's current velocity, so a new track never jerks the arm; the body leans in ahead of a long reach,
+  targets out of reach even leaning in are clamped (the hand lets the tile slide on), the elbow's swing
+  around the shoulder-wrist line is rate limited (no flips at the lips), and spans over the owner's istaka
+  are arched clear of it (`Key::touch` marks keys that are on the rack on purpose).
   DrawPile/TakeLeft → reach to `PILE_POS` / the left discard pile and back to the rack; Discard →
   reach to their `DISCARD_POS`; Open/LayMelds → both hands slap tiles down in their `MELD_ZONE` (+ a
   proud gesture); AddToMeld/SwapJoker → reach into the target zone; Penalty → facepalm/shrug;

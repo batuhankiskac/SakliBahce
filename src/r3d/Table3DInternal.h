@@ -256,6 +256,7 @@ struct TableState {
     int builtHand = -1, builtInd = -1, builtTurn = -1;
     bool needRebuild = false;
     bool pendingSync = false;
+    bool layingMelds = false;    // the last event was Open / LayMelds (a bot's tiles leave its rack together)
     bool revealed = false;       // bots' racks turned around (hand over)
     float revealAt = -1.f;
 
@@ -324,6 +325,7 @@ struct TableState {
     void layoutMelds();
     void computeTargets();
     void startFlight(int id, int fromCont, int toCont, const t3d::Pose& to, float delay, bool hop);
+    float botLead(int fromCont, int toCont) const;  // start delay of a flight an opponent's hand makes
     void advanceVisuals(float dt);
     bool dealing() const;
     bool anyFlying() const;

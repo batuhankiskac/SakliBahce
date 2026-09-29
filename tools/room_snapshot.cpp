@@ -1,6 +1,6 @@
 // Room owner's visual check: renders the kıraathane from the human's seat and from other angles into PNGs
 // (build/room/*.png). A placeholder table and grey capsules stand in for Table3D and Characters.
-//   usage: room_snapshot [outdir] [seconds]
+//   usage: room_snapshot [outdir] [seconds] [only-shot-substring] [seed]
 #include "r3d/Gfx.h"
 #include "r3d/Room.h"
 #include "r3d/World.h"
@@ -125,7 +125,9 @@ int main(int argc, char** argv) {
 
     auto t0 = std::chrono::steady_clock::now();
     Room room;
-    if (!room.init(R, 0xC0FFEEull)) return 2;
+    const uint64_t seed = argc > 4 ? std::strtoull(argv[4], nullptr, 10) : 0xC0FFEEull;
+    if (!room.init(R, seed)) return 2;
+    std::printf("rain tonight: %.2f\n", room.rainAmount());
     auto t1 = std::chrono::steady_clock::now();
     std::printf("room init: %.0f ms\n", std::chrono::duration<double, std::milli>(t1 - t0).count());
     int sfxCount = 0;
@@ -176,6 +178,18 @@ int main(int argc, char** argv) {
         {"16_bench", lookAt({-0.6f, 1.45f, 1.5f}, {-0.9f, 0.9f, 3.6f}, 60.f), true},
         {"17_outside", lookAt({-3.3f, 1.5f, 2.8f}, {-8.f, 0.8f, 2.6f}, 60.f), true},
         {"19_plant", lookAt({0.2f, 1.3f, -1.9f}, {0.55f, 0.7f, -3.2f}, 55.f), true},
+        {"21_rainwin", lookAt({-3.0f, 1.55f, 0.2f}, {-4.2f, 1.75f, 0.8f}, 50.f), true},
+        {"22_street", lookAt({-2.2f, 1.45f, -0.3f}, {-4.4f, 1.75f, -1.7f}, 50.f), true},
+        {"23_backwin", lookAt({-2.4f, 1.5f, -1.6f}, {-3.4f, 1.6f, -3.4f}, 50.f), true},
+        // the cat's favourite spots (where it is depends on the seed and the time: try a few seeds), the look-around
+        {"28_stove", lookAt({2.1f, 1.25f, 1.9f}, {3.05f, 0.15f, 2.8f}, 45.f), true},
+        {"29_chair", lookAt({1.7f, 1.3f, 0.2f}, {2.5f, 0.5f, 1.0f}, 45.f), true},
+        {"30_backspot", lookAt({-1.3f, 1.1f, -1.9f}, {-1.75f, 0.15f, -3.1f}, 45.f), true},
+        {"31_door", lookAt({-2.6f, 1.2f, 2.0f}, {-3.8f, 0.15f, 2.8f}, 45.f), true},
+        {"32_window", lookAt({-2.7f, 1.0f, -0.2f}, {-3.97f, 0.15f, -0.45f}, 45.f), true},
+        {"34_lookright", lookFrom({0.f, 1.23f, 0.87f}, -110.f, -14.f), true},
+        {"35_lookleft", lookFrom({0.f, 1.23f, 0.87f}, 110.f, -14.f), true},
+        {"33_top", lookAt({0.f, 12.f, 0.3f}, {0.f, 0.f, 0.29f}, 38.f), true},
     };
     const std::string only = argc > 3 ? argv[3] : "";
     for (Shot& s : shots) {

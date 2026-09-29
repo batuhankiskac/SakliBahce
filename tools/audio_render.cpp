@@ -415,6 +415,12 @@ int main(int argc, char** argv) {
     std::vector<float> ambLong;
     audio_dev::renderAmbience(rate, 7, 180.0, 31u, true, ambLong);
     printRow("ambience_180s (not saved)", analyze(ambLong, 2, rate));
+    {   // a rainy night: every layer plus the rain outside (mask bit 32 turns the rain on at full strength)
+        std::vector<float> wet;
+        audio_dev::renderAmbience(rate, 101, 30.0, 63u, true, wet);
+        writeBed(outDir + "/ambience_rain_30s.wav", wet, rate);
+        printRow("ambience_rain_30s", analyze(wet, 2, rate));
+    }
     if (spectro) {
         std::vector<float> head(amb.begin(), amb.begin() + (long)rate * 2 * 15);
         spectrogram(outDir + "/spec_ambience_15s.png", head, 2, rate, 2048, 1200, 260, 12000.f, 70.0);
@@ -439,8 +445,8 @@ int main(int argc, char** argv) {
     windows("radio 240 s", radLong);
 
     // chunking invariance: the stream must not depend on callback sizes (no seams at boundaries)
-    audio_dev::renderAmbience(rate, 55, 6.0, 31u, false, a2);
-    audio_dev::renderAmbience(rate, 55, 6.0, 31u, true, a3);
+    audio_dev::renderAmbience(rate, 55, 6.0, 63u, false, a2);
+    audio_dev::renderAmbience(rate, 55, 6.0, 63u, true, a3);
     double diffA = 0;
     for (size_t i = 0; i < a2.size(); ++i) diffA = std::max(diffA, (double)std::fabs(a2[i] - a3[i]));
     audio_dev::renderRadio(rate, 55, 6.0, false, a2);
@@ -463,9 +469,9 @@ int main(int argc, char** argv) {
     }
 
     std::printf("\n== Ambience layers (120 s each, RMS / peak dBFS) ==\n");
-    const char* layerNames[5] = {"murmur", "tv", "fan", "events", "room"};
+    const char* layerNames[6] = {"murmur", "tv", "fan", "events", "room", "rain"};
     std::vector<float> layerMurmur;
-    for (int L = 0; L < 5; ++L) {
+    for (int L = 0; L < 6; ++L) {
         std::vector<float> x;
         audio_dev::renderAmbience(rate, 101, 120.0, 1u << L, false, x);
         const Stats st = analyze(x, 2, rate);
