@@ -18,7 +18,7 @@ enum class FontId {
     UiBold,  // Trebuchet MS Bold — buttons, names
     Chalk,   // Chalkboard SE — chalkboard / price list / scoreboard on the wall
     Hand,    // Noteworthy — handwriting (score sheet "hesap kağıdı")
-    Sign,    // Rockwell — signage, titles ("KIRAATHANE")
+    Sign,    // Rockwell — signage, titles ("SAKLI BAHÇE")
     Tile,    // Arial Black — numbers on tiles
     Count
 };

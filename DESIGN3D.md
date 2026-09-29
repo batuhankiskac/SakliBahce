@@ -1,4 +1,4 @@
-# Kıraathane 101 — 3D Design Contract (supersedes DESIGN.md §1 ownership of Scene/TableView and §5 visuals)
+# SaklıBahçe — 3D Design Contract (supersedes DESIGN.md §1 ownership of Scene/TableView and §5 visuals)
 
 The user's words: *"ortamın 3D olmasını istiyorum — gerçekten o ortamdaymış gibi hissetmek istiyorum"*.
 The player must feel **seated at a table in a real, smoky Turkish kıraathane at night**: first-person,
@@ -147,6 +147,11 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
   rack area, live counter, toasts, name plates projected above each opponent's head (name, total score,
   "Açtı: 124"/"Çift" badge, glowing on their turn), pile count near the pile (projected). Keep it light:
   the 3D scene is the star. Scores also appear on the wall scoreboard (App feeds Room).
+* Yapay Zeka mode (`setAiMode`): App lets an AI play the human's seat. The HUD's "Yapay Zeka" button (between
+  "Çift Diz" and "Menü"; `consumeAiToggleRequest`) is lit, the status line carries a "YAPAY ZEKA" tag, the
+  human's tiles ignore the mouse (App passes `humanInput=false` but the real mouse, for the buttons, peeks and
+  mouse-look) and the istaka is re-arranged (series or pairs, whichever the AI is going for) whenever tiles
+  come in or leave.
 * PlayerCamera: seated first-person (`EYE`, `EYE_PITCH_DEG`, `FOVY_DEG`), RMB-drag look-around, wheel zoom,
   R/double-RMB recentre, subtle breathing; title mode = slow cinematic drift through the room.
 

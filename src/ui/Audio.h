@@ -1,8 +1,12 @@
 #pragma once
-// Procedural audio: every sound is synthesised at init (no asset files). PUBLIC API FROZEN (additions only).
+// Audio: the sound effects and the room ambience are synthesised at init; the old radio plays real recordings
+// from assets/music/ (listed with their credits in assets/music/liste.tsv), falling back to synthesised makam
+// melodies when that folder is missing. PUBLIC API FROZEN (additions only).
 // Implementation: src/ui/Audio.cpp (audio owner) defines struct Audio::Impl.
 // App calls InitAudioDevice() before Audio::init() and CloseAudioDevice() after shutdown().
 #include "core/Game.h"
+
+#include <string>
 
 namespace ui {
 
@@ -42,9 +46,11 @@ public:
 
     void setSfxEnabled(bool on);
     void setAmbientEnabled(bool on);  // crowd murmur, ceiling fan, distant dice/tavla, TV football
-    void setMusicEnabled(bool on);    // old radio: synthesized Turkish folk (makam) melodies, lo-fi
+    void setMusicEnabled(bool on);    // the old radio on the wall (recordings from assets/music)
     void setMasterVolume(float v01);
     void setRain(float amount01);     // rain outside the windows (ambience bus): 0 = a dry night
+    // True once when the radio starts a new recording: `text` = "Title — Artist" (for a "now playing" note).
+    bool consumeNowPlaying(std::string& text);
 
 private:
     struct Impl;

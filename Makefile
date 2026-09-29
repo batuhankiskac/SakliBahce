@@ -1,5 +1,5 @@
-# Kıraathane 101 — build (macOS, Apple clang, raylib 6.0 from Homebrew)
-#   make            -> ./kiraathane101 (the game)
+# SaklıBahçe — build (macOS, Apple clang, raylib 6.0 from Homebrew)
+#   make            -> ./saklibahce (the game)
 #   make run        -> build and start the game
 #   make test       -> engine + AI tests and short headless bot-vs-bot simulations
 #   make asan       -> AddressSanitizer + UBSan build in build/asan/ (game + tests), then runs the tests
@@ -18,7 +18,7 @@ LDLIBS   := $(RAYLIB)/lib/libraylib.a -framework Cocoa -framework IOKit -framewo
             -framework CoreVideo -framework CoreAudio -framework AudioToolbox -framework CoreFoundation
 
 BUILD    ?= build/make
-GAME     ?= kiraathane101
+GAME     ?= saklibahce
 CORE_SRC := $(wildcard src/core/*.cpp)
 UI_SRC   := $(wildcard src/ui/*.cpp) $(wildcard src/r3d/*.cpp)
 APP_SRC  := $(wildcard src/app/*.cpp)
@@ -60,10 +60,10 @@ test: $(TESTS)
 run: $(GAME)
 	./$(GAME)
 
-# Sanitized build: build/asan/kiraathane101 (try: build/asan/kiraathane101 --autoplay --speed 8 --no-audio)
+# Sanitized build: build/asan/saklibahce (try: build/asan/saklibahce --ai --speed 8 --no-audio)
 asan:
-	$(MAKE) BUILD=build/asan GAME=build/asan/kiraathane101 CXXFLAGS="$(ASAN_FLAGS)" LDFLAGS="-fsanitize=address,undefined" \
-	    build/asan/kiraathane101 tests
+	$(MAKE) BUILD=build/asan GAME=build/asan/saklibahce CXXFLAGS="$(ASAN_FLAGS)" LDFLAGS="-fsanitize=address,undefined" \
+	    build/asan/saklibahce tests
 	ASAN_OPTIONS=detect_leaks=0 build/asan/test_engine
 	ASAN_OPTIONS=detect_leaks=0 build/asan/test_ai
 	ASAN_OPTIONS=detect_leaks=0 build/asan/sim --hands 200 --seed 5 --levels 2,1,0,2

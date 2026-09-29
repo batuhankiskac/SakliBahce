@@ -405,6 +405,7 @@ struct Room::Impl {
     bool catMeowed = false;  // for Room::consumeCatMeow
     Vector3 catMeowAt{};
     void initCat();
+    bool catNearChair(int chair) const;  // the chair-scrape leaves chairs the cat is on or close to alone
     void updateCat(float dt);
     void submitCat(Renderer& r);
     void freeCat(Renderer& r);

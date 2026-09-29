@@ -1673,42 +1673,64 @@ void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed) {
     endRoomCanvas(rt);
 }
 
-// Gold leaf lettering painted on the inside of the street window (seen mirrored from inside).
+// Gold leaf lettering painted on the inside of the street window (seen mirrored from inside): the name on an arch,
+// "KIRAATHANESİ" straight beneath it, the year in a hand script. Every line is fitted to the canvas.
 void drawLetteringCanvas(RenderTexture2D& rt) {
     beginRoomCanvas(rt);
     rlDisableBackfaceCulling();
     ClearBackground(Color{214, 170, 80, 0});
-    const float W = (float)rt.texture.width, H = (float)rt.texture.height;
-    const char* word = "YILDIZ KIRAATHANESİ";
-    // arched text: draw glyph by glyph along an arc
-    std::vector<std::string> glyphs;
-    for (size_t i = 0; i < std::string(word).size();) {
-        unsigned char c = (unsigned char)word[i];
-        size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
-        glyphs.push_back(std::string(word).substr(i, n));
-        i += n;
-    }
-    const float size = 92.f;
-    float total = 0.f;
-    std::vector<float> w;
-    for (auto& g : glyphs) {
-        w.push_back(ui::measureText(ui::FontId::Sign, g, size).x + 4.f);
-        total += w.back();
-    }
-    const float R = 1500.f;
-    Vector2 c{W / 2, 150.f + R};
-    float ang = -total / R * 0.5f;
-    for (size_t i = 0; i < glyphs.size(); ++i) {
-        float mid = ang + w[i] * 0.5f / R;
-        Vector2 p{c.x + std::sin(mid) * R, c.y - std::cos(mid) * R};
-        Vector2 m = ui::measureText(ui::FontId::Sign, glyphs[i], size);
-        const Font& f = ui::font(ui::FontId::Sign);
-        DrawTextPro(f, glyphs[i].c_str(), {p.x + 3, p.y + 3}, {m.x / 2, m.y / 2}, mid * RAD2DEG, size, 0.f, Color{60, 30, 10, 220});
-        DrawTextPro(f, glyphs[i].c_str(), p, {m.x / 2, m.y / 2}, mid * RAD2DEG, size, 0.f, Color{226, 182, 90, 255});
-        ang += w[i] / R;
-    }
-    ui::drawTextCentered(ui::FontId::Hand, "~ 1974'ten beri ~", {W / 2, 232}, 46, Color{230, 190, 100, 240});
-    (void)H;
+    const float W = (float)rt.texture.width;
+    const Color shade{60, 30, 10, 220}, gold{226, 182, 90, 255};
+    const Font& f = ui::font(ui::FontId::Sign);
+    auto glyphsOf = [](const std::string& s) {  // UTF-8 characters
+        std::vector<std::string> g;
+        for (size_t i = 0; i < s.size();) {
+            unsigned char c = (unsigned char)s[i];
+            size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
+            g.push_back(s.substr(i, n));
+            i += n;
+        }
+        return g;
+    };
+    // the name, glyph by glyph along an arc (apex at `apexY`), shrunk if it would not fit in `maxW`
+    auto arched = [&](const std::string& text, float size, float apexY, float maxW) {
+        std::vector<std::string> glyphs = glyphsOf(text);
+        const float track = 0.045f;  // letter spacing, in font sizes
+        auto widthAt = [&](float sz) {
+            float t = 0.f;
+            for (const std::string& g : glyphs) t += ui::measureText(ui::FontId::Sign, g, sz).x + track * sz;
+            return t;
+        };
+        float total = widthAt(size);
+        if (total > maxW) size *= maxW / total, total = widthAt(size);
+        const float R = 1400.f;
+        const Vector2 c{W / 2, apexY + R};
+        float ang = -total / R * 0.5f;
+        for (const std::string& g : glyphs) {
+            const float w = ui::measureText(ui::FontId::Sign, g, size).x + track * size;
+            const float mid = ang + w * 0.5f / R;
+            const Vector2 p{c.x + std::sin(mid) * R, c.y - std::cos(mid) * R};
+            const Vector2 m = ui::measureText(ui::FontId::Sign, g, size);
+            DrawTextPro(f, g.c_str(), {p.x + 3, p.y + 3}, {m.x / 2, m.y / 2}, mid * RAD2DEG, size, 0.f, shade);
+            DrawTextPro(f, g.c_str(), p, {m.x / 2, m.y / 2}, mid * RAD2DEG, size, 0.f, gold);
+            ang += w / R;
+        }
+    };
+    auto straight = [&](const std::string& text, float size, float y, float maxW) {
+        float sp = size * 0.12f;  // spaced capitals
+        Vector2 m = MeasureTextEx(f, text.c_str(), size, sp);
+        if (m.x > maxW) {
+            const float k = maxW / m.x;
+            size *= k, sp *= k;
+            m = MeasureTextEx(f, text.c_str(), size, sp);
+        }
+        const Vector2 p{W / 2 - m.x / 2, y - m.y / 2};
+        DrawTextEx(f, text.c_str(), {p.x + 2, p.y + 2}, size, sp, shade);
+        DrawTextEx(f, text.c_str(), p, size, sp, gold);
+    };
+    arched("SAKLI BAHÇE", 104.f, 76.f, W * 0.86f);
+    straight("KIRAATHANESİ", 50.f, 170.f, W * 0.6f);
+    ui::drawTextCentered(ui::FontId::Hand, "~ 1974'ten beri ~", {W / 2, 226}, 38, Color{230, 190, 100, 240});
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
     endRoomCanvas(rt);

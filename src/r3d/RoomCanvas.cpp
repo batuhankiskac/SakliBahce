@@ -332,7 +332,7 @@ void drawTvCanvas(RenderTexture2D& rt, const TvSim& tv, float time) {
             DrawRectangleV({x, y - bounce}, {2.f, 2.f}, scaleRgb(c, 0.55f + 0.2f * (y / 62.f)));
         }
         // advertising boards along the far touchline
-        const char* ads[4] = {"KIRAATHANE 101", "ÇAY 15 TL", "OKEY KULÜBÜ", "SİMİT SARAYI"};
+        const char* ads[4] = {"SAKLI BAHÇE", "ÇAY 15 TL", "OKEY KULÜBÜ", "SİMİT SARAYI"};
         for (int k = -2; k < 8; ++k) {
             Vector2 a = v.P(k * 0.25f, -0.03f), b = v.P((k + 1) * 0.25f, -0.03f);
             if (b.x < 0 || a.x > W) continue;

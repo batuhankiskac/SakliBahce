@@ -1,4 +1,4 @@
-// AI tests for Kıraathane 101: Solver against a brute-force oracle, rack arrangement, timing, and bot
+// AI tests for SaklıBahçe: Solver against a brute-force oracle, rack arrangement, timing, and bot
 // behaviour scenarios built with the Game debug hooks.
 // Build: clang++ -std=c++17 -O2 -Wall -Wextra -Isrc src/core/Meld.cpp src/core/Game.cpp src/core/Solver.cpp
 //        src/core/Bot.cpp tests/test_ai.cpp -o build/ai/test_ai

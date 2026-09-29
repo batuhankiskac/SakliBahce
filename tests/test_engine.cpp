@@ -1,4 +1,4 @@
-// Engine tests for Kıraathane 101: meld rules, game rules / scoring, and a fuzzer.
+// Engine tests for SaklıBahçe: meld rules, game rules / scoring, and a fuzzer.
 // Build: clang++ -std=c++17 -O2 -Wall -Wextra -Isrc src/core/Meld.cpp src/core/Game.cpp tests/test_engine.cpp
 //        -o build/engine/test_engine
 #include "core/Game.h"

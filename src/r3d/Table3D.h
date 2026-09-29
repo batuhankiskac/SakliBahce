@@ -39,6 +39,12 @@ public:
     void setHints(bool on);                 // live meld totals / valid-group highlights (default on)
     void setHeadAnchors(const std::array<Vector3, 4>& heads); // name plates float above these
     bool mouseBusy() const;                 // mouse is over/dragging a tile, button or modal (no mouse-look)
+    // "Yapay Zeka" mode: an AI plays the human's seat (App paces it like the bots). The HUD's "Yapay Zeka" button
+    // is lit and the status line speaks about the AI; the human's own tiles stay untouchable (App passes
+    // humanInput=false but the real mouse, so the HUD buttons, hover peeks and mouse-look keep working) and the
+    // istaka is re-arranged into the groups the AI is going for (series or pairs) whenever tiles come or go.
+    void setAiMode(bool on);
+    bool consumeAiToggleRequest();          // "Yapay Zeka" button pressed (true once)
     std::function<void(ui::Sfx)> playSfx;
 
 private:

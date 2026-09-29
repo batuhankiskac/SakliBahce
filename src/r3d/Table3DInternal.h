@@ -141,7 +141,8 @@ struct Toast {
     float age = 0.f, dur = 2.6f;
 };
 
-enum class Btn { None, Open, GiveBack, Series, Pairs, Menu, ConfirmYes, ConfirmNo };
+enum class Btn { None, Open, GiveBack, Series, Pairs, Menu, ConfirmYes, ConfirmNo, AiToggle };
+constexpr int NUM_BUTTONS = 6; // El Aç, Geri Ver, Seri Diz, Çift Diz, Yapay Zeka, Menü (bottom-right column)
 
 struct Input {
     Vector2 mouse{-10000, -10000};
@@ -277,6 +278,11 @@ struct TableState {
     bool dragPoseValid = false;
     t3d::Btn queued = t3d::Btn::None;
     bool menuRequested = false;
+    // "Yapay Zeka" mode (Table3D::setAiMode)
+    bool aiMode = false;
+    bool aiToggleRequested = false;
+    bool aiArrangePending = false; // the AI's istaka is re-arranged at the next chance (not while dealing)
+    bool aiPairs = false;          // the AI's istaka is laid out in pairs (sticky while they hold up)
     t3d::Place place;
     int newTile = -1;
     float newTileTime = -10.f;
@@ -304,7 +310,7 @@ struct TableState {
     // the human may play: their turn, input is theirs (no screen up) and every dealt tile has landed
     bool canAct() const { return myTurn() && humanInput && !dealing(); }
     bool rackInteractive() const {
-        if (!game || game->handState() != okey::HandState::Playing || dealing()) return false;
+        if (aiMode || !game || game->handState() != okey::HandState::Playing || dealing()) return false;
         return humanInput || !myTurn();
     }
     bool canDrawNow() const { return canAct() && game->stage() == okey::TurnStage::NeedDraw && game->pileCount() > 0; }
@@ -321,6 +327,9 @@ struct TableState {
     void reconcilePile();
     bool arrangedSlots(bool pairs, t3d::Slots& out) const;
     void arrange(bool pairs);
+    bool aiWantsPairs();         // which layout the AI's istaka shows (updates aiPairs)
+    void updateAiArrange();
+    void setAiMode(bool on);
     void rebuildForHand();
     void layoutMelds();
     void computeTargets();
@@ -358,7 +367,7 @@ struct TableState {
     void onEvent(const okey::GameEvent& e);
 
     // HUD (Table3DHud.cpp)
-    std::array<Rectangle, 5> buttonRects() const;
+    std::array<Rectangle, t3d::NUM_BUTTONS> buttonRects() const;
     bool overHud(Vector2 m) const;
     void drawHUD(const Renderer& r);
     void drawNameplates(const Renderer& r);

@@ -224,6 +224,55 @@ void TableState::arrange(bool pairs) {
     if (selected >= 0 && slotOfTile(selected) < 0) selected = -1;
 }
 
+// ================================================================ "Yapay Zeka" mode
+// The layout the AI is going for: an opened hand keeps its kind; before opening, pairs once there are nearly
+// enough of them and no series opening in sight. Once in pairs it stays there while they hold up, so the
+// istaka does not flip between the two layouts with every draw. (The bot's own plan is private; this mirrors
+// its opening rules closely enough for the watcher to follow.)
+bool TableState::aiWantsPairs() {
+    const okey::PlayerInfo& me = game->player(human);
+    if (me.opened) return aiPairs = me.openedWithPairs;
+    const okey::RulesConfig& rc = game->rules();
+    const int pc = okey::solvePairs(me.hand, ok()).value;
+    if (pc < rc.minPairsToOpen - 1) return aiPairs = false; // (skips the series solve in the usual case)
+    const int sv = okey::solveSeries(me.hand, ok()).value;
+    if (aiPairs) return aiPairs = sv < rc.openThreshold;
+    return aiPairs = (sv < rc.openThreshold * 7 / 10) || (pc >= rc.minPairsToOpen && sv < rc.openThreshold);
+}
+
+// Re-arranges the AI's istaka once it may (never mid-deal; a drawn tile flies straight to its group).
+void TableState::updateAiArrange() {
+    if (!aiArrangePending) return;
+    if (!aiMode || !playing()) {
+        aiArrangePending = false;
+        return;
+    }
+    if (dealing()) return;
+    if (!game->player(human).hand.empty()) arrange(aiWantsPairs());
+    aiArrangePending = false;
+}
+
+void TableState::setAiMode(bool on) {
+    if (on == aiMode) return;
+    aiMode = on;
+    aiToggleRequested = false;
+    aiArrangePending = false;
+    if (on) {
+        // whatever the hand was doing is dropped: a held tile hops back, a pending question is withdrawn
+        if (press.dragging) {
+            const int dragged = draggedTileId();
+            if (dragged >= 0) vis[dragged].forceHop = true;
+        }
+        press = Press{};
+        selected = -1;
+        confirm = Confirm{};
+        queued = Btn::None;
+        place = Place{};
+        aiPairs = false;
+        aiArrangePending = started();
+    }
+}
+
 // ================================================================ hand start: gather, shuffle, deal
 void TableState::rebuildForHand() {
     if (!started()) return;
@@ -244,7 +293,9 @@ void TableState::rebuildForHand() {
                                 [](const Toast& t) { return t.key != "hand" && t.key != "match"; }),
                  toasts.end());
     Slots arranged;
-    if (arrangedSlots(false, arranged)) slots = arranged;
+    aiPairs = false;
+    aiArrangePending = false;
+    if (arrangedSlots(aiMode && aiWantsPairs(), arranged)) slots = arranged;
     reconcileRack();
     reconcilePile();
 
@@ -936,6 +987,7 @@ void TableState::runButton(Btn b) {
         }
         break;
     case Btn::Menu: menuRequested = true; break;
+    case Btn::AiToggle: aiToggleRequested = true; break;
     case Btn::ConfirmYes: {
         const int t = confirm.tile;
         confirm = Confirm{};
@@ -949,8 +1001,8 @@ void TableState::runButton(Btn b) {
 
 void TableState::queue(Btn b) {
     sound(ui::Sfx::Button);
-    if (b == Btn::Menu) {
-        menuRequested = true;
+    if (b == Btn::Menu || b == Btn::AiToggle) {
+        runButton(b); // App's business (pause menu / Yapay Zeka mode): no need to wait for the table's step
         return;
     }
     queued = b;
@@ -1227,6 +1279,7 @@ void TableState::step(float dt, bool hi) {
     handleInput(dt);
     reconcilePile();
     reconcileRack();
+    updateAiArrange();
     computeHints();
     layoutMelds();
     computeTargets();
@@ -1316,6 +1369,20 @@ void TableState::onEvent(const okey::GameEvent& e) {
     case EvType::MatchEnd: pushToast("match", e.text, gold, 5.0f); break;
     }
     if (e.type != EvType::TurnStart) layingMelds = e.type == EvType::Open || e.type == EvType::LayMelds;
+    // the AI's istaka stays tidy: re-arranged whenever tiles come in or leave (no holes, groups as it plans them)
+    if (aiMode && isHuman) {
+        switch (e.type) {
+        case EvType::DrawPile:
+        case EvType::TakeLeft:
+        case EvType::ReturnLeft:
+        case EvType::SwapJoker:
+        case EvType::Open:
+        case EvType::LayMelds:
+        case EvType::AddToMeld:
+        case EvType::Discard: aiArrangePending = true; break;
+        default: break;
+        }
+    }
     pendingSync = true;
 }
 
@@ -1390,7 +1457,7 @@ void Table3D::drawHUD(const Renderer& r) { impl_->drawHUD(r); }
 
 bool Table3D::isAnimating() const {
     const TableState& s = *impl_;
-    if (s.pendingSync || s.needRebuild || s.dealing() || s.anyFlying()) return true;
+    if (s.pendingSync || s.needRebuild || s.dealing() || s.anyFlying() || s.aiArrangePending) return true;
     // a finished hand: the bots' istakas are still turning around to show their tiles
     const bool over = s.game && (s.game->handState() == okey::HandState::HandOver ||
                                  s.game->handState() == okey::HandState::MatchOver);
@@ -1411,6 +1478,14 @@ void Table3D::setHints(bool on) { impl_->hints = on; }
 void Table3D::setHeadAnchors(const std::array<Vector3, 4>& heads) {
     impl_->heads = heads;
     impl_->headsSet = true;
+}
+
+void Table3D::setAiMode(bool on) { impl_->setAiMode(on); }
+
+bool Table3D::consumeAiToggleRequest() {
+    const bool r = impl_->aiToggleRequested;
+    impl_->aiToggleRequested = false;
+    return r;
 }
 
 bool Table3D::mouseBusy() const {
@@ -1487,8 +1562,9 @@ void setRackSlots(Table3D& t, const std::vector<int>& slots) {
 void pressButton(Table3D& t, int which) {
     TableState* s = stateOf(t);
     if (!s) return;
-    const Btn map[] = {Btn::None, Btn::Open, Btn::GiveBack, Btn::Series, Btn::Pairs, Btn::Menu, Btn::ConfirmYes, Btn::ConfirmNo};
-    if (which >= 1 && which <= 7) s->runButton(map[which]);
+    const Btn map[] = {Btn::None, Btn::Open,       Btn::GiveBack,  Btn::Series,  Btn::Pairs,
+                       Btn::Menu, Btn::ConfirmYes, Btn::ConfirmNo, Btn::AiToggle};
+    if (which >= 1 && which <= 8) s->runButton(map[which]);
 }
 
 int draggedTile(Table3D& t) {

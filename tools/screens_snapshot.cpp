@@ -3,7 +3,8 @@
 // Opens a hidden window, loads the fonts, plays real okey::Game matches with a small greedy scripted
 // policy, drives ui::Screens through raylib's automation events (real mouse clicks, wheel and ESC go
 // through the same input path as the game) and renders every screen over a dark placeholder room into
-// build/screens/*.png. State-machine expectations are checked along the way; exit code 1 on failure.
+// build/screens/*.png (or $SCREENS_OUT/*.png). State-machine expectations are checked along the way; exit code 1
+// on failure.
 //
 //   build:  clang++ -std=c++17 -O2 -Wall -Wextra -Isrc -I/opt/homebrew/include src/core/Meld.cpp
 //           src/core/Game.cpp src/ui/Common.cpp src/ui/Screens.cpp tools/screens_snapshot.cpp
@@ -18,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,8 @@ const char* actionName(ui::ScreenAction a) {
     case ui::ScreenAction::ToTitle: return "ToTitle";
     case ui::ScreenAction::Quit: return "Quit";
     case ui::ScreenAction::SettingsChanged: return "SettingsChanged";
+    case ui::ScreenAction::StartAiMatch: return "StartAiMatch";
+    case ui::ScreenAction::ToggleAiMode: return "ToggleAiMode";
     }
     return "?";
 }
@@ -370,7 +374,8 @@ struct Harness {
         ImageFlipVertical(&im);
         // translucent draws leave partial alpha in the render target; the window's backbuffer ignores it
         ImageFormat(&im, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
-        const std::string path = "build/screens/" + name + ".png";
+        const char* dir = std::getenv("SCREENS_OUT");
+        const std::string path = std::string(dir && *dir ? dir : "build/screens") + "/" + name + ".png";
         ExportImage(im, path.c_str());
         UnloadImage(im);
         std::printf("  wrote %s\n", path.c_str());
@@ -386,14 +391,17 @@ std::string list(const std::vector<ui::ScreenAction>& v) {
 
 // Layout rectangles (mirrors of Screens.cpp's layout; the harness clicks through the real input path).
 constexpr Rectangle kTitlePlay{640, 470, 320, 68};
-constexpr Rectangle kTitleRules{660, 556, 280, 56};
-constexpr Rectangle kTitleSettings{660, 626, 280, 56};
+constexpr Rectangle kTitleWatchAi{660, 556, 280, 56};
+constexpr Rectangle kTitleRules{660, 626, 280, 56};
+constexpr Rectangle kTitleSettings{660, 696, 280, 56};
 constexpr Rectangle kSetName{720, 197, 340, 46};
 constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 282.f};
 constexpr Vector2 kSetLevelKurt{720.f + 2 * 158.f + 73.f, 344.f};
 constexpr Vector2 kSetMusicToggle{760.f, 712.f};
 constexpr Rectangle kSetBack{985, 776, 230, 58};
-constexpr Rectangle kPauseBtn[4] = {{650, 348, 300, 58}, {650, 420, 300, 58}, {650, 492, 300, 58}, {650, 564, 300, 58}};
+// Devam, Yapay Zeka Oynasın / Kontrolü Geri Al, Kurallar, Ayarlar, Ana Menü
+constexpr Rectangle kPauseBtn[5] = {{650, 328, 300, 58}, {650, 400, 300, 58}, {650, 472, 300, 58}, {650, 544, 300, 58},
+                                    {650, 616, 300, 58}};
 constexpr Rectangle kConfirmYes{575, 478, 220, 58};
 constexpr Rectangle kConfirmNo{805, 478, 220, 58};
 constexpr Rectangle kSheetNext{170 + 1260 - 252, 16 + 866 - 68, 216, 54};
@@ -595,19 +603,19 @@ int main() {
     check(H.screens.current() == ui::ScreenId::Paused, "ESC in game opens Paused");
     H.run(0.5);
     H.shot("paused" + sfx);
-    H.click(kPauseBtn[3]);
+    H.click(kPauseBtn[4]);
     H.run(0.4);
     H.shot("paused_confirm" + sfx);
     H.click(kConfirmNo);
     check(H.screens.current() == ui::ScreenId::Paused, "Vazgeç keeps Paused");
-    H.click(kPauseBtn[2]);
+    H.click(kPauseBtn[3]);
     check(H.screens.current() == ui::ScreenId::Settings, "Paused > Ayarlar");
     H.run(0.5);
     H.shot("settings_ingame" + sfx);
     H.click(kSetBack);
     check(H.screens.current() == ui::ScreenId::Paused, "Settings Geri returns to Paused");
     H.run(0.3);
-    H.click(kPauseBtn[1]);
+    H.click(kPauseBtn[2]);
     check(H.screens.current() == ui::ScreenId::Rules, "Paused > Kurallar");
     H.key(KEY_ESCAPE);
     check(H.screens.current() == ui::ScreenId::Paused, "Rules ESC returns to Paused");
@@ -728,11 +736,50 @@ int main() {
     H.screens.show(ui::ScreenId::MatchOver);
     H.run(3.0);
     H.shot("match_over_11" + sfx);
+
+    // ---------------------------------------------------------------- the Yapay Zeka mode
+    std::printf("Yapay Zeka mode\n");
+    H.screens.setAiMode(true);
+    H.screens.show(ui::ScreenId::HandSummary);
+    H.screens.setAutoAdvance(4.3f);
+    H.run(3.5);
+    H.shot("hand11_ai" + sfx);
+    H.screens.show(ui::ScreenId::MatchOver);
+    H.screens.setAutoAdvance(9.6f);
+    H.run(3.0);
+    H.shot("match_over_11_ai" + sfx);
     H.screens.show(ui::ScreenId::None);
+    H.run(0.3);
+    H.key(KEY_ESCAPE);
+    H.run(0.5);
+    H.shot("paused_ai" + sfx);
+    H.take();
+    H.click(kPauseBtn[1]);
+    acts = H.take();
+    check(has(acts, ui::ScreenAction::ToggleAiMode) && H.screens.current() == ui::ScreenId::None,
+          "Kontrolü Geri Al -> ToggleAiMode + None (" + list(acts) + ")");
+    H.screens.setAiMode(false);
+    H.key(KEY_ESCAPE);
+    H.run(0.4);
+    H.shot("paused_ai_off" + sfx);
+    H.take();
+    H.click(kPauseBtn[1]);
+    acts = H.take();
+    check(has(acts, ui::ScreenAction::ToggleAiMode) && H.screens.current() == ui::ScreenId::None,
+          "Yapay Zeka Oynasın -> ToggleAiMode + None (" + list(acts) + ")");
+    H.game = nullptr;
+    H.screens.show(ui::ScreenId::Title);
+    H.run(0.5);
+    H.take();
+    H.click(kTitleWatchAi);
+    acts = H.take();
+    check(has(acts, ui::ScreenAction::StartAiMatch) && H.screens.current() == ui::ScreenId::None,
+          "Yapay Zekayı İzle -> StartAiMatch + None (" + list(acts) + ")");
+    H.game = &sim3.game;
     H.run(0.3);
     H.screens.show(ui::ScreenId::Paused);
     H.run(0.4);
-    H.click(kPauseBtn[3]);
+    H.click(kPauseBtn[4]);
     H.run(0.3);
     H.take();
     H.click(kConfirmYes);

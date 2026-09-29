@@ -1465,8 +1465,11 @@ void Room::Impl::buildStreetAndWindows(Builders& B) {
         panes.push_back({pm.build(true), pc, &mCondense});
         if (oi == 1) {  // painted lettering on the big street window (mirrored: read from the street)
             MeshBuilder lm;
-            Vector3 lc{0, H * 0.18f, 0};
+            // in the fanlight above the transom: clear glass there (no mullion, above the café curtain)
             float lw = W * 0.9f, lh = lw * 0.25f;
+            const float fanLo = transom + bw * 0.4f, fanHi = o.y1 - bw;
+            if (lh > fanHi - fanLo) lh = fanHi - fanLo, lw = lh * 4.f;
+            Vector3 lc{0, (fanLo + fanHi) * 0.5f - ym, 0};
             Vector3 lr = Vector3Scale(r, lw * 0.5f), lu{0, lh * 0.5f, 0};
             quadUV(lm, Vector3Add(Vector3Subtract(lc, lr), Vector3Negate(lu)), Vector3Add(Vector3Add(lc, lr), Vector3Negate(lu)),
                    Vector3Add(Vector3Add(lc, lr), lu), Vector3Add(Vector3Subtract(lc, lr), lu), {1, 0}, {0, 0}, {0, 1}, {1, 1}, WHITE);

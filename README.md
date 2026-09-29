@@ -1,4 +1,4 @@
-# Kıraathane 101
+# SaklıBahçe
 
 Gece yarısı, dumanaltı bir mahalle kahvehanesi. Yeşil çuhalı okey masasına oturuyorsun; karşında Kel Mahmut
 sigarasını tüttürüyor, sağında Hacı Rıza tespih çekiyor, solunda Emekli Nuri oraletini yudumluyor. Çaycı askılı
@@ -7,9 +7,10 @@ Bazı geceler dışarıda yağmur yağar: damlalar cama vurup süzülür, olukta
 yolcular geçer. Kahvehanenin kedisi sobanın dibinde ya da boş bir sandalyede kıvrılıp uyur; arada bir uyanır,
 gerinir, yalanır, başka bir köşeye geçer, bazen de dönüp sana bakar.
 
-**Kıraathane 101**, üç bilgisayar rakibe karşı **101 Okey** oynadığın, birinci şahıs 3B bir masaüstü oyunudur
-(C++17 + raylib 6.0, macOS). Görüntülerin ve seslerin tamamı kodla üretilir: hiçbir resim, model ya da ses
-dosyası yoktur; yazı tipleri macOS'un kendi yazı tiplerinden alınır.
+**SaklıBahçe**, üç bilgisayar rakibe karşı **101 Okey** oynadığın, birinci şahıs 3B bir masaüstü oyunudur
+(C++17 + raylib 6.0, macOS). Görüntülerin tamamı kodla üretilir: hiçbir resim ya da model dosyası yoktur; yazı
+tipleri macOS'un kendi yazı tiplerinden alınır. Canın oynamak istemediğinde **Yapay Zeka** modunu açıp arkana
+yaslanabilirsin: taşlarını senin yerine yapay zeka oynar, sen çayını içip izlersin.
 
 ## Kurulum ve çalıştırma
 
@@ -17,8 +18,8 @@ Gerekenler: macOS, Xcode komut satırı araçları (Apple clang) ve Homebrew.
 
 ```sh
 brew install raylib      # raylib 6.0 (/opt/homebrew)
-make                     # ./kiraathane101 oluşur
-./kiraathane101
+make                     # ./saklibahce oluşur
+./saklibahce
 ```
 
 Diğer hedefler:
@@ -49,11 +50,32 @@ Masada, kendi sandalyende oturuyorsun; ıstakan önünde, rakiplerin karşında 
 | Seri Diz / Çift Diz | ıstakayı kendiliğinden dizer (**S** / **C**) |
 | Geri Ver | yandan aldığın ama kullanamadığın taşı geri verir (101 ceza) |
 | Uzaktaki bir per ya da atık yığını | üzerinde fareyle biraz bekle: büyütülmüş hâli açılır; taşı bir rakibin perinin üzerinde tutarsan taşının eklenmiş hâli görünür |
+| Yapay Zeka modunu açıp kapamak | **Y**, sağ alttaki **Yapay Zeka** düğmesi ya da Çay Molası menüsü (ESC) |
 | Duraklatmak | **ESC** ya da **Menü** düğmesi |
 
 İpuçları açıkken geçerli gruplar ıstakada parlar, alttaki durum satırında "Seri 87/101 · Çift 3/5" gibi bir
 sayaç görünür; işlek taşların köşesinde yeşil bir **+** vardır. İşlek taş ya da okey atmaya kalkarsan oyun seni
 uyarır ve onay ister.
+
+## Yapay Zeka modu
+
+Taşları bir süre yapay zekaya bırakmak istersen oyunun herhangi bir anında **Y** tuşuna bas ya da sağ alttaki
+**Yapay Zeka** düğmesine tıkla (Çay Molası menüsünde de "Yapay Zeka Oynasın" var). Giriş ekranındaki
+**Yapay Zekayı İzle** ise maçı baştan bu modda başlatır. Mod açıkken:
+
+- Senin koltuğunda en güçlü rakip seviyesi (**Kurt**) oynar, öbür oyuncular gibi düşünüp taşını sırayla oynar.
+  Durum satırında "Yapay zeka düşünüyor…" ya da "Yapay zeka oynuyor…" yazar, **Yapay Zeka** düğmesi yanar.
+- Istakan her taş gelip gidişinde kendiliğinden dizilir: yapay zeka hangi yola gidiyorsa (seri ya da çift)
+  taşlar o gruplara ayrılır, böylece ne planladığını görebilirsin. Hamleleri "Yapay zeka yandan Kırmızı 5 aldı" gibi
+  haber verilir.
+- Taşlara dokunamazsın ama etrafa bakmak (sağ tuş), menüler, kurallar ve ayarlar çalışır. El sonundaki hesap
+  kâğıdı ve maç sonu ekranı birkaç saniye sonra kendiliğinden geçer (düğmedeki sayaç gösterir); beklemeden
+  kendin de basabilirsin.
+- Aynı tuşa ya da düğmeye yeniden basınca (menüde "Kontrolü Geri Al") kontrol hemen sana döner; sıra sendeyse
+  turun kaldığı yerden devam edersin (taş çekmek, açmak ya da atmak).
+- Puanlar her zamanki gibi yazılır; hesap kâğıdında koltuğun "Yapay Zeka (Sen)" diye görünür.
+
+Mod her açılışta kapalı başlar; `--ai` ile oyunu doğrudan bu modda bir maçla açabilirsin.
 
 ## 101 Okey kuralları (özet)
 
@@ -93,7 +115,8 @@ Zorluk **Ayarlar**'dan seçilir: **Acemi**, **Usta** ya da **Kurt**. Botlar hile
 görülebilen taşları ve kendi ellerini bilirler.
 
 Ayarlar (el sayısı, zorluk, ses/müzik/ortam sesi, animasyon hızı, ipuçları, oyuncu adı)
-`~/Library/Application Support/Kiraathane101/ayarlar.txt` dosyasında saklanır. `--hands`, `--level` ve
+`~/Library/Application Support/SakliBahce/ayarlar.txt` dosyasında saklanır (oyunun eski adıyla kalmış
+`Kiraathane101/ayarlar.txt` varsa ilk açılışta o okunur). `--hands`, `--level` ve
 `--no-audio` yalnızca o oturum için geçerlidir; oturum sırasında Ayarlar'dan değiştirmediğin sürece kayıtlı
 ayarlarına dokunmaz.
 
@@ -105,6 +128,7 @@ ayarlarına dokunmaz.
 | `--start` | giriş ekranını atlayıp doğrudan oyuna başla |
 | `--hands N` | el sayısı (1–11) |
 | `--level L` | rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt |
+| `--ai` | Yapay Zeka modunda bir maçla başla (oyunda **Y** ile aç/kapa) |
 | `--autoplay` | senin yerine bir Usta bot oynar (izleme modu); maç bitince oyun kapanır |
 | `--speed X` | oyunu X kat hızlı oynat (ör. `--speed 4`) |
 | `--matches N` | (`--autoplay` ile) arka arkaya N maç; her ikincisi giriş ekranından geçer |
@@ -121,11 +145,28 @@ ayarlarına dokunmaz.
 Örnekler:
 
 ```sh
-./kiraathane101 --autoplay --speed 4 --hands 3            # botları izle
-./kiraathane101 --seed 42 --start --level 2               # Kurt'lara karşı, hep aynı dağıtım
-./kiraathane101 --seed 42 --autoplay --speed 3 --frames 2400 \
+./saklibahce --ai --level 2                           # yapay zekayı Kurt'lara karşı izle
+./saklibahce --autoplay --speed 4 --hands 3            # botları izle
+./saklibahce --seed 42 --start --level 2               # Kurt'lara karşı, hep aynı dağıtım
+./saklibahce --seed 42 --autoplay --speed 3 --frames 2400 \
     --snapshot el_ortasi.png --state game --view seat     # bir oyun anının fotoğrafı
 ```
+
+## Müzik
+
+Duvardaki eski radyo, `assets/music/` klasöründeki gerçek kayıtları karışık sırayla çalar. Radyo tınısı için hafif
+bir hoparlör süzgecinden geçerler; aralarda radyonun cızırtısı duyulur. Yeni bir şarkı başlayınca masada
+"Radyoda: …" notu görünür. Kayıtların hepsi Wikimedia Commons'tan alındı:
+
+* **Turku, Nomads of the Silk Road** — *Alleys of Istanbul* albümünden on türkü (Üsküdar'a Gider İken, Misket,
+  Maçka Yolları, Harman Dalı, Ağrı Dağından Uçtum ve diğerleri), lisans
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+* **Eski plaklar (kamu malı):** Ahmed Cevdet'in *Hicaz Taksim*'i (Polydor, yaklaşık 1928) ile Hafız Kemal Bey ve
+  Hayriye Hanım'ın *Hüseyni Saz Semaisi*.
+
+Kaynak bağlantıları ve yapılan değişiklikler (sessizlik kırpma, ses eşitleme, mono MP3) için:
+[`assets/music/KAYNAKLAR.md`](assets/music/KAYNAKLAR.md). Çalma listesini `assets/music/liste.tsv` belirler;
+klasör yoksa radyo eski sentezlenmiş ezgilerine döner. Radyo, Ayarlar'daki müzik düğmesiyle kapatılabilir.
 
 ## Proje yapısı
 
@@ -133,7 +174,7 @@ ayarlarına dokunmaz.
 |---|---|
 | `src/core/` | 101 kuralları (`Game`, `Meld`), en iyi per dağılımı (`Solver`) ve botlar (`Bot`); raylib kullanmaz |
 | `src/r3d/` | 3B dünya: çizici (`Gfx`), kahvehane (`Room`), insanlar (`Characters`), masa, taşlar ve oyuncu kamerası (`Table3D`, `PlayerCamera`) |
-| `src/ui/` | menüler ve skor kâğıdı (`Screens`), yordamsal ses ve müzik (`Audio`), muhabbet (`Banter`), yazı tipleri ve düğmeler (`Common`), taş yüzleri (`TileRender`) |
+| `src/ui/` | menüler ve skor kâğıdı (`Screens`), efektler, ortam sesi ve radyo (`Audio`), muhabbet (`Banter`), yazı tipleri ve düğmeler (`Common`), taş yüzleri (`TileRender`) |
 | `src/app/` | pencere, oyun döngüsü, maç akışı, bot temposu, komut satırı |
 | `tests/` | motor ve yapay zekâ testleri, bot-bot simülasyonu (`sim`) |
 | `tools/` | geliştirme sırasında kullanılan görüntü alma araçları (oyuna derlenmez) |

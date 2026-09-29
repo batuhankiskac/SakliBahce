@@ -1,4 +1,4 @@
-// Headless bot-vs-bot simulation for Kıraathane 101.
+// Headless bot-vs-bot simulation for SaklıBahçe.
 //
 //   sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] [--no-wait] [--match H]
 //       [--slow MS]

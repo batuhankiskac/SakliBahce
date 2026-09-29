@@ -1219,6 +1219,81 @@ int main() {
         h.shot("t21_soak_end", h.seat());
         h.bots[0].reset();
     }
+    // the Yapay Zeka mode (App lets a Kurt play seat 0 and passes humanInput=false): the human's tiles are out of
+    // reach, the "Yapay Zeka" button asks App to switch, and a whole match with the mode flipped at random moments
+    // keeps the table consistent with the game and never leaves it animating
+    {
+        h.bots[0] = std::make_unique<okey::Bot>(okey::BotLevel::Hard, 4343u);
+        h.game.startMatch(778u);
+        h.pump();
+        h.table.setAiMode(true);
+        h.settle();
+        int guard = 0;
+        while (h.game.handState() == okey::HandState::Playing && h.game.current() != 0 && guard++ < 40) {
+            h.botStep();
+            tt::settle(h.table, h.seat(), false);
+        }
+        if (h.game.current() == 0 && h.game.stage() == okey::TurnStage::NeedDraw) {
+            const size_t before = h.game.player(0).hand.size();
+            h.render(h.seat(), false);
+            const Vector2 p = h.project(tt::pileTopPoint(h.table));
+            for (int b : {0, 1, 3}) h.frame(1.f / 60.f, p, b, 0, false);
+            check(h.game.player(0).hand.size() == before, "Yapay Zeka mode: a click on the pile draws nothing");
+            int id = -1;
+            for (int t : tt::rackSlots(h.table))
+                if (t >= 0) id = t;
+            const Vector2 v = h.project(tt::tileFaceCenter(h.table, id));
+            for (int i = 0; i < 5; ++i) h.frame(1.f / 60.f, v, 0, 0, false);
+            check(tt::hoverTile(h.table) < 0 && !h.table.mouseBusy(), "Yapay Zeka mode: rack tiles do not react to the mouse");
+            // the AI draws: its istaka is re-arranged into groups
+            okey::applyBotAction(h.game, 0, h.bots[0]->next(h.game, 0));
+            h.pump();
+            tt::settle(h.table, h.seat(), false);
+            check(!h.table.isAnimating(), "Yapay Zeka mode: the re-arranged istaka settles");
+        }
+        tt::pressButton(h.table, 8);
+        check(h.table.consumeAiToggleRequest() && !h.table.consumeAiToggleRequest(), "the Yapay Zeka button asks App once");
+        h.shot("t22_ai_mode", h.seat());
+        okey::Rng rng(99u);
+        bool ai = true;
+        int actions = 0, flips = 0, hands = 0;
+        while (actions < 4000) {
+            if (rng.chance(0.1f)) {
+                ai = !ai;
+                h.table.setAiMode(ai);
+                ++flips;
+            }
+            if (h.game.handState() == okey::HandState::Playing) {
+                const int s = h.game.current();
+                okey::ActionResult r = okey::applyBotAction(h.game, s, h.bots[s]->next(h.game, s));
+                if (!r.ok) r = okey::applyBotAction(h.game, s, okey::fallbackAction(h.game, s));
+                check(r.ok, "ai soak: action rejected: " + r.error);
+                ++actions;
+                h.pump();
+                tt::settle(h.table, h.seat(), !ai);
+                if (h.table.isAnimating()) {
+                    check(false, "ai soak: the table is still animating after action " + std::to_string(actions));
+                    break;
+                }
+                const std::string v = tt::validate(h.table, true);
+                if (!v.empty()) {
+                    check(false, "ai soak after action " + std::to_string(actions) + ": " + v);
+                    break;
+                }
+            } else if (h.game.handState() == okey::HandState::HandOver) {
+                ++hands;
+                h.game.startNextHand();
+                h.pump();
+            } else {
+                ++hands;
+                break;
+            }
+        }
+        std::printf("ai soak: %d hands, %d actions, %d mode flips\n", hands, actions, flips);
+        check(h.game.handState() == okey::HandState::MatchOver, "ai soak played a whole match");
+        h.table.setAiMode(false);
+        h.bots[0].reset();
+    }
     // title camera: one cell every 6.5 s of the loop
     {
         PlayerCamera tc;

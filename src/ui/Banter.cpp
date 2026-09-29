@@ -1174,6 +1174,30 @@ void Banter::catMeow() {
     else say(pickBot(), S_Cat, 0.6f, false, 0, -1, 3.f);
 }
 
+BanterLine Banter::aiModeLine(bool on, uint32_t pick) {
+    struct L {
+        int seat;
+        const char* text;
+    };
+    static const L kOn[] = {
+        {2, "Abi sen çayını iç, taşlar kendi kendine oynuyor!"},
+        {1, "Maşallah, taşlar kendi kendine dizilir oldu evladım."},
+        {3, "Bizim zamanımızda okeyi makineye oynatmazdık!"},
+        {2, "Makineyle mi oynuyoruz şimdi? Olsun, onu da yeneriz!"},
+    };
+    static const L kOff[] = {
+        {1, "Hoş geldin evladım, taşlar seni bekliyordu."},
+        {3, "Hah, nihayet! Makineden bıkmıştım."},
+        {2, "Usta geri döndü abi, şimdi oyun başlıyor!"},
+    };
+    const L& l = on ? kOn[pick % (sizeof kOn / sizeof kOn[0])] : kOff[pick % (sizeof kOff / sizeof kOff[0])];
+    BanterLine out;
+    out.seat = l.seat;
+    out.text = l.text;
+    out.seconds = 3.4f;
+    return out;
+}
+
 bool Banter::pop(BanterLine& out) {
     for (auto it = queue_.begin(); it != queue_.end(); ++it) {
         if (it->line.delay <= 0.f) {

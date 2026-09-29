@@ -1,5 +1,5 @@
 #pragma once
-// Kıraathane 101 — the application: window, main loop, match flow, bot pacing and the wiring between the
+// SaklıBahçe — the application: window, main loop, match flow, bot pacing and the wiring between the
 // engine (okey::Game / okey::Bot), the 3D world (Room, Characters, Table3D, PlayerCamera), procedural audio
 // and the menu screens. Integration owner. Frame structure: DESIGN3D.md §2.
 #include <cstdint>
@@ -11,6 +11,11 @@ struct Options {
     bool hasSeed = false;       // --seed N: deterministic deals, bots, room and characters
     uint64_t seed = 0;
     bool autoplay = false;      // --autoplay: seat 0 is played by an Usta bot (implies --start)
+    bool ai = false;            // --ai: start a match in the Yapay Zeka mode (a Kurt plays seat 0; implies --start)
+    // --ai-chaos (developer robustness test, not in --help): a hidden, silent window starts a match in the Yapay Zeka
+    // mode and flips the mode at random moments (also through the pause menu); while it is off a stand-in plays the
+    // seat and presses the between-hands buttons. --matches N matches, then a report (stuck turns, rejections).
+    bool aiChaos = false;
     float speed = 1.f;          // --speed X: fast-forward the game (flights, bot pacing, the room keeps up)
     int matches = 1;            // --matches N (autoplay): N matches back to back, every other one via the title screen
     int hands = 0;              // --hands N (1..11), 0 = from the settings

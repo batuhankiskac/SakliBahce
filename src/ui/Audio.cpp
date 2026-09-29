@@ -1,6 +1,7 @@
-// Procedural audio for Kıraathane 101 (audio owner).
+// Audio for SaklıBahçe (audio owner).
 //
-// Nothing is loaded from disk. At init() every one-shot effect is synthesised (modal resonator banks
+// The old radio plays real recordings from assets/music (see RecordFx and Audio::Impl::updateRadio; credits in
+// assets/music/KAYNAKLAR.md); everything else is synthesised. At init() every one-shot effect is made (modal resonator banks
 // excited by short contact pulses, filtered noise, Karplus-Strong strings) into a few random
 // variations, each loaded as a raylib Sound with a small alias pool so that copies can overlap.
 // The coffeehouse ambience and the old radio are endless generators pulled by raylib's audio thread
@@ -17,7 +18,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -41,6 +44,9 @@ bool streamStats(double out[8]);
 // amb RMS first/last minute, amb max jump first/last minute, radio peak, radio RMS first/last
 // minute, radio max jump first/last minute, non-finite samples, seconds rendered.
 void soak(int sampleRate, unsigned long long seed, double seconds, double out[12]);
+// A recording (assets/music) through the radio's speaker chain at the level the game plays it (stereo,
+// what reaches the device at full master volume); false if the file can't be decoded.
+bool renderRecord(const char* path, int sampleRate, double seconds, std::vector<float>& stereoOut);
 } // namespace audio_dev
 
 namespace {
@@ -1905,6 +1911,9 @@ public:
     RadioGen(float sr, uint64_t seed);
     void render(float* out, int frames);
     std::atomic<float> target{0.f};
+    // true while real recordings play (RecordFx): the generator stops composing and only gives the set's
+    // faint reception hiss and crackle, under the songs and in the pauses between them
+    std::atomic<bool> recorded{false};
     void setImmediate(float g) {
         target.store(g);
         cur_ = g;
@@ -2271,9 +2280,10 @@ void RadioGen::render(float* out, int frames) {
     constexpr float kOut = .52f; // calibrated output level
     const float padCoef = smoothCoef(sr_, 1.2f);
     const uint32_t reflD = (uint32_t)(.017f * sr_);
+    const bool rec = recorded.load(std::memory_order_relaxed);
     for (int i = 0; i < frames; ++i) {
-        while (seqPos_ < seq_.size() && seq_[seqPos_].t <= now_) fire(seq_[seqPos_++]);
-        if (seqPos_ >= seq_.size() && now_ >= tuneEnd_) startTune();
+        while (!rec && seqPos_ < seq_.size() && seq_[seqPos_].t <= now_) fire(seq_[seqPos_++]);
+        if (!rec && seqPos_ >= seq_.size() && now_ >= tuneEnd_) startTune();
         cur_ += (tgt - cur_) * gainCoef_;
 
         float mel = 0.f;
@@ -2304,7 +2314,7 @@ void RadioGen::render(float* out, int frames) {
             };
             pad = (tab(padPh_) + tab(padPh2_)) * .5f * padAmp_ * (.8f + .2f * std::sin(kTauF * padLfo_));
         }
-        const float m = mel * .5f + dr * .32f + pad * .07f + pc * .3f;
+        const float m = rec ? 0.f : mel * .5f + dr * .32f + pad * .07f + pc * .3f;
 
         // wow & flutter: slowly modulated delay
         wow_[wowW_ & 4095] = m;
@@ -2393,6 +2403,51 @@ void radioCallback(void* data, unsigned int frames) {
     gRadioStats.record(frames, nanosSince(t0));
 }
 
+// Real recordings on the radio (raylib Music streams from assets/music): this processor puts them through the
+// set's small speaker — a wide band-pass (warmer and clearer than the synthesised tunes' 300..3500 Hz, the
+// songs must stay pleasant), a boxy resonance, gentle saturation and the wall reflection. It runs on raylib's
+// audio thread on the stream converted to the device format (float, stereo, device rate).
+struct RecordFx {
+    Biquad hp1, hp2, lp1, lp2, pk, lowShelf;
+    std::vector<float> refl;
+    uint32_t reflW = 0, reflD = 1;
+    std::atomic<bool> reset{true};
+    void init(float sr) {
+        hp1.highpass(sr, 95.f, .54f);
+        hp2.highpass(sr, 95.f, 1.31f);
+        lp1.lowpass(sr, 6800.f, .54f);
+        lp2.lowpass(sr, 6800.f, 1.31f);
+        pk.peaking(sr, 1500.f, .9f, 2.5f);
+        lowShelf.peaking(sr, 220.f, .8f, 1.5f);
+        refl.assign(4096, 0.f);
+        reflD = (uint32_t)(.017f * sr);
+    }
+    void process(float* x, unsigned frames) {
+        if (reset.exchange(false, std::memory_order_acq_rel)) {
+            for (Biquad* b : {&hp1, &hp2, &lp1, &lp2, &pk, &lowShelf}) b->z1 = b->z2 = 0.f;
+            std::fill(refl.begin(), refl.end(), 0.f);
+        }
+        for (unsigned i = 0; i < frames; ++i) {
+            const float in = .5f * (x[2 * i] + x[2 * i + 1]);
+            float y = lowShelf.process(pk.process(lp2.process(lp1.process(hp2.process(hp1.process(in))))));
+            y = softClip(y * 1.35f) / 1.35f;
+            refl[reflW & 4095] = y;
+            const float rf = refl[(reflW - reflD) & 4095];
+            ++reflW;
+            x[2 * i] = y * .86f + rf * .14f;
+            x[2 * i + 1] = y + rf * .09f;
+        }
+    }
+};
+std::atomic<RecordFx*> gRecFx{nullptr};
+// The records sit a little under the synthesised radio's level (-18 LUFS masters): a song in the room, not
+// over the table (SetMusicVolume at full master volume).
+constexpr float kRecordGain = .5f;
+
+void recordProcessor(void* data, unsigned int frames) {
+    if (RecordFx* fx = gRecFx.load(std::memory_order_acquire)) fx->process(static_cast<float*>(data), frames);
+}
+
 // Safety net on the final device mix: transparent below -1.9 dBFS (every single sound peaks at
 // -3 dBFS or lower), soft saturation above, so overlapping effects never hard-clip. Stateless.
 void mixLimiter(void* data, unsigned int frames) {
@@ -2454,6 +2509,25 @@ struct Audio::Impl {
     bool ambStreamOk = false, radioStreamOk = false;
     std::vector<Pending> pending;
     double now = 0.0, lastDue = -10.0, lastHandEndAt = -10.0;
+    // the radio's records (assets/music): shuffled, a few seconds of hiss between songs
+    struct Track {
+        std::string path, title, artist;
+    };
+    std::vector<Track> tracks;
+    std::vector<int> order;
+    size_t orderPos = 0;
+    int lastTrack = -1;
+    Music music{};
+    bool musicLoaded = false, musicPaused = false;
+    float songGap = 2.5f;  // seconds of hiss before the next song
+    std::unique_ptr<RecordFx> recFx;
+    std::string nowPlaying;
+    bool nowPlayingNew = false;
+
+    void loadPlaylist();
+    void startSong();
+    void stopSong();
+    void updateRadio(float dt);
 
     float masterGain() const { return master * master; } // perceptual taper
     void pushTargets() {
@@ -2463,6 +2537,109 @@ struct Audio::Impl {
     void playNow(Sfx s, float vol, float pitch, float pan);
     void enqueue(Sfx s, float vol, float pan, float gap, bool handEnd = false, float pitch = 1.f);
 };
+
+// assets/music next to the executable (or in the working directory): liste.tsv names the songs
+// (file <TAB> title <TAB> artist ...); without it every .mp3/.ogg in the folder plays under its file name.
+void Audio::Impl::loadPlaylist() {
+    tracks.clear();
+    std::string dir;
+    for (const std::string& d : {std::string(GetApplicationDirectory()) + "assets/music", std::string("assets/music"),
+                                 std::string(GetApplicationDirectory()) + "../../assets/music"})
+        if (DirectoryExists(d.c_str())) {
+            dir = d;
+            break;
+        }
+    if (dir.empty()) return;
+    std::ifstream list(dir + "/liste.tsv");
+    std::string line;
+    while (std::getline(list, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::vector<std::string> f;
+        size_t a = 0;
+        for (size_t b; (b = line.find('\t', a)) != std::string::npos; a = b + 1) f.push_back(line.substr(a, b - a));
+        f.push_back(line.substr(a));
+        const std::string path = dir + "/" + f[0];
+        if (!FileExists(path.c_str())) continue;
+        tracks.push_back({path, f.size() > 1 ? f[1] : f[0], f.size() > 2 ? f[2] : std::string()});
+    }
+    if (tracks.empty()) {
+        FilePathList files = LoadDirectoryFiles(dir.c_str());
+        for (unsigned i = 0; i < files.count; ++i)
+            if (IsFileExtension(files.paths[i], ".mp3;.ogg")) tracks.push_back({files.paths[i], GetFileNameWithoutExt(files.paths[i]), {}});
+        UnloadDirectoryFiles(files);
+    }
+    songGap = rng.uniform(1.5f, 3.5f);
+}
+
+void Audio::Impl::startSong() {
+    if (tracks.empty()) return;
+    if (orderPos >= order.size()) {  // a fresh shuffle, never starting with the song just heard
+        order.resize(tracks.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = (int)i;
+        for (size_t i = order.size(); i > 1; --i) std::swap(order[i - 1], order[(size_t)rng.range((int)i)]);
+        if (order.size() > 1 && order[0] == lastTrack) std::swap(order[0], order[1]);
+        orderPos = 0;
+    }
+    const int t = order[orderPos++];
+    // longer buffers than raylib's default: a slow frame must not starve the song
+    SetAudioStreamBufferSizeDefault(8192);
+    music = LoadMusicStream(tracks[(size_t)t].path.c_str());
+    SetAudioStreamBufferSizeDefault(0);
+    if (!IsMusicValid(music)) {
+        songGap = 1.f;
+        return;
+    }
+    music.looping = false;
+    recFx->reset.store(true, std::memory_order_release);
+    AttachAudioStreamProcessor(music.stream, recordProcessor);
+    SetMusicPan(music, 0.15f);  // the set hangs a little to the right of the room's middle
+    SetMusicVolume(music, 0.f);
+    PlayMusicStream(music);
+    musicLoaded = true;
+    musicPaused = false;
+    lastTrack = t;
+    const Track& tr = tracks[(size_t)t];
+    nowPlaying = tr.artist.empty() ? tr.title : tr.title + " — " + tr.artist;
+    nowPlayingNew = true;
+}
+
+void Audio::Impl::stopSong() {
+    if (!musicLoaded) return;
+    StopMusicStream(music);
+    DetachAudioStreamProcessor(music.stream, recordProcessor);
+    UnloadMusicStream(music);
+    music = Music{};
+    musicLoaded = false;
+}
+
+void Audio::Impl::updateRadio(float dt) {
+    if (tracks.empty()) return;
+    const float vol = musicOn ? masterGain() * kRecordGain : 0.f;
+    if (!musicLoaded) {
+        if (!musicOn) return;
+        songGap -= dt;
+        if (songGap <= 0.f) startSong();
+        return;
+    }
+    if (!musicOn) {  // switched off: the song waits where it was
+        if (!musicPaused) PauseMusicStream(music);
+        musicPaused = true;
+        return;
+    }
+    if (musicPaused) {
+        ResumeMusicStream(music);
+        musicPaused = false;
+    }
+    UpdateMusicStream(music);
+    const float played = GetMusicTimePlayed(music), len = GetMusicTimeLength(music);
+    // a short fade in, and out over the last second
+    const float fade = std::min(clampf(played / 0.8f, 0.f, 1.f), clampf((len - played) / 1.0f, 0.f, 1.f));
+    SetMusicVolume(music, vol * fade);
+    if (!IsMusicStreamPlaying(music) || played >= len - 0.05f) {
+        stopSong();
+        songGap = rng.uniform(2.5f, 6.f);
+    }
+}
 
 void Audio::Impl::playNow(Sfx s, float vol, float pitch, float pan) {
     if (!ready || !sfxOn) return;
@@ -2587,6 +2764,14 @@ bool Audio::init() {
         PlayAudioStream(m.radioStream);
     }
     AttachAudioMixedProcessor(mixLimiter);
+    m.loadPlaylist();
+    if (!m.tracks.empty()) {
+        m.recFx = std::make_unique<RecordFx>();
+        m.recFx->init(m.sr);
+        gRecFx.store(m.recFx.get(), std::memory_order_release);
+        m.radio->recorded.store(true, std::memory_order_relaxed);
+        TraceLog(LOG_INFO, "AUDIO: radio: %d recordings", (int)m.tracks.size());
+    }
     m.now = 0.0;
     m.lastDue = m.lastHandEndAt = -10.0;
     m.ready = true;
@@ -2599,6 +2784,7 @@ void Audio::shutdown() {
     // With the device still open, unloading takes raylib's mixer lock, so no callback can be running
     // afterwards. If the device was already closed, the audio thread is gone and nothing can run.
     if (IsAudioDeviceReady()) {
+        m.stopSong();
         DetachAudioMixedProcessor(mixLimiter);
         if (m.ambStreamOk) {
             StopAudioStream(m.ambStream);
@@ -2617,11 +2803,17 @@ void Audio::shutdown() {
     }
     gAmb.store(nullptr);
     gRadio.store(nullptr);
+    gRecFx.store(nullptr);
     gBank.store(nullptr);
     gRate.store(0);
     for (auto& vars : m.sounds) vars.clear();
     m.amb.reset();
     m.radio.reset();
+    m.recFx.reset();
+    m.tracks.clear();
+    m.order.clear();
+    m.orderPos = 0;
+    m.musicLoaded = false;
     m.bank.reset();
     m.pending.clear();
     m.ambStreamOk = m.radioStreamOk = false;
@@ -2644,6 +2836,15 @@ void Audio::update(float dt) {
     // a device hiccup can stop a stream; keep the beds running
     if (m.ambStreamOk && !IsAudioStreamPlaying(m.ambStream)) PlayAudioStream(m.ambStream);
     if (m.radioStreamOk && !IsAudioStreamPlaying(m.radioStream)) PlayAudioStream(m.radioStream);
+    m.updateRadio(clampf(dt, 0.f, .25f));
+}
+
+bool Audio::consumeNowPlaying(std::string& text) {
+    Impl& m = *impl_;
+    if (!m.nowPlayingNew) return false;
+    m.nowPlayingNew = false;
+    text = m.nowPlaying;
+    return true;
 }
 
 void Audio::play(Sfx s, float volume, float pitch) {
@@ -2787,6 +2988,21 @@ void renderRadio(int sampleRate, unsigned long long seed, double seconds, bool r
     RadioGen g(sr, seed);
     g.setImmediate(1.f);
     renderGen(g, seconds, sr, randomChunks, seed, stereoOut);
+}
+
+bool renderRecord(const char* path, int sampleRate, double seconds, std::vector<float>& stereoOut) {
+    Wave w = LoadWave(path);
+    if (!IsWaveValid(w)) return false;
+    WaveFormat(&w, sampleRate, 32, 2);
+    const size_t n = std::min((size_t)w.frameCount, (size_t)(seconds * sampleRate));
+    stereoOut.assign((const float*)w.data, (const float*)w.data + 2 * n);
+    UnloadWave(w);
+    RecordFx fx;
+    fx.init((float)sampleRate);
+    fx.process(stereoOut.data(), (unsigned)n);
+    // SetMusicVolume(kRecordGain) and raylib's pan law near the middle
+    for (float& v : stereoOut) v *= kRecordGain * kCenterPanGain;
+    return true;
 }
 
 void soak(int sampleRate, unsigned long long seed, double seconds, double out[12]) {

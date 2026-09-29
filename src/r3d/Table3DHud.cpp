@@ -114,11 +114,11 @@ std::string nameGenitive(const std::string& name) {
 }
 } // namespace t3d
 
-std::array<Rectangle, 5> TableState::buttonRects() const {
-    std::array<Rectangle, 5> r{};
+std::array<Rectangle, NUM_BUTTONS> TableState::buttonRects() const {
+    std::array<Rectangle, NUM_BUTTONS> r{};
     const float x = ui::VW - EDGE - BTN_W;
-    const float y0 = ui::VH - EDGE - 5.f * BTN_H - 4.f * BTN_GAP;
-    for (int i = 0; i < 5; ++i) r[i] = {x, y0 + (float)i * (BTN_H + BTN_GAP), BTN_W, BTN_H};
+    const float y0 = ui::VH - EDGE - (float)NUM_BUTTONS * BTN_H - (float)(NUM_BUTTONS - 1) * BTN_GAP;
+    for (int i = 0; i < NUM_BUTTONS; ++i) r[i] = {x, y0 + (float)i * (BTN_H + BTN_GAP), BTN_W, BTN_H};
     return r;
 }
 
@@ -289,6 +289,7 @@ std::string TableState::statusText(Color& c) const {
         return fitText(FontId::UiBold, game->player(cur).name, 260.f, sz, 17.f) + " düşünüyor…";
     }
     c = pal::Highlight;
+    if (aiMode) return game->stage() == okey::TurnStage::NeedDraw ? "Yapay zeka düşünüyor…" : "Yapay zeka oynuyor…";
     if (game->stage() == okey::TurnStage::NeedDraw) {
         if (game->canTakeFromLeft(human)) return "Sıra sende — ortadan çek ya da soldakini al";
         return "Sıra sende — ortadan taş çek";
@@ -320,13 +321,13 @@ void TableState::drawStatus() {
             parts.push_back({"Çift " + std::to_string(pc) + "/" + std::to_string(rc.minPairsToOpen),
                              pc >= rc.minPairsToOpen ? rgba(140, 200, 255) : dim});
         } else if (me.openedWithPairs) {
-            parts.push_back({"Çiftten açtın", rgba(140, 200, 255)});
+            parts.push_back({aiMode ? "Çiftten açtı" : "Çiftten açtın", rgba(140, 200, 255)});
             if (pc > 0) {
                 parts.push_back({"  ·  ", fadeC(dim, 0.45f)});
                 parts.push_back({"Yeni çift: " + std::to_string(pc), rgba(140, 200, 255)});
             }
         } else {
-            parts.push_back({"Açtın: " + std::to_string(me.openValue), rgba(140, 240, 140)});
+            parts.push_back({(aiMode ? "Açtı: " : "Açtın: ") + std::to_string(me.openValue), rgba(140, 240, 140)});
             if (!seriesGroups.empty()) {
                 parts.push_back({"  ·  ", fadeC(dim, 0.45f)});
                 parts.push_back({"Yeni per: " + std::to_string(seriesGroups.size()) + " (" + std::to_string(seriesVal) + ")",
@@ -340,10 +341,21 @@ void TableState::drawStatus() {
     float ctW = 0.f;
     for (auto& p : parts) ctW += ui::measureText(FontId::UiBold, p.first, 16.f).x;
     const float sep = (!st.empty() && !parts.empty()) ? 25.f : 0.f;
-    const float w = stW + ctW + sep + 30.f;
+    // the Yapay Zeka mode wears a small lit tag at the front of the line
+    const char* tag = "YAPAY ZEKA";
+    const float tagFs = 12.f, tagSp = 1.f;
+    const float tagW = aiMode ? ui::measureText(FontId::UiBold, tag, tagFs, tagSp).x + 16.f : 0.f;
+    const float w = stW + ctW + sep + 30.f + (aiMode ? tagW + 8.f : 0.f);
     const Rectangle rc{std::round(ui::VW * 0.5f - w * 0.5f), STATUS_Y - 13.f, std::round(w), 26.f};
     pill(rc, rgba(14, 9, 5, 200), fadeC(sc, myTurn() ? 0.5f : 0.22f));
     float x = rc.x + 15.f;
+    if (aiMode) {
+        const Rectangle tr{std::round(x - 8.f), STATUS_Y - 8.f, std::round(tagW), 16.f};
+        ui::tilegfx::roundedRect(tr, 8.f, rgba(38, 104, 58, 235));
+        ui::tilegfx::roundedLines(tr, 8.f, 1.f, rgba(150, 236, 150, 200));
+        ui::drawTextCentered(FontId::UiBold, tag, {tr.x + tr.width * 0.5f, STATUS_Y}, tagFs, rgba(214, 255, 214), tagSp);
+        x = tr.x + tr.width + 10.f;
+    }
     if (!st.empty()) {
         if (myTurn()) {
             DrawCircleV({x + 4.f, STATUS_Y}, 3.8f, fadeC(sc, 0.6f + 0.4f * std::sin(now * 5.f)));
@@ -368,7 +380,7 @@ void TableState::drawStatus() {
 
 // ---------------------------------------------------------------- buttons
 void TableState::drawButtons() {
-    const std::array<Rectangle, 5> rc = buttonRects();
+    const std::array<Rectangle, NUM_BUTTONS> rc = buttonRects();
     const Vector2 m = confirm.active ? Vector2{-10000, -10000} : in.mouse;
     const okey::PlayerInfo& me = game->player(human);
     const bool canPlay = canAct() && game->stage() == okey::TurnStage::Play;
@@ -385,7 +397,27 @@ void TableState::drawButtons() {
     const bool arrOk = rackInteractive() && !me.hand.empty();
     if (ui::drawButton(rc[2], "Seri Diz", m, arrOk, ui::ButtonStyle::Wood, 20)) queue(Btn::Series);
     if (ui::drawButton(rc[3], "Çift Diz", m, arrOk, ui::ButtonStyle::Wood, 20)) queue(Btn::Pairs);
-    if (ui::drawButton(rc[4], "Menü", m, true, ui::ButtonStyle::Wood, 20)) queue(Btn::Menu);
+    // "Yapay Zeka": lit (a warm halo, a gilt rim and a green lamp) while the AI plays this seat
+    {
+        const Rectangle r = rc[4];
+        if (aiMode) {
+            const float a = 0.45f + 0.25f * std::sin(now * 2.6f);
+            ui::tilegfx::drawSoftBox({r.x + r.width / 2, r.y + r.height / 2}, r.width + 16, r.height + 22, 0.f,
+                                     fadeC(pal::Highlight, a));
+        }
+        if (ui::drawButton(r, "Yapay Zeka", m, true, ui::ButtonStyle::Wood, 19)) queue(Btn::AiToggle);
+        const Vector2 lamp{r.x + r.width - 10.f, r.y + 9.f};
+        if (aiMode) {
+            ui::tilegfx::roundedLines({r.x + 2, r.y + 2, r.width - 4, r.height - 6}, 10.f, 2.f, fadeC(pal::Highlight, 0.9f));
+            DrawCircleV(lamp, 7.f, rgba(120, 255, 120, 60));
+            DrawCircleV(lamp, 4.f, rgba(120, 236, 110));
+            DrawCircleV({lamp.x - 1.f, lamp.y - 1.f}, 1.6f, rgba(236, 255, 230));
+        } else {
+            DrawCircleV(lamp, 4.f, rgba(40, 30, 22));
+            DrawCircleLinesV(lamp, 4.f, fadeC(pal::Brass, 0.35f));
+        }
+    }
+    if (ui::drawButton(rc[5], "Menü", m, true, ui::ButtonStyle::Wood, 20)) queue(Btn::Menu);
 }
 
 // ---------------------------------------------------------------- toasts
@@ -537,7 +569,7 @@ void TableState::drawPeek(const Renderer& r) {
         highlight = (int)ids.size() - 1;
         title = (peekIdx == human ? std::string("Senin attıkların") : nameGenitive(game->player(peekIdx).name) + " attıkları");
         if ((int)d.size() > n) title += " (son " + std::to_string(n) + ")";
-        if (peekIdx == leftSeat() && game->canTakeFromLeft(human)) title += " · üsttekini alabilirsin";
+        if (peekIdx == leftSeat() && game->canTakeFromLeft(human) && !aiMode) title += " · üsttekini alabilirsin";
     }
     if (ids.empty()) return;
     const float a = ui::easeOutCubic(ui::clamp01((peekT - dwell) / 0.18f));

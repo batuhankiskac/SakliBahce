@@ -619,6 +619,8 @@ std::vector<RuleBlock> buildRules() {
     B("İşlek taş ya da okey atarken oyun seni uyarır ve onay ister.");
     B("Okey taşlarının köşesinde küçük bir yıldız bulunur.");
     B("İpuçları açıkken *işlek* taşların köşesinde yeşil bir *+* görünür: bunları atarsan ^101 ceza^ yersin.");
+    B("*Yapay Zeka:* *Y* tuşu ya da *Yapay Zeka* düğmesi taşlarını yapay zekaya bırakır; o senin yerine "
+      "oynar, sen izlersin. Yeniden basınca kontrol, turun kaldığı yerden sana döner.");
     B("*ESC* ya da *Menü* düğmesi oyunu duraklatır; menülerde bir önceki ekrana döner.");
     return v;
 }
@@ -734,9 +736,10 @@ void beginClip(Rectangle r) {
 namespace L {
 // title
 constexpr Rectangle TitlePlay{640, 470, 320, 68};
-constexpr Rectangle TitleRules{660, 556, 280, 56};
-constexpr Rectangle TitleSettings{660, 626, 280, 56};
-constexpr Rectangle TitleQuit{660, 696, 280, 56};
+constexpr Rectangle TitleWatchAi{660, 556, 280, 56};
+constexpr Rectangle TitleRules{660, 626, 280, 56};
+constexpr Rectangle TitleSettings{660, 696, 280, 56};
+constexpr Rectangle TitleQuit{660, 766, 280, 56};
 // settings
 constexpr Rectangle SetPanel{330, 40, 940, 820};
 constexpr float SetLabelX = 385.f;
@@ -753,8 +756,9 @@ constexpr Rectangle RulesTrack{1242, 156, 12, 612}; // scrollbar track
 constexpr float RulesTabsY = 106.f;                 // section tabs under the title
 constexpr Rectangle RulesBack{690, 806, 220, 58};
 // pause
-constexpr Rectangle PausePanel{590, 124, 420, 596};
-constexpr Rectangle PauseBtn[4] = {{650, 348, 300, 58}, {650, 420, 300, 58}, {650, 492, 300, 58}, {650, 564, 300, 58}};
+constexpr Rectangle PausePanel{590, 104, 420, 652};
+constexpr Rectangle PauseBtn[5] = {{650, 328, 300, 58}, {650, 400, 300, 58}, {650, 472, 300, 58}, {650, 544, 300, 58},
+                                   {650, 616, 300, 58}};
 constexpr Rectangle ConfirmPanel{530, 318, 540, 250};
 constexpr Rectangle ConfirmYes{575, 478, 220, 58};
 constexpr Rectangle ConfirmNo{805, 478, 220, 58};
@@ -768,9 +772,9 @@ constexpr Rectangle MatchMenu{820, 736, 250, 64};
 
 enum ClickId {
     C_None = 0,
-    C_Play, C_TitleRules, C_TitleSettings, C_Quit,
+    C_Play, C_WatchAi, C_TitleRules, C_TitleSettings, C_Quit,
     C_Back, C_Defaults, C_Hands, C_Level, C_Anim, C_Sfx, C_Ambient, C_Music, C_Hints, C_Name,
-    C_Resume, C_PauseRules, C_PauseSettings, C_PauseMenu, C_ConfirmYes, C_ConfirmNo,
+    C_Resume, C_PauseAi, C_PauseRules, C_PauseSettings, C_PauseMenu, C_ConfirmYes, C_ConfirmNo,
     C_Next, C_NewGame, C_MatchMenu, C_RulesTab,
 };
 
@@ -829,6 +833,10 @@ struct Screens::Impl {
     bool confirmQuit = false;
     float confirmAt = 0.f;
 
+    // Yapay Zeka mode (an AI plays the human's seat) and the self-pressing between-hands buttons
+    bool aiMode = false;
+    float autoLeft = -1.f;
+
     // match over
     std::vector<Confetti> confetti;
     uint32_t rngState = 0x2545F491u;
@@ -882,6 +890,7 @@ struct Screens::Impl {
         prev = cur;
         cur = id;
         shownAt[(int)id] = time;
+        autoLeft = -1.f;
         clicks.clear();
         pressedId = -1;
         switch (id) {
@@ -935,11 +944,17 @@ struct Screens::Impl {
             if (g.player(s).totalScore == best) v.push_back(s);
         return v;
     }
+    // A seat's name on the sheet and the final standings: the human's seat says who played it in the Yapay Zeka
+    // mode ("Yapay Zeka (Sen)").
+    std::string seatName(const okey::Game& g, int s) const {
+        const okey::PlayerInfo& p = g.player(s);
+        return (aiMode && p.human) ? "Yapay Zeka (" + p.name + ")" : p.name;
+    }
     // "A", "A ve B", "A, B ve C" (the human's seat left out when `skipHuman`)
-    static std::string joinNames(const okey::Game& g, const std::vector<int>& seats, bool skipHuman) {
+    std::string joinNames(const okey::Game& g, const std::vector<int>& seats, bool skipHuman) const {
         std::vector<std::string> names;
         for (int s : seats)
-            if (!(skipHuman && g.player(s).human)) names.push_back(g.player(s).name);
+            if (!(skipHuman && g.player(s).human)) names.push_back(seatName(g, s));
         std::string out;
         for (size_t i = 0; i < names.size(); ++i)
             out += (i == 0 ? "" : i + 1 == names.size() ? " ve " : ", ") + names[i];
@@ -949,6 +964,13 @@ struct Screens::Impl {
         for (int s : seats)
             if (g.player(s).human) return true;
         return false;
+    }
+
+    // A button label with the self-press countdown ("Sonraki El (4)"), shrunk to fit the button.
+    std::string autoLabel(const std::string& base, FontId f, float maxW, float& size) const {
+        const std::string label = autoLeft >= 0.f ? base + " (" + std::to_string((int)std::ceil(autoLeft)) + ")" : base;
+        while (size > 18.f && measureText(f, label, size, 0.5f).x > maxW) size -= 1.f;
+        return label;
     }
 
     static bool isLastHand(const okey::Game* g) {
@@ -1008,6 +1030,12 @@ struct Screens::Impl {
         case C_Play:
             show(ScreenId::None);
             return ScreenAction::StartMatch;
+        case C_WatchAi:
+            show(ScreenId::None);
+            return ScreenAction::StartAiMatch;
+        case C_PauseAi:
+            show(ScreenId::None);
+            return ScreenAction::ToggleAiMode;
         case C_TitleRules:
         case C_PauseRules:
             show(ScreenId::Rules);
@@ -1419,14 +1447,13 @@ struct Screens::Impl {
                                  alphaMul(pal::Highlight, 0.10f + 0.08f * gl));
         }
         if (drawButton(L::TitlePlay, "Oyna", m, true, ButtonStyle::Wood, 34.f)) click(C_Play);
+        if (drawButton(L::TitleWatchAi, "Yapay Zekayı İzle", m, true, ButtonStyle::Wood, 25.f)) click(C_WatchAi);
         if (drawButton(L::TitleRules, "Kurallar", m, true, ButtonStyle::Wood, 27.f)) click(C_TitleRules);
         if (drawButton(L::TitleSettings, "Ayarlar", m, true, ButtonStyle::Wood, 27.f)) click(C_TitleSettings);
         if (drawButton(L::TitleQuit, "Çıkış", m, true, ButtonStyle::Wood, 27.f)) click(C_Quit);
 
-        drawTextCentered(FontId::Ui,
-                         "Kıraathane 101  \xC2\xB7  sürüm 1.0  \xC2\xB7  tüm görüntü ve sesler kodla üretildi  "
-                         "\xC2\xB7  raylib",
-                         {800.f, 872.f}, 17.f, alphaMul(pal::TextLight, 0.55f));
+        drawTextCentered(FontId::Ui, "SaklıBahçe  \xC2\xB7  sürüm 1.1  \xC2\xB7  radyoda Turku (CC BY 4.0) ve 1920'lerin plakları", {800.f, 872.f}, 17.f,
+                         alphaMul(pal::TextLight, 0.55f));
     }
 
     void drawSign(float age) {
@@ -1470,13 +1497,13 @@ struct Screens::Impl {
             DrawRing({ex, 10.f}, 6.f, 7.5f, 200, 320, 8, pal::Brass);
         }
 
-        // --- "KIRAATHANE", gilt letters
+        // --- "SAKLI BAHÇE", gilt letters
         {
-            const std::string word = "KIRAATHANE";
+            const std::string word = "SAKLI BAHÇE";
             const float sp = 7.f;
             float size = 108.f;
             const float fitW = measureText(FontId::Sign, word, size, sp).x;
-            if (fitW > 740.f) size *= 740.f / fitW;
+            if (fitW > 720.f) size *= 720.f / fitW;
             const Vector2 ms = measureText(FontId::Sign, word, size, sp);
             const Vector2 pos{-ms.x * 0.5f, 34.f};
             drawText(FontId::Sign, word, {pos.x + 4.f, pos.y + 6.f}, size, rgba(0, 0, 0, 0.55f), sp);
@@ -1493,7 +1520,7 @@ struct Screens::Impl {
         // --- "101" neon
         drawNeonText("101", {0.f, 198.f}, 100.f, 12.f, neonFlicker(time));
 
-        // --- enamel plaque "Okey Salonu" hanging below
+        // --- enamel plaque "Kıraathane" hanging below
         const float py = H + 26.f;
         for (float ex : {-150.f, 150.f}) {
             drawChain({ex, H - 4.f}, {ex, py + 6.f});
@@ -1507,7 +1534,7 @@ struct Screens::Impl {
         // enamel chips at the corners
         DrawCircleV({plaque.x + 14.f, plaque.y + plaque.height - 12.f}, 4.f, rgba(60, 40, 30, 0.55f));
         DrawCircleV({plaque.x + plaque.width - 20.f, plaque.y + 12.f}, 3.f, rgba(60, 40, 30, 0.45f));
-        drawTextCentered(FontId::Sign, "Okey Salonu", {0.f, py + 32.f}, 36.f, kSignRed, 1.f);
+        drawTextCentered(FontId::Sign, "Kıraathane", {0.f, py + 32.f}, 36.f, kSignRed, 1.f);
         drawTextCentered(FontId::UiBold, "KURULUŞ 1974  \xC2\xB7  TAVLA  \xC2\xB7  OKEY  \xC2\xB7  ÇAY",
                          {0.f, py + 64.f}, 15.f, Color{80, 60, 48, 255}, 2.f);
         rlPopMatrix();
@@ -1767,13 +1794,14 @@ struct Screens::Impl {
             drawTextCentered(FontId::Ui, s, {800.f, P.y + 191.f}, 20.f, alphaMul(pal::TextLight, 0.7f));
         }
         const Vector2 bm = confirmQuit ? kNoMouse : m;
-        const char* labels[4] = {"Devam", "Kurallar", "Ayarlar", "Ana Menü"};
-        const int ids[4] = {C_Resume, C_PauseRules, C_PauseSettings, C_PauseMenu};
-        for (int i = 0; i < 4; ++i) {
+        const char* labels[5] = {"Devam", aiMode ? "Kontrolü Geri Al" : "Yapay Zeka Oynasın", "Kurallar", "Ayarlar",
+                                 "Ana Menü"};
+        const int ids[5] = {C_Resume, C_PauseAi, C_PauseRules, C_PauseSettings, C_PauseMenu};
+        for (int i = 0; i < 5; ++i) {
             if (drawButton(L::PauseBtn[i], labels[i], bm, true, ButtonStyle::Wood, i == 0 ? 30.f : 26.f)) click(ids[i]);
         }
-        drawTextCentered(FontId::Ui, "ESC ile oyuna dön", {800.f, P.y + P.height - 40.f}, 17.f,
-                         alphaMul(pal::TextLight, 0.5f));
+        drawTextCentered(FontId::Ui, "ESC ile oyuna dön  \xC2\xB7  Y ile yapay zeka aç / kapa",
+                         {800.f, P.y + P.height - 40.f}, 17.f, alphaMul(pal::TextLight, 0.5f));
 
         if (confirmQuit) {
             const float ca = easeOutBack(clamp01((time - confirmAt) / 0.25f));
@@ -1856,8 +1884,9 @@ struct Screens::Impl {
             const float a = ink(0.3f);
             std::string line;
             if (r.reason == okey::HandEndReason::PlayerFinished && r.winner >= 0) {
-                line = g->player(r.winner).human ? std::string("Eli sen bitirdin!")
-                                                 : g->player(r.winner).name + " eli bitirdi!";
+                line = !g->player(r.winner).human ? g->player(r.winner).name + " eli bitirdi!"
+                       : aiMode                    ? std::string("Eli yapay zeka bitirdi!")
+                                                   : std::string("Eli sen bitirdin!");
             } else {
                 line = "Taşlar bitti, eli bitiren olmadı.";
             }
@@ -1896,10 +1925,10 @@ struct Screens::Impl {
         {
             const float a = ink(0.5f);
             for (int s = 0; s < okey::NUM_PLAYERS; ++s) {
-                const okey::PlayerInfo& p = g->player(s);
-                cellText(p.name, s, headY, 36.f, alphaMul(s == human ? kBluePen : kInk, a));
+                const std::string name = seatName(*g, s);
+                cellText(name, s, headY, 36.f, alphaMul(s == human ? kBluePen : kInk, a));
                 if (s == r.winner) {
-                    const float w = handMeasure(p.name, fitSize(p.name, 36.f)).x;
+                    const float w = handMeasure(name, fitSize(name, 36.f)).x;
                     drawStar({colC(s) - w * 0.5f - 16.f, headY - 1.f}, 10.f, alphaMul(kRedPencil, a));
                 }
             }
@@ -2009,14 +2038,19 @@ struct Screens::Impl {
             const bool you = humanAmong(*g, leaders);
             std::string note;
             if (leaders.size() == 1) {
-                const std::string& who = g->player(leaders[0]).name;
-                note = last ? (you ? std::string("Maçı sen kazandın!") : "Maçı " + who + " kazandı")
-                            : (you ? std::string("Önde sensin!") : who + " önde");
+                const std::string who = seatName(*g, leaders[0]);
+                if (you && aiMode) note = last ? "Maçı yapay zeka kazandı!" : "Yapay zeka önde!";
+                else note = last ? (you ? std::string("Maçı sen kazandın!") : "Maçı " + who + " kazandı")
+                                 : (you ? std::string("Önde sensin!") : who + " önde");
             } else if (leaders.size() == (size_t)okey::NUM_PLAYERS) {
                 note = last ? "Maç berabere bitti, birincilik herkesin" : "Herkes başa baş";
             } else if (you) {
                 const std::string others = joinNames(*g, leaders, true);
-                note = last ? "Berabere! Birinciliği " + others + " ile paylaştın" : others + " ile başa baş öndesin";
+                if (aiMode)
+                    note = last ? "Berabere! Yapay zeka birinciliği " + others + " ile paylaştı"
+                                : "Yapay zeka " + others + " ile başa baş önde";
+                else
+                    note = last ? "Berabere! Birinciliği " + others + " ile paylaştın" : others + " ile başa baş öndesin";
             } else {
                 const std::string all = joinNames(*g, leaders, false);
                 note = last ? "Birinciliği " + all + " paylaştı" : all + " başa baş önde";
@@ -2025,7 +2059,9 @@ struct Screens::Impl {
             handText(note, {labelX, btn.y + 10.f}, 30.f, alphaMul(kRedPencil, 0.9f * aNote));
         }
 
-        if (drawButton(btn, last ? "Sonuçlar" : "Sonraki El", m, true, ButtonStyle::Paper, 36.f)) click(C_Next);
+        float bfs = 36.f;
+        const std::string blabel = autoLabel(last ? "Sonuçlar" : "Sonraki El", FontId::Hand, btn.width - 22.f, bfs);
+        if (drawButton(btn, blabel, m, true, ButtonStyle::Paper, bfs)) click(C_Next);
     }
 
     // ------------------------------------------------------------ match over
@@ -2069,14 +2105,15 @@ struct Screens::Impl {
             const bool humanFirst = humanAmong(*g, leaders);
             const float a1 = clamp01((age - 0.35f) / 0.4f);
             if (humanFirst && leaders.size() == 1) {
-                drawHeader("Kazandın! Çaylar onlardan!", {800.f, 324.f}, 50.f, alphaMul(pal::Highlight, a1));
-                drawTextCentered(FontId::Ui, "Toplam " + best + " puanla masanın kurdu oldun.", {800.f, 368.f}, 22.f,
-                                 alphaMul(pal::TextLight, 0.85f * a1));
+                drawHeader(aiMode ? "Yapay zeka kazandı! Çaylar onlardan!" : "Kazandın! Çaylar onlardan!", {800.f, 324.f},
+                           50.f, alphaMul(pal::Highlight, a1));
+                drawTextCentered(FontId::Ui, "Toplam " + best + (aiMode ? " puanla masanın kurdu oldu." : " puanla masanın kurdu oldun."),
+                                 {800.f, 368.f}, 22.f, alphaMul(pal::TextLight, 0.85f * a1));
             } else if (humanFirst) {
                 drawHeader("Berabere!", {800.f, 324.f}, 50.f, alphaMul(pal::Highlight, a1));
                 drawTextCentered(FontId::Ui,
-                                 "Toplam " + best + " puanla birinciliği " + joinNames(*g, leaders, true) +
-                                     " ile paylaştın.",
+                                 (aiMode ? "Yapay zeka toplam " : "Toplam ") + best + " puanla birinciliği " +
+                                     joinNames(*g, leaders, true) + (aiMode ? " ile paylaştı." : " ile paylaştın."),
                                  {800.f, 368.f}, 22.f, alphaMul(pal::TextLight, 0.85f * a1));
             } else {
                 drawHeader("Bu sefer olmadı, bir maç daha?", {800.f, 324.f}, 46.f, alphaMul(pal::TextLight, a1));
@@ -2087,7 +2124,7 @@ struct Screens::Impl {
                 if (leaders.size() > 1) {
                     sub = "Birinciliği " + joinNames(*g, leaders, false) + " paylaştı (" + best + ")";
                 } else {
-                    sub = "Kazanan: " + g->player(leader).name + " (" + best + ")";
+                    sub = "Kazanan: " + seatName(*g, leader) + " (" + best + ")";
                     if (leader >= 1 && leader <= 3)
                         sub += "  \xE2\x80\x94  \xE2\x80\x9C" + std::string(quotes[leader]) + "\xE2\x80\x9D";
                 }
@@ -2128,7 +2165,7 @@ struct Screens::Impl {
                 drawTextCentered(FontId::UiBold, digit, {mc.x, mc.y - 1.f}, 25.f, alphaMul(pal::TextDark, ra));
                 drawText(FontId::UiBold, ".", {mc.x + dw * 0.5f, mc.y - 15.f}, 25.f, alphaMul(pal::TextDark, ra));
                 const Color nameCol = p.human ? pal::Highlight : pal::TextLight;
-                drawText(FontId::UiBold, p.name, {row.x + 76.f, row.y + 7.f}, 28.f, alphaMul(nameCol, ra));
+                drawText(FontId::UiBold, seatName(*g, s), {row.x + 76.f, row.y + 7.f}, 28.f, alphaMul(nameCol, ra));
                 std::string hs;
                 for (size_t h = 0; h < p.handScores.size(); ++h) hs += (h ? ", " : "") + scoreText(p.handScores[h]);
                 const std::string sub = "El puanları: " + hs;
@@ -2144,7 +2181,9 @@ struct Screens::Impl {
             }
         }
 
-        if (drawButton(L::MatchNew, "Yeni Oyun", m, true, ButtonStyle::Wood, 30.f)) click(C_NewGame);
+        float nfs = 30.f;
+        const std::string nlabel = autoLabel("Yeni Oyun", FontId::UiBold, L::MatchNew.width - 24.f, nfs);
+        if (drawButton(L::MatchNew, nlabel, m, true, ButtonStyle::Wood, nfs)) click(C_NewGame);
         if (drawButton(L::MatchMenu, "Ana Menü", m, true, ButtonStyle::Wood, 30.f)) click(C_MatchMenu);
         drawConfetti();
     }
@@ -2191,5 +2230,9 @@ ScreenAction Screens::update(float dt, Vector2 mouse, const okey::Game* game) { 
 void Screens::draw(const okey::Game* game) { impl_->draw(game); }
 
 Settings& Screens::settings() { return impl_->settings; }
+
+void Screens::setAiMode(bool on) { impl_->aiMode = on; }
+
+void Screens::setAutoAdvance(float secondsLeft) { impl_->autoLeft = secondsLeft; }
 
 } // namespace ui

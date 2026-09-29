@@ -1,4 +1,4 @@
-# Kıraathane 101 — Design Contract
+# SaklıBahçe — Design Contract
 
 > **3D update:** the game is now fully 3D and first-person. `DESIGN3D.md` supersedes this file's module
 > ownership for Scene/TableView and all of §5 (visuals/layout). Rules, engine, bots, audio, text and build
@@ -121,6 +121,12 @@ solid), **Kurt** (Hard — remembers discards, avoids feeding the next player, p
 pair vs series openings, picks up left tiles to open, grabs jokers). Bots must be *fair* (see `Bot.h`).
 Every bot turn must end with a legal discard; `sim` runs thousands of hands without a single rejected
 action on Normal/Hard (rejections are counted and reported).
+
+**Yapay Zeka mode** (App): a Kurt can take over the human's seat at any moment and hand it back at any
+moment, mid-turn included (`Bot::next` rebuilds its plan from the public state, so it continues from whatever
+stage the turn is in; App joins a decision still running on the worker thread before the player acts again).
+`--ai-chaos` (hidden developer flag) flips the mode at random for hours of game time and reports stuck turns
+and rejected actions.
 
 ## 5. Screen & interaction design (1600×900 virtual canvas)
 

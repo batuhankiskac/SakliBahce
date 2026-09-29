@@ -15,7 +15,7 @@ void settle(Table3D& t, const Camera3D& cam, bool humanInput = true);
 
 std::vector<int> rackSlots(Table3D& t);                      // 32 slots, -1 = empty
 void setRackSlots(Table3D& t, const std::vector<int>& slots);
-// 1 El/Per Aç, 2 Geri Ver, 3 Seri Diz, 4 Çift Diz, 5 Menü, 6 confirm yes, 7 confirm no
+// 1 El/Per Aç, 2 Geri Ver, 3 Seri Diz, 4 Çift Diz, 5 Menü, 6 confirm yes, 7 confirm no, 8 Yapay Zeka
 void pressButton(Table3D& t, int which);
 int draggedTile(Table3D& t);
 bool confirmActive(Table3D& t);

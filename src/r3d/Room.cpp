@@ -325,7 +325,7 @@ void Room::Impl::updateProps(float dt) {
     if (chairT <= 0.f) {
         std::vector<int> empty;
         for (int i = 0; i < (int)chairs.size(); ++i)
-            if (!chairs[i].occupied && i != catChair) empty.push_back(i);  // not from under the cat
+            if (!chairs[i].occupied && !catNearChair(i)) empty.push_back(i);  // not from under (or into) the cat
         if (!empty.empty()) {
             Chair& c = chairs[empty[rng.range(0, (int)empty.size() - 1)]];
             c.offFrom = c.off;

@@ -39,7 +39,9 @@ enum class ScreenAction {
     ShowMatchResult,  // HandSummary of the last hand: "Sonuçlar"
     ToTitle,          // Paused/MatchOver: "Ana Menü"
     Quit,             // Title: "Çıkış"
-    SettingsChanged   // any setting changed (App re-applies audio/anim settings)
+    SettingsChanged,  // any setting changed (App re-applies audio/anim settings)
+    StartAiMatch,     // Title: "Yapay Zekayı İzle" — a new match with the Yapay Zeka mode on
+    ToggleAiMode      // Paused: "Yapay Zeka Oynasın" / "Kontrolü Geri Al" (the menu closes, the game resumes)
 };
 
 class Screens {
@@ -59,6 +61,13 @@ public:
     ScreenAction update(float dt, Vector2 mouse, const okey::Game* game);
     void draw(const okey::Game* game);
     Settings& settings();
+    // The Yapay Zeka mode (an AI plays the human's seat): the pause menu offers the way back, the score sheet
+    // and the final standings speak about the AI. Set by App whenever the mode changes.
+    void setAiMode(bool on);
+    // The score sheet / final standings will press their main button by themselves in this many seconds (the
+    // Yapay Zeka mode and --autoplay move on alone); the button shows the countdown. < 0: no countdown. App sets
+    // it every frame; a screen change clears it.
+    void setAutoAdvance(float secondsLeft);
     std::function<void(Sfx)> playSfx; // set by App
 
 private:

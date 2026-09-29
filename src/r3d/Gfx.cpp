@@ -1,4 +1,4 @@
-// 3D renderer for Kıraathane 101 (gfx owner). Public API: r3d/Gfx.h (frozen).
+// 3D renderer for SaklıBahçe (gfx owner). Public API: r3d/Gfx.h (frozen).
 //
 // Frame: submissions are bounded (cached local spheres) and frustum-culled; each keeps a mask of the point
 // lights that can reach it or the view rays toward it (exact: lights fall to 0 at their range). Shadow pass

@@ -1,4 +1,4 @@
-// Kıraathane 101 — entry point: parse the command line and run the application.
+// SaklıBahçe — entry point: parse the command line and run the application.
 #include "app/App.h"
 
 #include <cstdio>

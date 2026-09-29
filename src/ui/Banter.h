@@ -52,6 +52,10 @@ public:
     bool pop(BanterLine& out);         // next line whose delay has elapsed
     void spoke(int seat);              // a bubble actually appeared for `seat` (1..4)
 
+    // A regular's one-off remark when the player hands their seat to the Yapay Zeka (`on`) or takes it back
+    // (seat 1..3 + text; `pick` varies speaker and line). Pure: the caller shows it (Characters::say).
+    static BanterLine aiModeLine(bool on, uint32_t pick);
+
     // exposed for tests / tools
     static int lineCount();            // total number of distinct lines (tables + exchanges)
 
