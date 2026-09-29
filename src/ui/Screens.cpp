@@ -532,12 +532,14 @@ std::vector<RuleBlock> buildRules() {
       "^101 ceza^ yazılır ve desteden çekersin. Aynı turda bir daha yandan alamazsın.");
 
     H("Perler: seri, grup, çift");
-    B("*Seri:* aynı renkten en az 3 ardışık sayı. 1, 13'ün arkasından gelebilir (12-13-1; buradaki 1, 14 "
-      "sayılır) ama başa dönülmez: 13-1-2 olmaz.");
+    B("*Seri:* aynı renkten en az 3 ardışık sayı. Seri 13'te biter: normal okeyin aksine 101'de 1, 13'ün "
+      "arkasından gelmez (12-13-1 per değildir) ve başa dönülmez (13-1-2 olmaz). 1 yalnızca serinin başında "
+      "olur: 1-2-3.");
     {
         std::vector<RuleItem> it = {{{T(R, 5), T(R, 6), T(R, 7)}, "Kırmızı 5-6-7"},
-                                    {{T(M, 12), T(M, 13), T(M, 1)}, "Mavi 12-13-1"},
+                                    {{T(M, 12), T(M, 13), T(M, 1)}, "12-13-1 olmaz"},
                                     {{T(K, 13), T(K, 1), T(K, 2)}, "13-1-2 olmaz"}};
+        it[1].wrong = true;
         it[2].wrong = true;
         X(it);
     }
@@ -550,9 +552,8 @@ std::vector<RuleBlock> buildRules() {
 
     H("Elini açmak");
     P("Masaya ilk kez per indirmeye *el açmak* denir. İki yolu vardır:");
-    B("*Seriyle açmak:* indirdiğin seri ve grupların toplamı en az ^101^ olmalı. Toplam, taşların per "
-      "içinde geçtiği sayılarla hesaplanır: okey yerine geçtiği sayı olarak, 13'ten sonra gelen 1 ise 14 "
-      "olarak sayılır.");
+    B("*Seriyle açmak:* indirdiğin seri ve grupların toplamı en az ^101^ olmalı. Toplam, taşların üzerindeki "
+      "sayılarla hesaplanır; okey, yerine geçtiği sayı kadar sayılır.");
     B("*Çiftle açmak:* en az ^5 çift^ indirerek.");
     X({{{T(R, 10), T(R, 11), T(R, 12), T(R, 13)}, "46"},
        {{T(Y, 12), T(M, 12), T(K, 12)}, "36"},
@@ -561,7 +562,14 @@ std::vector<RuleBlock> buildRules() {
       "Açarken istediğin kadar per indirebilirsin, ama açtığın turda işleyemez, yeni per indiremez, okey "
       "alamazsın; bunlar için bir sonraki turunu beklersin. Taş atabilmek için elinde her zaman en az bir "
       "taş kalmalı.");
-    P("Seriyle açan sonradan yalnızca seri ve grup, çiftle açan yalnızca çift indirebilir.");
+    P("Çiftle açan sonradan yeni seri indiremez, yalnızca çift indirebilir. Seriyle açan sonradan seri ve "
+      "grup indirir; masada çiftle açmış başka biri varsa elindeki çiftleri de indirebilir.");
+
+    H("Katlamalı oyun");
+    P("Ayarlar'dan açılan bir oyun türüdür. Katlamalı oyunda senden önce biri seriyle açtıysa, sen onun "
+      "toplamından *en az 1 fazlasıyla* açmak zorundasın: önceki açılış 116 ise sana en az ^117^ gerekir, "
+      "sen 128'le açarsan sonrakine 129 gerekir. Çiftte de aynısı: önce biri 5 çiftle açtıysa sana en az "
+      "^6 çift^ gerekir. Seri ve çift ayrı sayılır. Masadaki sayaç o anki gereken sayıyı gösterir.");
 
     H("İşlemek ve okey almak");
     P("Elini açtıktan sonraki turlarında masadaki seri ve gruplara, kimin olursa olsun, taş ekleyebilirsin: "
@@ -588,13 +596,14 @@ std::vector<RuleBlock> buildRules() {
     P("Her elin sonunda herkesin puanı hesap kağıdına yazılır. Düşük puan iyidir.");
     B("Eli bitiren: *\xE2\x80\x93" "101*");
     B("Hiç açmayan: *202*");
-    B("Seriyle açan: elinde kalan taşların toplamı (elde kalan okey *101* sayılır)");
+    B("Seriyle açan: elinde kalan taşların toplamı");
     B("Çiftle açan: elinde kalanın *iki katı*");
+    B("Açmış bir oyuncunun elinde okey kaldıysa her okey için ^101 ceza^");
     B("Bunlara o elin cezaları eklenir.");
     P("*Katlar:* Bitiren oyuncu son taş olarak okeyi attıysa (*okeyle bitiş*), çiftle açmışsa (*çiftten "
-      "bitiş*) ya da açtığı turda bitirdiyse (*elden bitiş*) o elin puanları ikiye katlanır; cezalar "
-      "katlanmaz. Katlar birbiriyle çarpılır: üçü birden olursa \xC3\x97" "8. Taşlar tükenerek biten elde kat "
-      "yoktur.");
+      "bitiş*) ya da henüz kimse açmamışken bütün elini tek seferde açıp bitirdiyse (*elden bitiş*) diğer "
+      "oyuncuların puanları ikiye katlanır, bitirenin puanı da (\xE2\x80\x93" "202); cezalar katlanmaz. Katlar "
+      "birbiriyle çarpılır: okeyle ve elden birlikte \xC3\x97" "4 olur. Taşlar tükenerek biten elde kat yoktur.");
 
     H("Maçın sonu");
     P("Maç, ayarlardan seçtiğin el sayısı kadar (1 ile 11 arası) sürer. Son elden sonra toplam puanı en düşük "
@@ -744,8 +753,9 @@ constexpr Rectangle TitleQuit{660, 766, 280, 56};
 constexpr Rectangle SetPanel{330, 40, 940, 820};
 constexpr float SetLabelX = 385.f;
 constexpr float SetCtrlX = 720.f;
-constexpr float SetRowY[8] = {220, 282, 344, 406, 468, 588, 650, 712}; // name, hands, level, anim, hints, sfx, amb, music
-constexpr Rectangle SetName{720, 197, 340, 46};
+// name, hands, level, anim, hints, katlamalı | sfx, ambient, music
+constexpr float SetRowY[9] = {212, 268, 324, 380, 436, 492, 598, 652, 706};
+constexpr Rectangle SetName{720, 189, 340, 46};
 constexpr Rectangle SetDefaults{385, 778, 230, 54};
 constexpr Rectangle SetBack{985, 776, 230, 58};
 // rules
@@ -773,7 +783,7 @@ constexpr Rectangle MatchMenu{820, 736, 250, 64};
 enum ClickId {
     C_None = 0,
     C_Play, C_WatchAi, C_TitleRules, C_TitleSettings, C_Quit,
-    C_Back, C_Defaults, C_Hands, C_Level, C_Anim, C_Sfx, C_Ambient, C_Music, C_Hints, C_Name,
+    C_Back, C_Defaults, C_Hands, C_Level, C_Anim, C_Sfx, C_Ambient, C_Music, C_Hints, C_Katlamali, C_Name,
     C_Resume, C_PauseAi, C_PauseRules, C_PauseSettings, C_PauseMenu, C_ConfirmYes, C_ConfirmNo,
     C_Next, C_NewGame, C_MatchMenu, C_RulesTab,
 };
@@ -818,7 +828,7 @@ struct Screens::Impl {
     bool nameEditing = false;
     std::string nameBuf;
     std::string nameBefore; // name when editing started (ESC restores it)
-    float toggleAnim[4] = {1, 1, 1, 1}; // sfx, ambient, music, hints
+    float toggleAnim[5] = {1, 1, 1, 1, 0}; // sfx, ambient, music, hints, katlamalı
 
     // rules
     std::vector<RuleBlock> rules;
@@ -900,6 +910,7 @@ struct Screens::Impl {
             toggleAnim[1] = settings.ambient ? 1.f : 0.f;
             toggleAnim[2] = settings.music ? 1.f : 0.f;
             toggleAnim[3] = settings.hints ? 1.f : 0.f;
+            toggleAnim[4] = settings.katlamali ? 1.f : 0.f;
             break;
         case ScreenId::Rules:
             scroll = scrollTarget = 0.f;
@@ -1079,6 +1090,9 @@ struct Screens::Impl {
         case C_Hints:
             settings.hints = !settings.hints;
             return ScreenAction::SettingsChanged;
+        case C_Katlamali:
+            settings.katlamali = !settings.katlamali;
+            return ScreenAction::SettingsChanged;
         case C_Name:
             if (!nameEditing) startEditing();
             return ScreenAction::None;
@@ -1185,8 +1199,8 @@ struct Screens::Impl {
     }
 
     ScreenAction updateSettings(float dt, Vector2 m, bool clicked) {
-        const bool on[4] = {settings.sfx, settings.ambient, settings.music, settings.hints};
-        for (int i = 0; i < 4; ++i) toggleAnim[i] = approach(toggleAnim[i], on[i] ? 1.f : 0.f, 16.f, dt);
+        const bool on[5] = {settings.sfx, settings.ambient, settings.music, settings.hints, settings.katlamali};
+        for (int i = 0; i < 5; ++i) toggleAnim[i] = approach(toggleAnim[i], on[i] ? 1.f : 0.f, 16.f, dt);
 
         ScreenAction act = ScreenAction::None;
         if (nameEditing) {
@@ -1612,7 +1626,7 @@ struct Screens::Impl {
                        alphaMul(pal::Brass, 0.3f));
         };
         section("OYUN", 156.f);
-        section("SES", 526.f);
+        section("SES", 544.f);
 
         // player name
         settingRow(0, "Oyuncu adı", "En fazla 12 harf");
@@ -1651,16 +1665,18 @@ struct Screens::Impl {
 
         settingRow(4, "İpuçları", "Geçerli perler, açma sayacı ve işlek taşlar");
         toggle(C_Hints, 3, settings.hints, L::SetRowY[4], m);
+        settingRow(5, "Katlamalı oyun", "Her açan, öncekinden en az 1 fazlasıyla açar");
+        toggle(C_Katlamali, 4, settings.katlamali, L::SetRowY[5], m);
 
-        settingRow(5, "Efekt sesleri", "Taş, çay kaşığı ve düğme sesleri");
-        toggle(C_Sfx, 0, settings.sfx, L::SetRowY[5], m);
-        settingRow(6, "Ortam sesi", "Kalabalık, vantilatör, televizyon");
-        toggle(C_Ambient, 1, settings.ambient, L::SetRowY[6], m);
-        settingRow(7, "Radyo", "Eski radyoda bağlama ezgileri");
-        toggle(C_Music, 2, settings.music, L::SetRowY[7], m);
+        settingRow(6, "Efekt sesleri", "Taş, çay kaşığı ve düğme sesleri");
+        toggle(C_Sfx, 0, settings.sfx, L::SetRowY[6], m);
+        settingRow(7, "Ortam sesi", "Kalabalık, vantilatör, televizyon");
+        toggle(C_Ambient, 1, settings.ambient, L::SetRowY[7], m);
+        settingRow(8, "Radyo", "Türküler ve eski plaklar");
+        toggle(C_Music, 2, settings.music, L::SetRowY[8], m);
 
         if (backSettings != ScreenId::Title) {
-            drawTextWrapped(FontId::Ui, "El sayısı yeni maçta geçerli olur.", {650.f, 785.f, 310.f, 60.f},
+            drawTextWrapped(FontId::Ui, "El sayısı ve katlamalı oyun yeni maçta geçerli olur.", {640.f, 778.f, 330.f, 60.f},
                             17.f, alphaMul(pal::TextLight, 0.6f), 2.f);
         }
         if (drawButton(L::SetDefaults, "Varsayılanlar", m, true, ButtonStyle::Wood, 22.f)) click(C_Defaults);

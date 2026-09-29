@@ -1,10 +1,10 @@
 // Hand solver for 101 Okey: exact best partition into runs/groups, maximum pairs, rack arrangement.
 //
-// Series search: the hand is reduced to counts per face slot (4 colours x 14 slots, slot 14 = a '1' held
-// back to be played as the high ace after 13) plus the number of wild okeys. A DFS always resolves the
-// lowest occupied slot (colour-major order): leave one copy over, hold a '1' back as a high ace, or start a
-// meld whose lowest real tile is that copy (runs of every length with okeys anywhere, groups with every
-// subset of the other colours). Results are memoised on the full count state, so the search is exact.
+// Series search: the hand is reduced to counts per face slot (4 colours x 13 numbers) plus the number of
+// wild okeys. A DFS always resolves the lowest occupied slot (colour-major order): leave one copy over, or
+// start a meld whose lowest real tile is that copy (runs of every length up to 13 with okeys anywhere — 101
+// has no '1' after 13 — and groups with every subset of the other colours). Results are memoised on the
+// full count state, so the search is exact.
 #include "core/Solver.h"
 
 #include <algorithm>
@@ -24,7 +24,7 @@ uint64_t solverWork();
 
 namespace {
 
-constexpr int SLOTS_PER_COLOR = 14; // numbers 1..13 + high ace
+constexpr int SLOTS_PER_COLOR = NUM_NUMBERS; // numbers 1..13
 constexpr int NEG = -1000000000;
 constexpr int JOKER_HAND = JOKER_IN_HAND_VALUE;
 
@@ -43,7 +43,7 @@ Weights weightsFor(int objective) {
 }
 
 // Choice encoding stored per memo state.
-enum ChoiceType : uint32_t { C_LEFT = 0, C_ACE = 1, C_RUN = 2, C_GROUP = 3 };
+enum ChoiceType : uint32_t { C_LEFT = 0, C_RUN = 2, C_GROUP = 3 };
 
 uint32_t encodeRun(int s0, int e, uint32_t jokerMask) {
     return C_RUN | ((uint32_t)s0 << 2) | ((uint32_t)e << 6) | (jokerMask << 10);
@@ -149,7 +149,7 @@ public:
     int jokers_ = 0;
     int initJokers_ = 0;
     bool mustDone_ = true;
-    int mustA_ = -1, mustB_ = -1; // slots whose use satisfies a mustUse face
+    int mustA_ = -1;              // the slot whose use satisfies a mustUse face
     bool mustJoker_ = false;
 
     int get(int s) const { return (int)((cnt_[s / 28] >> ((s % 28) * 2)) & 3u); }
@@ -170,16 +170,10 @@ public:
         dec(s);
         // 1. leave this copy over
         if (mustDone_ || !isMustSlot(s) || mustCopiesLeft() > 0) b.offer(solve(), C_LEFT);
-        // 2. hold a '1' back as the high ace (only useful if a run can reach 14)
-        if (n == 1 && (get(slotOf(c, 13)) > 0 || get(slotOf(c, 12)) > 0 || jokers_ > 0)) {
-            inc(slotOf(c, 14));
-            b.offer(solve(), C_ACE);
-            dec(slotOf(c, 14));
-        }
-        // 3. runs whose lowest real tile is this copy
-        runExtend(b, c, n, n, 1, 0u, n == 14 ? ACE_HIGH_VALUE : n, n == 14 ? 1 : n, 0, isMustSlot(s));
-        // 4. groups (numbers 1..13)
-        if (n <= NUM_NUMBERS) groups(b, c, n);
+        // 2. runs whose lowest real tile is this copy
+        runExtend(b, c, n, n, 1, 0u, n, n, 0, isMustSlot(s));
+        // 3. groups
+        groups(b, c, n);
         inc(s);
 
         memo_.insert(k0, k1, b.score, b.choice);
@@ -199,7 +193,6 @@ public:
             dec(s);
             switch (ch & 3u) {
             case C_LEFT: break;
-            case C_ACE: inc(slotOf(c, 14)); break;
             case C_RUN: {
                 AbsMeld m;
                 m.run = true;
@@ -250,13 +243,8 @@ private:
         if (cnt_[0]) return __builtin_ctzll(cnt_[0]) / 2;
         return 28 + __builtin_ctzll(cnt_[1]) / 2;
     }
-    bool isMustSlot(int s) const { return s == mustA_ || s == mustB_; }
-    int mustCopiesLeft() const {
-        int k = 0;
-        if (mustA_ >= 0) k += get(mustA_);
-        if (mustB_ >= 0) k += get(mustB_);
-        return k;
-    }
+    bool isMustSlot(int s) const { return s == mustA_; }
+    int mustCopiesLeft() const { return mustA_ >= 0 ? get(mustA_) : 0; }
 
     struct Best {
         int score = NEG;
@@ -288,7 +276,7 @@ private:
     void runExtend(Best& b, int c, int n, int p, int len, uint32_t jmask, int value, int hand, int jUsed,
                    bool usedMust) {
         if (len >= 3) consider(b, meldScore(value, len, jUsed, hand), usedMust, encodeRun(n, p, jmask));
-        if (p == ACE_HIGH_NUMBER) {
+        if (p == NUM_NUMBERS) {
             // The run cannot grow upwards any more: okeys below the lowest real tile become useful.
             // (While it can still grow, an okey on top is always worth more than one below.)
             int v = value, h = hand;
@@ -307,17 +295,15 @@ private:
             return;
         }
         const int q = p + 1;
-        const int qs = slotOf(c, q); // q == 14 -> the held-back high ace slot
-        const int qValue = (q == ACE_HIGH_NUMBER) ? ACE_HIGH_VALUE : q;
+        const int qs = slotOf(c, q);
         if (get(qs) > 0) {
             dec(qs);
-            runExtend(b, c, n, q, len + 1, jmask, value + qValue, hand + (q == ACE_HIGH_NUMBER ? 1 : q), jUsed,
-                      usedMust || isMustSlot(qs));
+            runExtend(b, c, n, q, len + 1, jmask, value + q, hand + q, jUsed, usedMust || isMustSlot(qs));
             inc(qs);
         }
         if (jokers_ > 0) {
             --jokers_;
-            runExtend(b, c, n, q, len + 1, jmask | (1u << (q - 1)), value + qValue, hand + JOKER_HAND, jUsed + 1,
+            runExtend(b, c, n, q, len + 1, jmask | (1u << (q - 1)), value + q, hand + JOKER_HAND, jUsed + 1,
                       usedMust);
             ++jokers_;
         }
@@ -472,7 +458,6 @@ SolveResult detail::solveSeriesObjective(const std::vector<int>& input, const Ok
         } else {
             const int c = ok.faceColor(mustUse), n = ok.faceNumber(mustUse);
             search.mustA_ = slotOf(c, n);
-            if (n == 1) search.mustB_ = slotOf(c, 14);
         }
     }
 
@@ -502,10 +487,10 @@ SolveResult detail::solveSeriesObjective(const std::vector<int>& input, const Ok
         if (m.run) {
             for (int p = m.s0; p <= m.e; ++p) {
                 if (m.jokerMask & (1u << (p - 1))) ids.push_back(jokerPool[jokerPos++]);
-                else ids.push_back(takeFace(m.color, p == ACE_HIGH_NUMBER ? 1 : p));
+                else ids.push_back(takeFace(m.color, p));
             }
             int v = 0;
-            for (int p = m.s0; p <= m.e; ++p) v += (p == ACE_HIGH_NUMBER) ? ACE_HIGH_VALUE : p;
+            for (int p = m.s0; p <= m.e; ++p) v += p;
             res.value += v;
         } else {
             ids.push_back(takeFace(m.color, m.number));

@@ -154,12 +154,14 @@ void testRuns() {
     CHECK_EQ(nums(m), (V{6, 7, 8}));
     CHECK(makeRun({T(R, 1), J1, J2}, MOK, m));
     CHECK_EQ(nums(m), (V{1, 2, 3}));
-    // a joker run cannot go past the high ace: 13-J-J is read descending (11-12-13)
+    // a run ends at 13: 13-J-J is read descending (11-12-13), 12-13-J only with the okey in front
     CHECK(makeRun({T(R, 13), J1, J2}, MOK, m));
     CHECK_EQ(nums(m), (V{11, 12, 13}));
-    CHECK(makeRun({T(R, 12), T(R, 13), J1}, MOK, m, false));
-    CHECK_EQ(nums(m), (V{12, 13, 14}));
-    CHECK_EQ(m.value(), 12 + 13 + ACE_HIGH_VALUE);
+    CHECK(!makeRun({T(R, 12), T(R, 13), J1}, MOK, m, false));
+    CHECK(makeRun({T(R, 12), T(R, 13), J1}, MOK, m, true));
+    CHECK_EQ(nums(m), (V{11, 12, 13}));
+    CHECK(m.tiles[0].joker);
+    CHECK_EQ(m.value(), 36);
 
     // lenient re-placement
     CHECK(!makeRun({T(R, 3), T(R, 5), J1}, MOK, m, false, &why));
@@ -173,47 +175,45 @@ void testRuns() {
     CHECK_EQ(nums(m), (V{7, 8, 9}));
     CHECK(m.tiles[2].joker);
     CHECK_EQ(m.value(), 24);
-    CHECK(makeRun({T(R, 12), J1, T(R, 13)}, MOK, m)); // ... up to the high ace
-    CHECK_EQ(nums(m), (V{12, 13, 14}));
-    CHECK(m.tiles[2].joker);
-    CHECK(makeRun({T(R, 13), J1, T(R, 1), T(R, 12), J2}, MOK, m)); // high end full: low end
-    CHECK_EQ(nums(m), (V{10, 11, 12, 13, 14}));
-    CHECK_EQ(m.value(), 10 + 11 + 12 + 13 + 14);
-    CHECK(m.tiles[0].joker && m.tiles[1].joker && m.tiles[4].id == T(R, 1));
+    CHECK(makeRun({T(R, 12), J1, T(R, 13)}, MOK, m)); // ... up to 13, then the low end
+    CHECK_EQ(nums(m), (V{11, 12, 13}));
+    CHECK(m.tiles[0].joker);
+    CHECK(makeRun({T(R, 13), J1, T(R, 11), T(R, 12), J2}, MOK, m)); // high end full: low end
+    CHECK_EQ(nums(m), (V{9, 10, 11, 12, 13}));
+    CHECK_EQ(m.value(), 9 + 10 + 11 + 12 + 13);
+    CHECK(m.tiles[0].joker && m.tiles[1].joker && m.tiles[4].id == T(R, 13));
     CHECK(makeRun({T(Y, 2), J1, T(Y, 6), J2, T(Y, 4)}, MOK, m)); // two internal gaps
     CHECK_EQ(nums(m), (V{2, 3, 4, 5, 6}));
 
-    // 12-13-1
-    CHECK(makeRun({T(R, 12), T(R, 13), T(R, 1)}, MOK, m, false));
-    CHECK_EQ(nums(m), (V{12, 13, 14}));
-    CHECK_EQ(m.value(), 39);
-    CHECK_EQ(m.tiles[2].id, T(R, 1));
-    CHECK(makeRun({T(R, 1), T(R, 13), T(R, 12)}, MOK, m, false)); // written descending
-    CHECK_EQ(nums(m), (V{12, 13, 14}));
-    CHECK(makeRun({J1, T(R, 13), T(R, 1)}, MOK, m, false));
-    CHECK_EQ(nums(m), (V{12, 13, 14}));
-    CHECK(makeRun({T(R, 1), T(R, 12), T(R, 13)}, MOK, m, true)); // lenient: 1 read as high ace
-    CHECK_EQ(nums(m), (V{12, 13, 14}));
+    // 12-13-1 is not a run in 101 (it is in plain okey): a run ends at 13
+    CHECK(!makeRun({T(R, 12), T(R, 13), T(R, 1)}, MOK, m, false));
+    CHECK(!makeRun({T(R, 1), T(R, 13), T(R, 12)}, MOK, m, false)); // written descending
+    CHECK(!makeRun({T(R, 12), T(R, 13), T(R, 1)}, MOK, m, true, &why));
+    CHECK_EQ(why, std::string("Sayılar ardışık değil"));
+    CHECK(!makeRun({J1, T(R, 13), T(R, 1)}, MOK, m, true));
+    CHECK(!makeRun({T(R, 1), T(R, 12), T(R, 13)}, MOK, m, true));
     CHECK(makeRun({T(R, 1), T(R, 2), T(R, 3)}, MOK, m));
     CHECK_EQ(m.value(), 6);
     {
         V full;
-        full.push_back(T(R, 1, 0));
-        for (int n = 2; n <= 13; ++n) full.push_back(T(R, n));
-        full.push_back(T(R, 1, 1));
+        for (int n = 1; n <= 13; ++n) full.push_back(T(R, n));
         CHECK(makeRun(full, MOK, m, false));
-        CHECK_EQ(m.size(), 14);
-        CHECK_EQ(m.value(), 91 + 14);
+        CHECK_EQ(m.size(), 13);
+        CHECK_EQ(m.value(), 91);
         CHECK_EQ(m.tiles.front().number, 1);
-        CHECK_EQ(m.tiles.back().number, 14);
+        CHECK_EQ(m.tiles.back().number, 13);
         V shuffled = full;
         std::reverse(shuffled.begin(), shuffled.end());
         std::swap(shuffled[3], shuffled[7]);
         CHECK(makeRun(shuffled, MOK, m, true));
-        CHECK_EQ(m.value(), 105);
+        CHECK_EQ(m.value(), 91);
+        V plusOne = full;
+        plusOne.push_back(T(R, 1, 1)); // 1..13 and a second 1 after 13: not a run
+        CHECK(!makeRun(plusOne, MOK, m, true, &why));
+        CHECK_EQ(why, std::string("Seri en fazla 13 taş olabilir"));
         full.push_back(J1);
         CHECK(!makeRun(full, MOK, m, true, &why));
-        CHECK_EQ(why, std::string("Seri en fazla 14 taş olabilir"));
+        CHECK_EQ(why, std::string("Seri en fazla 13 taş olabilir"));
     }
 
     // no wrap-around
@@ -354,9 +354,9 @@ void testMakeMeld() {
     CHECK(makeMeld({T(R, 5), J1, J2}, MOK, m, false)); // run 5-6-7 (18) > group 15
     CHECK(m.kind == MeldKind::Run);
     CHECK_EQ(m.value(), 18);
-    CHECK(makeMeld({T(R, 12), J1, J2}, MOK, m, false)); // run 12-13-14 (39) > group 36
-    CHECK(m.kind == MeldKind::Run);
-    CHECK_EQ(m.value(), 39);
+    CHECK(makeMeld({T(R, 12), J1, J2}, MOK, m, false)); // group 12-12-12 (36) > run 10-11-12 (33): no 14
+    CHECK(m.kind == MeldKind::Group);
+    CHECK_EQ(m.value(), 36);
     CHECK(makeMeld({T(R, 1), J1, J2}, MOK, m, false)); // 1-2-3 (6) > 1-1-1 (3)
     CHECK(m.kind == MeldKind::Run);
     CHECK(makeMeld({J1, T(R, 4), J2}, MOK, m, false)); // tie 12/12 -> run
@@ -410,23 +410,16 @@ void testAddTile() {
 
     Meld hi;
     CHECK(makeRun({T(B, 11), T(B, 12), T(B, 13)}, MOK, hi));
-    CHECK(tryAddTile(hi, J1, MOK, AddSide::Auto, out)); // joker becomes the high ace
-    CHECK_EQ(nums(out), (V{11, 12, 13, 14}));
-    CHECK(tryAddTile(hi, T(B, 1), MOK, AddSide::Auto, out));
-    CHECK_EQ(nums(out), (V{11, 12, 13, 14}));
-    CHECK_EQ(out.value(), 11 + 12 + 13 + 14);
+    CHECK(tryAddTile(hi, J1, MOK, AddSide::Auto, out)); // ends at 13: the joker goes to the front
+    CHECK_EQ(nums(out), (V{10, 11, 12, 13}));
+    CHECK(out.tiles.front().joker);
+    CHECK(!tryAddTile(hi, J1, MOK, AddSide::Back, out));
+    CHECK(!tryAddTile(hi, T(B, 1), MOK, AddSide::Auto, out)); // no 1 after 13
+    CHECK(!tryAddTile(hi, T(B, 1), MOK, AddSide::Back, out));
     CHECK(!tryAddTile(hi, T(B, 1), MOK, AddSide::Front, out));
     CHECK(tryAddTile(hi, T(B, 10), MOK, AddSide::Auto, out));
     CHECK_EQ(nums(out), (V{10, 11, 12, 13}));
-
-    Meld ace;
-    CHECK(makeRun({T(B, 12), T(B, 13), T(B, 1)}, MOK, ace));
-    CHECK(tryAddTile(ace, J1, MOK, AddSide::Auto, out)); // ends at 14: joker goes to the front
-    CHECK_EQ(nums(out), (V{11, 12, 13, 14}));
-    CHECK(out.tiles.front().joker);
-    CHECK(!tryAddTile(ace, J1, MOK, AddSide::Back, out));
-    CHECK(!tryAddTile(ace, T(B, 1, 1), MOK, AddSide::Auto, out));
-    CHECK(tryAddTile(ace, T(B, 11), MOK, AddSide::Auto, out));
+    CHECK(!fitsAnyMeld({hi}, T(B, 1), MOK)); // a '1' is never işlek on a run ending at 13
 
     Meld low;
     CHECK(makeRun({T(Y, 1), T(Y, 2), T(Y, 3)}, MOK, low));
@@ -445,15 +438,13 @@ void testAddTile() {
     V ids;
     for (int n = 2; n <= 13; ++n) ids.push_back(T(Y, n));
     CHECK(makeRun(ids, MOK, long12));
-    CHECK(tryAddTile(long12, T(Y, 1), MOK, AddSide::Auto, out)); // back (high ace) preferred
-    CHECK_EQ(out.tiles.back().number, 14);
-    CHECK(tryAddTile(long12, T(Y, 1), MOK, AddSide::Front, out));
+    CHECK(tryAddTile(long12, T(Y, 1), MOK, AddSide::Auto, out)); // back impossible (13) -> front
     CHECK_EQ(out.tiles.front().number, 1);
+    CHECK(!tryAddTile(long12, T(Y, 1), MOK, AddSide::Back, out));
     Meld full = out;
-    CHECK(tryAddTile(full, T(Y, 1, 1), MOK, AddSide::Auto, out)); // 1..13 + 1
-    CHECK_EQ(out.size(), 14);
-    Meld maxed = out;
-    CHECK(!tryAddTile(maxed, J1, MOK, AddSide::Auto, out));
+    CHECK_EQ(full.size(), 13);
+    CHECK(!tryAddTile(full, T(Y, 1, 1), MOK, AddSide::Auto, out)); // 1..13: nothing fits any more
+    CHECK(!tryAddTile(full, J1, MOK, AddSide::Auto, out));
 
     // fake joker extends a black run as Black 5
     Meld blk;
@@ -508,10 +499,11 @@ void testSwapJoker() {
     CHECK(!trySwapJoker(run, J2, MOK, out, freed));
 
     Meld hi;
-    CHECK(makeRun({T(R, 12), T(R, 13), J1}, MOK, hi));
-    CHECK(trySwapJoker(hi, T(R, 1), MOK, out, freed));
-    CHECK_EQ(out.tiles[2].number, 14);
-    CHECK_EQ(out.value(), 39);
+    CHECK(makeRun({T(R, 12), T(R, 13), J1}, MOK, hi)); // J-12-13: the okey stands for 11
+    CHECK(!trySwapJoker(hi, T(R, 1), MOK, out, freed));
+    CHECK(trySwapJoker(hi, T(R, 11), MOK, out, freed));
+    CHECK_EQ(out.tiles[0].number, 11);
+    CHECK_EQ(out.value(), 36);
     Meld lo;
     CHECK(makeRun({J1, T(R, 2), T(R, 3)}, MOK, lo));
     CHECK(trySwapJoker(lo, T(R, 1), MOK, out, freed));
@@ -650,16 +642,16 @@ bool meldConsistent(const Meld& m, const OkeyInfo& ok) {
         if (!t.joker) {
             if (ok.faceColor(t.id) != t.color) return false;
             const int f = ok.faceNumber(t.id);
-            if (!(f == t.number || (f == 1 && t.number == ACE_HIGH_NUMBER))) return false;
+            if (f != t.number) return false;
         }
     }
     if (m.kind == MeldKind::Run) {
-        if (n < 3 || n > 14) return false;
+        if (n < 3 || n > NUM_NUMBERS) return false;
         for (int i = 0; i < n; ++i) {
             if (m.tiles[i].color != m.tiles[0].color) return false;
             if (m.tiles[i].number != m.tiles[0].number + i) return false;
         }
-        return m.tiles[0].number >= 1 && m.tiles[n - 1].number <= ACE_HIGH_NUMBER;
+        return m.tiles[0].number >= 1 && m.tiles[n - 1].number <= NUM_NUMBERS;
     }
     if (m.kind == MeldKind::Group) {
         if (n < 3 || n > 4) return false;
@@ -701,7 +693,9 @@ void checkInvariants(Game& g) {
         if (m.owner >= 0 && m.owner < NUM_PLAYERS) {
             const PlayerInfo& p = g.player(m.owner);
             CHECK(p.opened);
-            CHECK_EQ(p.openedWithPairs, m.kind == MeldKind::Pair);
+            // pair openers lay only pairs; a series opener's pairs need someone else who opened with pairs
+            if (p.openedWithPairs) CHECK(m.kind == MeldKind::Pair);
+            else if (m.kind == MeldKind::Pair) CHECK(g.pairsOpenedByOther(m.owner));
         }
     }
 }
@@ -767,7 +761,7 @@ void testMeldProperties() {
             CHECK(meldConsistent(r1, ok) && r1.kind == MeldKind::Run);
             CHECK_EQ(sortedIds(r1.ids()), sortedIds(ids));
             int sum = 0;
-            for (const PlacedTile& t : r1.tiles) sum += t.number == 14 ? ACE_HIGH_VALUE : t.number;
+            for (const PlacedTile& t : r1.tiles) sum += t.number;
             CHECK_EQ(r1.value(), sum);
         }
         if (okG1) {
@@ -1305,11 +1299,16 @@ void testOpeningThreshold() {
     CHECK_EQ(c.error, std::string("Sıra sende değil"));
     CHECK_EQ(c.value, 100);
 
-    // exactly 101 (12-13-1 is worth 39)
+    // 12-13-1 is not a run in 101: it can't count toward an opening
     s.hands[0] = {T(R, 12), T(R, 13), T(R, 1), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)};
-    s.hands[0].insert(s.hands[0].end(), {T(B, 3), T(R, 9), T(Y, 11), T(B, 6), T(K, 12)});
+    s.hands[0].insert(s.hands[0].end(), {T(K, 13), T(Y, 13), T(B, 3), T(R, 9), T(Y, 11), T(B, 6), T(K, 12)});
     apply(g, s);
-    G groups101 = {{T(R, 12), T(R, 13), T(R, 1)}, {T(B, 13), T(B, 12), T(B, 11)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
+    c = g.checkOpen(0, {{T(R, 12), T(R, 13), T(R, 1)}, {T(B, 13), T(B, 12), T(B, 11)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}});
+    CHECK(!c.valid);
+    CHECK_EQ(c.value, 62);
+
+    // exactly 101 (13-13-13 is worth 39)
+    G groups101 = {{T(R, 13), T(K, 13), T(Y, 13)}, {T(B, 13), T(B, 12), T(B, 11)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
     c = g.checkOpen(0, groups101);
     CHECK(c.valid);
     CHECK_EQ(c.value, 101);
@@ -1321,7 +1320,7 @@ void testOpeningThreshold() {
     CHECK(p.opened && !p.openedWithPairs);
     CHECK_EQ(p.openValue, 101);
     CHECK_EQ(p.openedTurn, turn);
-    CHECK_EQ((int)p.hand.size(), 5);
+    CHECK_EQ((int)p.hand.size(), 7);
     CHECK_EQ((int)g.table().size(), 3);
     for (const Meld& m : g.table()) CHECK_EQ(m.owner, 0);
     CHECK_EQ(g.table()[1].ids(), (V{T(B, 11), T(B, 12), T(B, 13)})); // descending normalised
@@ -1369,9 +1368,11 @@ void testOpeningThreshold() {
 void testOpeningErrors() {
     Game g;
     Setup s;
-    V open = {T(R, 12), T(R, 13), T(R, 1), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)};
-    G gOpen = {{T(R, 12), T(R, 13), T(R, 1)}, {T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
+    V open = {T(R, 13), T(K, 13), T(Y, 13), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)};
+    G gOpen = {{T(R, 13), T(K, 13), T(Y, 13)}, {T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
     s.hands[0] = open;
+    s.hands[0].push_back(T(R, 12));
+    s.hands[0].push_back(T(R, 1));
     s.hands[0].push_back(T(Y, 9));
     s.hands[0].push_back(T(B, 9));
     s.hands[0].push_back(T(K, 9));
@@ -1392,9 +1393,10 @@ void testOpeningErrors() {
     };
     expectFail({}, "Per seçmedin");
     expectFail({{T(R, 5), T(R, 5, 1)}, {T(Y, 9), T(B, 9), T(K, 9)}}, "Seri ve çift karıştırılamaz");
-    expectFail({{T(R, 12), T(R, 13), T(R, 1)}, {T(Y, 9), T(B, 9), T(B, 9, 1)}}, "Grupta aynı renk iki kez olamaz");
+    expectFail({{T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 9), T(B, 9), T(B, 9, 1)}}, "Grupta aynı renk iki kez olamaz");
     expectFail({{T(R, 12), T(R, 13), T(K, 1)}}, "Bu taş sende yok");
-    expectFail({{T(R, 12), T(R, 13), T(R, 1)}, {T(Y, 12), T(B, 12), T(K, 12)}}, "Bu taş sende yok");
+    expectFail({{T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 12), T(B, 12), T(K, 12)}}, "Bu taş sende yok");
+    expectFail({{T(R, 12), T(R, 13), T(R, 1)}}, "Sayılar ardışık değil"); // 101: no 12-13-1
     expectFail({{T(Y, 9), T(B, 9), T(K, 9)}, {T(K, 9), T(B, 9, 1), T(R, 5)}}, "Aynı taş iki kez kullanılamaz");
     expectFail({{T(R, 5), T(R, 5, 1)}, {T(R, 1)}}, "Çift iki taştan oluşmalı");
     expectFail({{T(R, 12), T(R, 13), T(R, 1), T(Y, 5)}}, "Seri aynı renkten olmalı");
@@ -1477,26 +1479,26 @@ void testPendingLeft() {
     Setup s;
     s.hands[0] = {T(R, 12), T(R, 13), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8),
                   T(Y, 10), T(B, 10), T(K, 10), T(K, 11), T(K, 12), T(K, 13), T(R, 4)};
-    s.discards[3] = {T(Y, 2), T(R, 1)};
+    s.discards[3] = {T(Y, 2), T(R, 11)};
     s.stage = TurnStage::NeedDraw;
     apply(g, s);
     CHECK(g.canTakeFromLeft(0));
     CHECK(g.takeFromLeft(0).ok);
-    CHECK_EQ(g.pendingLeftTile(), T(R, 1));
+    CHECK_EQ(g.pendingLeftTile(), T(R, 11));
     CHECK_EQ(g.topDiscard(3), T(Y, 2));
     g.drainEvents();
     G without = {{T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)},
-                 {T(Y, 10), T(B, 10), T(K, 10)}, {T(K, 11), T(K, 12), T(K, 13)}}; // 128 without R1
+                 {T(Y, 10), T(B, 10), T(K, 10)}, {T(K, 11), T(K, 12), T(K, 13)}}; // 128 without R11
     OpenCheck c = g.checkOpen(0, without);
     CHECK(!c.valid);
     CHECK_EQ(c.value, 36 + 26 + 30 + 36);
     CHECK_EQ(c.error, std::string("Yandan aldığın taş açılışta yer almalı"));
     CHECK_EQ(g.openHand(0, without).error, std::string("Yandan aldığın taş açılışta yer almalı"));
     G with = without;
-    with.push_back({T(R, 12), T(R, 13), T(R, 1)});
+    with.push_back({T(R, 11), T(R, 12), T(R, 13)});
     CHECK(g.openHand(0, with).ok);
     CHECK_EQ(g.pendingLeftTile(), -1);
-    CHECK_EQ(g.player(0).openValue, 128 + 39);
+    CHECK_EQ(g.player(0).openValue, 128 + 36);
     CHECK(g.discard(0, T(R, 4)).ok);
 
     // already-opened player uses the left tile by işleme
@@ -1585,11 +1587,11 @@ void testWaitTurnOff() {
     Setup s;
     s.cfg.waitTurnAfterOpening = false;
     s.table = {mk({T(K, 5), T(K, 6), T(K, 7)}, 2)};
-    s.hands[0] = {T(R, 12), T(R, 13), T(R, 1), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8),
+    s.hands[0] = {T(R, 13), T(Y, 13), T(K, 13), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8),
                   T(K, 8), T(Y, 1), T(B, 2), T(B, 3), T(B, 4)};
     apply(g, s);
     markOpened(g, 2, false);
-    CHECK(g.openHand(0, {{T(R, 12), T(R, 13), T(R, 1)}, {T(B, 11), T(B, 12), T(B, 13)},
+    CHECK(g.openHand(0, {{T(R, 13), T(Y, 13), T(K, 13)}, {T(B, 11), T(B, 12), T(B, 13)},
                          {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}})
               .ok);
     CHECK(g.canWorkTable(0));
@@ -1597,6 +1599,63 @@ void testWaitTurnOff() {
     CHECK(g.checkLay(0, {{T(B, 2), T(B, 3), T(B, 4)}}).valid);
     CHECK(g.layMelds(0, {{T(B, 2), T(B, 3), T(B, 4)}}).ok);
     CHECK_EQ((int)g.player(0).hand.size(), 1);
+}
+
+// Katlamalı oyun: every opening must beat the previous one of its kind by at least one (116 -> 117, 5 çift -> 6).
+void testKatlamali() {
+    Game g;
+    Setup s;
+    // 13-13-13 (39) + 11-12-13 (36) + 5-6-7-8 (26) = 101; with 9-9-9 (27) = 128
+    s.hands[0] = {T(R, 13), T(K, 13), T(Y, 13), T(B, 11), T(B, 12), T(B, 13), T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8),
+                  T(Y, 9), T(B, 9), T(K, 9), T(R, 1)};
+    const G g101 = {{T(R, 13), T(K, 13), T(Y, 13)}, {T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
+    G g128 = g101;
+    g128.push_back({T(Y, 9), T(B, 9), T(K, 9)});
+
+    // off: a later opener still needs just 101
+    apply(g, s);
+    markOpened(g, 1, false);
+    g.debugPlayer(1).openValue = 116;
+    CHECK_EQ(g.seriesOpenNeed(), 101);
+    CHECK_EQ(g.pairsOpenNeed(), 5);
+    CHECK(g.checkOpen(0, g101).valid);
+
+    // on: one more than the highest series opening on the table
+    s.cfg.katlamali = true;
+    apply(g, s);
+    CHECK_EQ(g.seriesOpenNeed(), 101); // nobody opened yet
+    markOpened(g, 1, false);
+    g.debugPlayer(1).openValue = 116;
+    markOpened(g, 3, false);
+    g.debugPlayer(3).openValue = 108;
+    CHECK_EQ(g.seriesOpenNeed(), 117);
+    CHECK_EQ(g.pairsOpenNeed(), 5); // pair openings are counted apart
+    OpenCheck c = g.checkOpen(0, g101);
+    CHECK(!c.valid);
+    CHECK_EQ(c.error, std::string("Katlamalı: açmak için en az 117 gerekli (şu an 101)"));
+    CHECK_EQ(g.openHand(0, g101).error, c.error);
+    CHECK(g.checkOpen(0, g128).valid);
+    CHECK(g.openHand(0, g128).ok);
+    CHECK_EQ(g.player(0).openValue, 128);
+    CHECK_EQ(g.seriesOpenNeed(), 129); // the bar moves on for whoever opens next
+
+    // pairs: one pair more than the last pair opening
+    Setup p = s;
+    p.hands[0] = {T(R, 5), T(R, 5, 1), T(B, 9), T(B, 9, 1), T(Y, 1), T(Y, 1, 1), T(K, 12), T(K, 12, 1), T(R, 13),
+                  T(R, 13, 1), T(Y, 7), T(Y, 7, 1), T(B, 2)};
+    apply(g, p);
+    markOpened(g, 2, true); // 5 pairs
+    CHECK_EQ(g.pairsOpenNeed(), 6);
+    CHECK_EQ(g.seriesOpenNeed(), 101);
+    const G five = {{T(R, 5), T(R, 5, 1)}, {T(B, 9), T(B, 9, 1)}, {T(Y, 1), T(Y, 1, 1)}, {T(K, 12), T(K, 12, 1)},
+                    {T(R, 13), T(R, 13, 1)}};
+    G six = five;
+    six.push_back({T(Y, 7), T(Y, 7, 1)});
+    c = g.checkOpen(0, five);
+    CHECK(!c.valid);
+    CHECK_EQ(c.error, std::string("Katlamalı: çift açmak için en az 6 çift gerekli (şu an 5)"));
+    CHECK(g.openHand(0, six).ok);
+    CHECK_EQ(g.pairsOpenNeed(), 7);
 }
 
 void testLayMelds() {
@@ -1609,8 +1668,9 @@ void testLayMelds() {
     markOpened(g, 2, false);
     V snap = snapshot(g);
     ActionResult r = g.layMelds(0, {{T(R, 11), T(R, 12), T(R, 13)}});
-    CHECK_EQ(r.error, std::string("Çiftle açan sadece çift açabilir"));
-    CHECK_EQ(g.checkLay(0, {{T(R, 11), T(R, 12), T(R, 13)}}).error, std::string("Çiftle açan sadece çift açabilir"));
+    CHECK_EQ(r.error, std::string("Çiftle açan yeni seri açamaz, sadece çift açabilir"));
+    CHECK_EQ(g.checkLay(0, {{T(R, 11), T(R, 12), T(R, 13)}}).error,
+             std::string("Çiftle açan yeni seri açamaz, sadece çift açabilir"));
     CHECK_EQ(g.layMelds(0, {{T(B, 9), T(B, 9, 1)}, {T(R, 11), T(R, 12), T(R, 13)}}).error,
              std::string("Seri ve çift karıştırılamaz"));
     CHECK_EQ(g.layMelds(0, {}).error, std::string("Per seçmedin"));
@@ -1629,13 +1689,15 @@ void testLayMelds() {
     CHECK(g.addToMeld(0, T(K, 8), 1).ok);
     CHECK_EQ(g.table()[1].owner, 2);
 
-    // series openers can't lay pairs; any value is fine after opening
+    // series openers can't lay pairs while nobody else opened with pairs; any value is fine after opening
     Setup t;
     t.table = {mk({T(K, 5), T(K, 6), T(K, 7)}, 0)};
     t.hands[0] = {T(B, 9), T(B, 9, 1), T(Y, 1), T(Y, 2), T(Y, 3), T(R, 13)};
     apply(g, t);
     markOpened(g, 0, false);
-    CHECK_EQ(g.layMelds(0, {{T(B, 9), T(B, 9, 1)}}).error, std::string("Seriyle açan çift açamaz"));
+    CHECK(!g.pairsOpenedByOther(0));
+    CHECK_EQ(g.layMelds(0, {{T(B, 9), T(B, 9, 1)}}).error,
+             std::string("Seriyle açan, masada çift açan biri yokken çift açamaz"));
     CHECK(g.layMelds(0, {{T(Y, 1), T(Y, 2), T(Y, 3)}}).ok);
     ev = g.drainEvents();
     CHECK(!ev.empty() && ev[0].text == "Yeni per açtın");
@@ -1650,6 +1712,23 @@ void testLayMelds() {
     apply(g, u);
     CHECK_EQ(g.layMelds(0, {{T(Y, 1), T(Y, 2), T(Y, 3)}}).error, std::string("Önce elini açmalısın"));
     CHECK_EQ(g.checkLay(0, {{T(Y, 1), T(Y, 2), T(Y, 3)}}).error, std::string("Önce elini açmalısın"));
+
+    // ... but once someone else opened with pairs, a series opener may lay (any number of) pairs too
+    Setup v;
+    v.table = {mk({T(K, 5), T(K, 6), T(K, 7)}, 0), mk({T(R, 2), T(R, 2, 1)}, 1, true)};
+    v.hands[0] = {T(B, 9), T(B, 9, 1), T(Y, 4), T(Y, 4, 1), T(R, 13)};
+    apply(g, v);
+    markOpened(g, 0, false);
+    markOpened(g, 1, true);
+    CHECK(g.pairsOpenedByOther(0));
+    CHECK(!g.pairsOpenedByOther(1));
+    OpenCheck pc = g.checkLay(0, {{T(B, 9), T(B, 9, 1)}});
+    CHECK(pc.valid && pc.pairs && pc.pairCount == 1);
+    CHECK(g.layMelds(0, {{T(B, 9), T(B, 9, 1)}, {T(Y, 4), T(Y, 4, 1)}}).ok);
+    CHECK_EQ((int)g.player(0).hand.size(), 1);
+    CHECK(!g.player(0).openedWithPairs); // still a series opener (scored as one)
+    ev = g.drainEvents();
+    CHECK(!ev.empty() && ev[0].text == "2 yeni çift açtın");
 }
 
 void testIsleme() {
@@ -1887,7 +1966,7 @@ void testScoring() {
     Setup s;
     s.hands[0] = {T(R, 9)};
     s.hands[1] = {T(Y, 1), T(Y, 2), T(B, 13)}; // unopened
-    s.hands[2] = {T(B, 5), GJ1};               // series opener: 5 + 101
+    s.hands[2] = {T(B, 5), GJ1};               // series opener: 5, and 101 for the okey left in hand
     s.hands[3] = {T(Y, 4), T(K, 6)};           // pairs opener: 10 x2
     apply(g, s);
     markOpened(g, 0, false);
@@ -1910,9 +1989,10 @@ void testScoring() {
     CHECK_EQ(r.score[3], 20);
     CHECK_EQ(r.remaining[0], 0);
     CHECK_EQ(r.remaining[1], 16);
-    CHECK_EQ(r.remaining[2], 106);
+    CHECK_EQ(r.remaining[2], 5);
     CHECK_EQ(r.remaining[3], 10);
     CHECK_EQ(r.penalties[1], 101);
+    CHECK_EQ(r.penalties[2], 101); // elinde okey kalan: 101 ceza
     CHECK_EQ(r.penalties[0], 0);
     for (int p = 0; p < 4; ++p) {
         CHECK_EQ(g.player(p).totalScore, before[p] + r.score[p]);
@@ -1973,22 +2053,25 @@ void testScoring() {
     CHECK_EQ(g.lastHandResult().multiplier, 2);
     CHECK_EQ(g.lastHandResult().score[0], -202);
     CHECK_EQ(g.lastHandResult().score[1], 404);
-    CHECK_EQ(g.lastHandResult().score[2], 212);
+    CHECK_EQ(g.lastHandResult().score[2], 5 * 2 + 101); // the okey penalty is not doubled
     CHECK_EQ(g.lastHandResult().score[3], 40);
 }
 
-// Elden bitiş: open and finish in the same turn (x2), combined with okey (x4) and pairs (x8).
+// Elden bitiş: while nobody has opened, a player lays the whole hand at once and finishes (x2), combined
+// with okey (x4) and pairs (x8). Opening and finishing in one turn after someone else opened is a normal finish.
 void testEldenBitis() {
     Game g;
     g.setPlayer(3, "Emekli Nuri", false);
     Setup s;
-    G series = {{T(R, 12), T(R, 13), T(R, 1)}, {T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
+    G series = {{T(R, 13), T(K, 13), T(Y, 13)}, {T(B, 11), T(B, 12), T(B, 13)}, {T(Y, 5), T(Y, 6), T(Y, 7), T(Y, 8)}};
     for (const V& m : series) s.hands[3].insert(s.hands[3].end(), m.begin(), m.end());
     s.hands[3].push_back(T(B, 4));
     s.hands[0] = {T(Y, 1), T(Y, 2), T(B, 13, 1)}; // unopened
-    s.hands[1] = {T(K, 9), T(K, 10)};             // opened with series: 19
+    s.hands[1] = {T(K, 9), T(K, 10)};             // 19 (opened in the first case)
     s.hands[2] = {T(R, 2)};                       // unopened
     s.seat = 3;
+
+    // somebody (seat 1) had already opened: not elden
     apply(g, s);
     markOpened(g, 1, false);
     CHECK(g.openHand(3, series).ok);
@@ -1996,22 +2079,36 @@ void testEldenBitis() {
     CHECK(!ev.empty() && ev[0].text == "Emekli Nuri eli açtı (101)");
     CHECK(g.discard(3, T(B, 4)).ok);
     HandResult r = g.lastHandResult();
+    CHECK(!r.finishedInOneGo);
+    CHECK_EQ(r.multiplier, 1);
+    CHECK_EQ(r.score[3], -101);
+    CHECK_EQ(r.score[0], 202);
+    CHECK_EQ(r.score[1], 19);
+    ev = g.drainEvents();
+    const GameEvent* he = findEv(ev, EvType::HandEnd);
+    CHECK(he && he->text == "Emekli Nuri eli bitirdi!");
+
+    // nobody had opened: elden
+    apply(g, s);
+    CHECK(g.openHand(3, series).ok);
+    g.drainEvents();
+    CHECK(g.discard(3, T(B, 4)).ok);
+    r = g.lastHandResult();
     CHECK(r.finishedInOneGo);
     CHECK(!r.finishedWithJoker && !r.finishedWithPairs);
     CHECK_EQ(r.multiplier, 2);
     CHECK_EQ(r.score[3], -202);
     CHECK_EQ(r.score[0], 404);
+    CHECK_EQ(r.score[1], 404);
     CHECK_EQ(r.score[2], 404);
-    CHECK_EQ(r.score[1], 2 * 19);
     ev = g.drainEvents();
-    const GameEvent* he = findEv(ev, EvType::HandEnd);
+    he = findEv(ev, EvType::HandEnd);
     CHECK(he && he->text == "Emekli Nuri eli bitirdi! (elden bitiş, ×2)");
 
     // elden + okey
     Setup s2 = s;
     s2.hands[3].back() = GJ1;
     apply(g, s2);
-    markOpened(g, 1, false);
     CHECK(g.openHand(3, series).ok);
     CHECK(g.discard(3, GJ1).ok);
     r = g.lastHandResult();
@@ -2241,35 +2338,30 @@ G greedySeries(const V& hand, const OkeyInfo& ok, Rng& rng) {
 
     auto runs = [&](bool withJokers) {
         for (int c = 0; c < NUM_COLORS; ++c) {
-            int slot[ACE_HIGH_NUMBER + 2];
-            std::fill(slot, slot + ACE_HIGH_NUMBER + 2, -1);
+            int slot[NUM_NUMBERS + 2];
+            std::fill(slot, slot + NUM_NUMBERS + 2, -1);
             for (int i = 0; i < (int)plain.size(); ++i) {
                 if (used[i] || ok.faceColor(plain[i]) != c) continue;
                 const int n = ok.faceNumber(plain[i]);
                 if (slot[n] < 0) slot[n] = i;
-                else if (n == 1 && slot[ACE_HIGH_NUMBER] < 0) slot[ACE_HIGH_NUMBER] = i;
-            }
-            if (slot[14] < 0 && slot[1] >= 0 && slot[12] >= 0 && slot[13] >= 0 && slot[2] < 0) {
-                slot[14] = slot[1];
-                slot[1] = -1;
             }
             int n = 1;
-            while (n <= ACE_HIGH_NUMBER) {
+            while (n <= NUM_NUMBERS) {
                 if (slot[n] < 0) {
                     ++n;
                     continue;
                 }
                 int e = n;
-                while (e + 1 <= ACE_HIGH_NUMBER && slot[e + 1] >= 0) ++e;
+                while (e + 1 <= NUM_NUMBERS && slot[e + 1] >= 0) ++e;
                 const int len = e - n + 1;
                 int next = e + 1;
                 V m;
                 if (len >= 3) {
                     for (int k = n; k <= e; ++k) m.push_back(plain[slot[k]]);
                 } else if (withJokers && !jokers.empty()) {
-                    if (len == 2 && e + 1 <= ACE_HIGH_NUMBER) m = {plain[slot[n]], plain[slot[e]], jokers.back()};
+                    if (len == 2 && e + 1 <= NUM_NUMBERS) m = {plain[slot[n]], plain[slot[e]], jokers.back()};
                     else if (len == 2 && n > 1) m = {jokers.back(), plain[slot[n]], plain[slot[e]]};
-                    else if (len == 1 && n + 2 <= ACE_HIGH_NUMBER && slot[n + 2] >= 0) {
+                    else if (len == 1 && n + 2 <= NUM_NUMBERS && slot[n + 2] >= 0) {
                         m = {plain[slot[n]], jokers.back(), plain[slot[n + 2]]};
                         next = n + 3;
                     }
@@ -2525,7 +2617,9 @@ private:
             CHECK(!w.discards.empty());
             if (!w.discards.empty()) CHECK_EQ(r.finishedWithJoker, g_.okey().isJoker(w.discards.back()));
             CHECK_EQ(r.finishedWithPairs, w.openedWithPairs);
-            CHECK_EQ(r.finishedInOneGo, w.openedTurn == g_.turnNumber());
+            bool othersOpened = false;
+            for (int s = 0; s < 4; ++s) othersOpened = othersOpened || (s != r.winner && g_.player(s).opened);
+            CHECK_EQ(r.finishedInOneGo, w.openedTurn == g_.turnNumber() && !othersOpened);
             if (r.finishedWithJoker) ++st_.okeyFinish;
             if (r.finishedWithPairs) ++st_.pairFinish;
             if (r.finishedInOneGo) ++st_.eldenFinish;
@@ -2549,7 +2643,9 @@ private:
             CHECK_EQ(r.score[s], expect);
             CHECK_EQ(r.remaining[s], g_.handPoints(s));
             CHECK_EQ(r.penalties[s], p.handPenalty);
-            CHECK_EQ(p.handPenalty, penaltySum_[s]);
+            // (+ the end-of-hand penalty for every okey left in an opened loser's hand)
+            const int okeyLeft = (s != r.winner && p.opened) ? cfg_.penalty * g_.jokersInHand(s) : 0;
+            CHECK_EQ(p.handPenalty, penaltySum_[s] + okeyLeft);
             CHECK_EQ(p.totalScore, totalsBefore_[s] + r.score[s]);
             CHECK(!p.handScores.empty() && p.handScores.back() == r.score[s]);
             int sum = 0;
@@ -2586,6 +2682,8 @@ private:
         const int pileBefore = g_.pileCount();
         const ActionResult r = act([&] { return g_.discard(seat, tile); });
         CHECK(r.ok);
+        if (g_.handState() != HandState::Playing && !finishing && g_.player(seat).opened)
+            expectPenalty += cfg_.penalty * g_.jokersInHand(seat); // the hand ended with okeys still in hand
         CHECK_EQ(g_.player(seat).handPenalty, before + expectPenalty);
         CHECK_EQ(g_.player(seat).discards.back(), tile);
         if (finishing) {
@@ -2771,10 +2869,10 @@ private:
         if (!p.opened) {
             G ser = greedySeries(hand, ok, rng_);
             keepOne(ser, (int)hand.size(), t, ok, false);
-            if (containsIn(ser, t) && seriesTotal(ser, ok) >= cfg_.openThreshold) return true;
+            if (containsIn(ser, t) && seriesTotal(ser, ok) >= g_.seriesOpenNeed()) return true;
             G prs = greedyPairs(hand, ok);
             keepOne(prs, (int)hand.size(), t, ok, true);
-            return containsIn(prs, t) && (int)prs.size() >= cfg_.minPairsToOpen;
+            return containsIn(prs, t) && (int)prs.size() >= g_.pairsOpenNeed();
         }
         if (fitsAnyMeld(g_.table(), t, ok)) return true;
         G more = p.openedWithPairs ? greedyPairs(hand, ok) : greedySeries(hand, ok, rng_);
@@ -2789,11 +2887,11 @@ private:
             const V hand = g_.player(seat).hand;
             G ser = greedySeries(hand, ok, rng_);
             keepOne(ser, (int)hand.size(), pend, ok, false);
-            const bool serOk = !ser.empty() && seriesTotal(ser, ok) >= cfg_.openThreshold &&
+            const bool serOk = !ser.empty() && seriesTotal(ser, ok) >= g_.seriesOpenNeed() &&
                                (pend < 0 || containsIn(ser, pend));
             G prs = greedyPairs(hand, ok);
             keepOne(prs, (int)hand.size(), pend, ok, true);
-            const bool prOk = (int)prs.size() >= cfg_.minPairsToOpen && (pend < 0 || containsIn(prs, pend));
+            const bool prOk = (int)prs.size() >= g_.pairsOpenNeed() && (pend < 0 || containsIn(prs, pend));
             if (!serOk && !prOk) continue;
             const bool usePairs = prOk && (!serOk || rng_.chance(0.5f));
             const G& melds = usePairs ? prs : ser;
@@ -2985,6 +3083,10 @@ void testFuzz(int scale) {
     odd.winnerScore = -75;
     odd.penaltyPlayableDiscard = false;
     runFuzz("mixed/custom-scores", odd, {R_, G_, G_, G_}, 150 * scale, 5, total);
+    RulesConfig kat;
+    kat.katlamali = true;
+    kat.openThreshold = 70; // (so that several players reach an opening and the bar really climbs)
+    runFuzz("greedy/katlamali", kat, {G_, G_, G_, G_}, 150 * scale, 6, total);
 
     // the greedy fuzz must really reach the interesting paths
     CHECK(total.finishes > 100);
@@ -2997,7 +3099,8 @@ void testFuzz(int scale) {
     CHECK(total.returns > 50);
     CHECK(total.okeyFinish > 0);
     CHECK(total.pairFinish > 0);
-    CHECK(total.eldenFinish > 0);
+    // (elden bitiş needs the first opener to lay the whole hand at once: rare for the greedy fuzz, covered by
+    // testEldenBitis)
     CHECK(total.penalties > 100);
     std::printf("  fuzz total: %ld matches, %ld hands, %ld actions (%ld rejected)\n", total.matches, total.hands,
                 total.actions, total.rejected);
@@ -3046,6 +3149,7 @@ int main(int argc, char** argv) {
         {"game: pairs opening", testPairsOpening},
         {"game: pending left tile", testPendingLeft},
         {"game: waitTurnAfterOpening off", testWaitTurnOff},
+        {"game: katlamalı", testKatlamali},
         {"game: layMelds", testLayMelds},
         {"game: işleme", testIsleme},
         {"game: joker swap", testSwapJokerGame},

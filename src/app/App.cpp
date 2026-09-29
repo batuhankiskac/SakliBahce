@@ -239,6 +239,7 @@ void loadSettings(ui::Settings& s) {
         else if (k == "ortam") s.ambient = iv != 0;
         else if (k == "muzik") s.music = iv != 0;
         else if (k == "ipucu") s.hints = iv != 0;
+        else if (k == "katlamali") s.katlamali = iv != 0;
         else if (k == "hiz") s.animSpeed = std::clamp((float)std::atof(v.c_str()), 0.5f, 2.f);
         else if (k == "isim" && !v.empty() && v.size() <= 64) s.playerName = v;
     }
@@ -250,9 +251,11 @@ void saveSettings(const ui::Settings& s) {
     const std::string dir = path.substr(0, path.find_last_of('/'));
     if (!DirectoryExists(dir.c_str()) && MakeDirectory(dir.c_str()) != 0) return;
     char buf[512];
-    std::snprintf(buf, sizeof buf, "# SaklıBahçe ayarları\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\nhiz=%.2f\nisim=%s\n",
+    std::snprintf(buf, sizeof buf,
+                  "# SaklıBahçe ayarları\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\nkatlamali=%d\n"
+                  "hiz=%.2f\nisim=%s\n",
                   s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
-                  (double)s.animSpeed, s.playerName.c_str());
+                  s.katlamali ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
     SaveFileText(path.c_str(), buf);
 }
 
@@ -868,6 +871,7 @@ void App::startMatch() {
     const ui::Settings& st = screens_.settings();
     okey::RulesConfig cfg;
     cfg.numHands = std::clamp(st.numHands, 1, 11);
+    cfg.katlamali = st.katlamali || opt_.katlamali;
     game_.setRules(cfg);
     const std::array<std::string, 4> nm = names();
     for (int s = 0; s < 4; ++s) game_.setPlayer(s, nm[s], s == HUMAN);
@@ -1076,6 +1080,13 @@ void App::pumpEvents() {
                 const w3d::RectXZ z = w3d::MELD_ZONE[e.player];
                 pcam_.glanceAt({(z.x0 + z.x1) * 0.5f, w3d::TABLE_Y, (z.z0 + z.z1) * 0.5f}, 1.1f);
             }
+            // katlamalı: say where the bar is now (while the player still has to open)
+            if (game_.rules().katlamali && e.player != HUMAN && !game_.player(HUMAN).opened) {
+                const bool pairs = e.player >= 0 && game_.player(e.player).openedWithPairs;
+                table_.toast(pairs ? "Katlamalı: çift açmak için artık en az " + std::to_string(game_.pairsOpenNeed()) + " çift"
+                                   : "Katlamalı: açmak için artık en az " + std::to_string(game_.seriesOpenNeed()),
+                             ui::pal::Highlight, 3.2f);
+            }
             break;
         case EvType::HandEnd: {
             cancelThink();
@@ -1140,7 +1151,8 @@ void App::updateScoreboard() {
     const std::string title = game_.handState() == okey::HandState::MatchOver
                                   ? std::string("Maç bitti")
                                   : "El " + std::to_string(std::min(game_.handIndex() + 1, game_.numHands())) + " / " +
-                                        std::to_string(game_.numHands());
+                                        std::to_string(game_.numHands()) +
+                                        (game_.rules().katlamali ? " · Katlamalı" : "");
     std::vector<std::string> lines;
     for (int s = 0; s < 4; ++s) lines.push_back(game_.player(s).name + " ....... " + std::to_string(game_.player(s).totalScore));
     room_.setScoreboard(title, lines);
@@ -1392,6 +1404,7 @@ void printUsage(const char* argv0) {
                 "  --hands N         el sayısı (1-11)\n"
                 "  --level L         rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt\n"
                 "  --ai              Yapay Zeka modunda başla: senin yerine yapay zeka oynar (oyunda Y ile aç/kapa)\n"
+                "  --katlamali       katlamalı oyun: her açan, öncekinden en az 1 fazlasıyla açar\n"
                 "  --autoplay        senin yerine de bir Usta bot oynar (izleme modu)\n"
                 "  --speed X         oyunu X kat hızlı oynat (ör. 4)\n"
                 "  --matches N       --autoplay ile: arka arkaya N maç (her ikincisi giriş ekranından geçer)\n"
@@ -1445,6 +1458,8 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
             o.autoplay = true;
         } else if (a == "--ai") {
             o.ai = true;
+        } else if (a == "--katlamali") {
+            o.katlamali = true;
         } else if (a == "--ai-chaos") {
             o.aiChaos = true;
         } else if (a == "--speed") {

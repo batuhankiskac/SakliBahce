@@ -1,6 +1,7 @@
 // Headless bot-vs-bot simulation for SaklıBahçe.
 //
-//   sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] [--no-wait] [--match H]
+//   sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] [--no-wait] [--katlamali]
+//       [--match H]
 //       [--slow MS]
 //
 // levels: 0 = Acemi (Easy), 1 = Usta (Normal), 2 = Kurt (Hard), one per seat. --rotate shifts the level
@@ -153,11 +154,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--rotate")) rotate = true;
         else if (!std::strcmp(argv[i], "--duplicate")) duplicate = rotate = true;
         else if (!std::strcmp(argv[i], "--no-wait")) rules.waitTurnAfterOpening = false;
+        else if (!std::strcmp(argv[i], "--katlamali")) rules.katlamali = true;
         else if (!std::strcmp(argv[i], "--match") && i + 1 < argc) rules.numHands = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--slow") && i + 1 < argc) slowMs = std::atof(argv[++i]);
         else {
             std::fprintf(stderr, "usage: sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] "
-                                 "[--no-wait] [--match H] [--slow MS]\n");
+                                 "[--no-wait] [--katlamali] [--match H] [--slow MS]\n");
             return 2;
         }
     }

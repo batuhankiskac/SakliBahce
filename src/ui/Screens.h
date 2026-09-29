@@ -28,6 +28,7 @@ struct Settings {
     bool music = true;
     float animSpeed = 1.f;     // 0.5 .. 2
     bool hints = true;
+    bool katlamali = false;    // Katlamalı oyun (okey::RulesConfig::katlamali), from the next match
     std::string playerName = "Sen";
 };
 

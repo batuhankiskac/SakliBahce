@@ -113,6 +113,7 @@ struct Model {
     std::vector<Meld> table;
     bool opened = false;
     bool pairsOpener = false;
+    bool pairsOnTable = false;  // someone else opened with pairs: a series opener may lay pairs too
     bool canWork = false;
     int pending = -1;
     uint64_t sig() const { return signature(handIndex, turn, stage, pending, hand, table); }
@@ -133,7 +134,6 @@ struct Knowledge {
     std::vector<int> unseen; // Kurt: physical tiles that may still come from the pile
 
     int live(int c, int n) const {
-        if (n == ACE_HIGH_NUMBER) n = 1;
         if (n < 1 || n > NUM_NUMBERS) return 0;
         return std::max(0, 2 - visible[c][n] - mine[c][n]);
     }
@@ -197,6 +197,7 @@ struct Bot::Impl {
         m.table = game.table();
         m.opened = p.opened;
         m.pairsOpener = p.openedWithPairs;
+        m.pairsOnTable = game.pairsOpenedByOther(seat);
         m.canWork = game.canWorkTable(seat);
         m.pending = game.pendingLeftTile();
         return m;
@@ -426,12 +427,12 @@ struct Bot::Impl {
                 if (id == m.pending) usesPending = true;
             }
         }
-        const RulesConfig& rc = g->rules();
         if (opening) {
-            if (pairs ? (int)melds.size() < rc.minPairsToOpen : value < rc.openThreshold) return false;
+            if (pairs ? (int)melds.size() < g->pairsOpenNeed() : value < g->seriesOpenNeed()) return false;
             if (m.pending >= 0 && !usesPending) return false;
         } else {
-            if (pairs != m.pairsOpener) return false;
+            if (pairs != m.pairsOpener && !(pairs && m.pairsOnTable)) return false;
+            if (!m.canWork) return false;
         }
         const size_t used = seen.size();
         if (used >= m.hand.size()) return false;
@@ -530,7 +531,7 @@ struct Bot::Impl {
     // ---- opening ----
     bool wantPairs(const SolveResult& pr, int seriesValue, bool forcedByPending) const {
         const RulesConfig& rc = g->rules();
-        if (pr.value < rc.minPairsToOpen) return false;
+        if (pr.value < g->pairsOpenNeed()) return false;
         if (forcedByPending) return true;
         const int pile = g->pileCount();
         std::vector<int> rest = pr.leftovers;
@@ -539,14 +540,14 @@ struct Bot::Impl {
         // Late in the hand anything that beats the unopened score is worth it.
         if (pile <= 3) return 2 * restPts < rc.unopenedScore + 40;
         switch (level) {
-        case BotLevel::Easy: return pc >= rc.minPairsToOpen + 1 || pile <= 10;
-        case BotLevel::Normal: return pc >= rc.minPairsToOpen + 1 || seriesValue < rc.openThreshold - 30 || pile <= 14;
+        case BotLevel::Easy: return pc >= g->pairsOpenNeed() + 1 || pile <= 10;
+        case BotLevel::Normal: return pc >= g->pairsOpenNeed() + 1 || seriesValue < g->seriesOpenNeed() - 30 || pile <= 14;
         case BotLevel::Hard: {
             // With the wait-a-turn rule Kurt rolls both futures out in makePlan (open now or keep the hand).
             if (g->rules().waitTurnAfterOpening) return true;
-            if (pc >= rc.minPairsToOpen + 1) return true;
+            if (pc >= g->pairsOpenNeed() + 1) return true;
             // Doubled points of what stays in hand against the chance of a series opening soon.
-            const bool seriesClose = seriesValue >= rc.openThreshold - 22 && pile >= 14;
+            const bool seriesClose = seriesValue >= g->seriesOpenNeed() - 22 && pile >= 14;
             if (seriesClose) return false;
             return 2 * restPts < rc.unopenedScore + 20 || pile <= 16;
         }
@@ -556,8 +557,7 @@ struct Bot::Impl {
 
     Opening chooseOpening(const Model& m, bool forPending) const {
         Opening op;
-        const RulesConfig& rc = g->rules();
-        const int thr = rc.openThreshold;
+        const int thr = g->seriesOpenNeed();
         const int P = m.pending;
         const std::vector<int>& H = m.hand;
 
@@ -616,9 +616,9 @@ struct Bot::Impl {
         // 3. pairs
         SolveResult pr = solvePairs(H, *ok, P);
         const int seriesValue = rv.feasible ? rv.value : 0;
-        if (pr.feasible && pr.value >= rc.minPairsToOpen && wantPairs(pr, seriesValue, P >= 0)) {
+        if (pr.feasible && pr.value >= g->pairsOpenNeed() && wantPairs(pr, seriesValue, P >= 0)) {
             Groups melds = pr.melds;
-            if (trimToKeepOne(melds, H, P, true, 0, rc.minPairsToOpen, nullptr) && layLegal(m, melds, true)) {
+            if (trimToKeepOne(melds, H, P, true, 0, g->pairsOpenNeed(), nullptr) && layLegal(m, melds, true)) {
                 op.valid = true;
                 op.pairs = true;
                 op.melds = melds;
@@ -659,10 +659,10 @@ struct Bot::Impl {
             int v;
             if (op.pairs) {
                 v = solvePairs(rest, *ok).value;
-                if (v < rc.minPairsToOpen) continue;
+                if (v < g->pairsOpenNeed()) continue;
             } else {
                 v = solve(rest, -1, OBJ_VALUE).value;
-                if (v < rc.openThreshold) continue;
+                if (v < g->seriesOpenNeed()) continue;
             }
             if (v > bestValue || (v == bestValue && ok->handValue(id) < ok->handValue(best))) {
                 bestValue = v;
@@ -822,6 +822,24 @@ struct Bot::Impl {
         return false;
     }
 
+    // A series opener with pairs on the table lays its (okey-free) pairs too: every pair out of the hand.
+    bool layPairsToo(Model& m, const Emit& emit) const {
+        if (m.pairsOpener || !m.pairsOnTable || m.hand.size() < 3) return false;
+        Groups pairs;
+        std::vector<int> pool;
+        for (int id : m.hand)
+            if (!ok->isJoker(id)) pool.push_back(id);
+        for (const auto& pr : solvePairs(pool, *ok).melds)
+            if (pr.size() == 2) pairs.push_back(pr);
+        if (pairs.empty()) return false;
+        if (!trimToKeepOne(pairs, m.hand, -1, true, 0, 1, nullptr) || pairs.empty() || !layLegal(m, pairs, false))
+            return false;
+        BotAction a = layAct(pairs);
+        emit(a);
+        applyToModel(m, a);
+        return true;
+    }
+
     bool layBest(Model& m, const Emit& emit) const {
         Groups melds;
         std::vector<int> pool = m.hand;
@@ -963,6 +981,7 @@ struct Bot::Impl {
             if (!easy() && tryFinish(m, emit)) return true;
             if (layBest(m, emit)) continue;
             if (isleOne(m, emit)) continue;
+            if (layPairsToo(m, emit)) continue;
             break;
         }
         return true;
@@ -971,18 +990,17 @@ struct Bot::Impl {
     // One-draw outlook of an unopened hand: chance that the next drawn tile lets it open (series or
     // pairs) and the expected series value. Every live face is weighted by its unseen copies.
     double outlook(const std::vector<int>& base, const std::vector<int>& fullHand) const {
-        const RulesConfig& rc = g->rules();
         std::vector<int> t = base;
         t.push_back(-1);
         double wsum = 0, pOpen = 0, ev = 0;
         auto tryTile = [&](int id, double w) {
             t.back() = id;
             const int v = solve(t, -1, OBJ_VALUE).value;
-            bool open = v >= rc.openThreshold;
-            if (!open && solvePairs(t, *ok).value >= rc.minPairsToOpen + 1) open = true;
+            bool open = v >= g->seriesOpenNeed();
+            if (!open && solvePairs(t, *ok).value >= g->pairsOpenNeed() + 1) open = true;
             wsum += w;
             if (open) pOpen += w;
-            ev += w * std::min(v, rc.openThreshold + 10);
+            ev += w * std::min(v, g->seriesOpenNeed() + 10);
         };
         for (int c = 0; c < NUM_COLORS; ++c) {
             for (int n = 1; n <= NUM_NUMBERS; ++n) {
@@ -1060,7 +1078,7 @@ struct Bot::Impl {
     // Compact model of the runs/groups on the table for fast işleme checks in rollouts.
     struct TableModel {
         struct Run {
-            int color, lo, hi; // represented numbers, hi <= 14
+            int color, lo, hi; // represented numbers, 1..13
         };
         struct Grp {
             int number, mask, size;
@@ -1086,7 +1104,7 @@ struct Bot::Impl {
         bool place(int c, int n, bool joker, bool apply) {
             for (Run& r : runs) {
                 if (joker) {
-                    if (r.hi < ACE_HIGH_NUMBER) {
+                    if (r.hi < NUM_NUMBERS) {
                         if (apply) ++r.hi;
                         return true;
                     }
@@ -1099,10 +1117,6 @@ struct Bot::Impl {
                 if (c != r.color) continue;
                 if (n == r.hi + 1 && r.hi < NUM_NUMBERS) {
                     if (apply) r.hi = n;
-                    return true;
-                }
-                if (n == 1 && r.hi == NUM_NUMBERS) {
-                    if (apply) r.hi = ACE_HIGH_NUMBER;
                     return true;
                 }
                 if (n == r.lo - 1 && r.lo > 1) {
@@ -1142,7 +1156,7 @@ struct Bot::Impl {
             for (const PlacedTile& t : m.tiles) {
                 if (!t.joker) continue;
                 if (m.kind == MeldKind::Run) {
-                    tm.keys.push_back({t.color, t.number == ACE_HIGH_NUMBER ? 1 : t.number, t.id});
+                    tm.keys.push_back({t.color, t.number, t.id});
                 } else {
                     int present = 0;
                     for (const PlacedTile& u : m.tiles)
@@ -1340,7 +1354,7 @@ struct Bot::Impl {
                                          const std::vector<std::vector<int>>& pileDraws,
                                          const std::vector<std::vector<int>>& leftDraws, uint64_t budget) const {
         const RulesConfig& rc = g->rules();
-        const int thr = rc.openThreshold;
+        const int thr = g->seriesOpenNeed();
         const int D = pileDraws.empty() ? 0 : (int)pileDraws.front().size();
         const double hz = roundHazard();
         const double unopened = rc.unopenedScore;
@@ -1398,10 +1412,10 @@ struct Bot::Impl {
                 int pairTurn = D;
                 for (int j = 0; j < D; ++j) {
                     addFace(f, L[j], 1);
-                    const bool viaLeft = pairsOf(f) >= rc.minPairsToOpen;
+                    const bool viaLeft = pairsOf(f) >= g->pairsOpenNeed();
                     addFace(f, L[j], -1);
                     addFace(f, P[j], 1);
-                    if (viaLeft || pairsOf(f) >= rc.minPairsToOpen) {
+                    if (viaLeft || pairsOf(f) >= g->pairsOpenNeed()) {
                         pairTurn = j;
                         break;
                     }
@@ -1440,7 +1454,7 @@ struct Bot::Impl {
                     // the left tile when it completes the pairs, as in the search above
                     Faces fl;
                     for (int id : held(openTurn, 0, x)) addFace(fl, id, 1);
-                    openVia = pairsOf(fl) >= rc.minPairsToOpen ? 0 : 1;
+                    openVia = pairsOf(fl) >= g->pairsOpenNeed() ? 0 : 1;
                     op = solvePairs(held(openTurn, openVia, x), *ok);
                 } else {
                     const size_t i = 2 * (size_t)openTurn + (size_t)openVia;
@@ -1516,8 +1530,8 @@ struct Bot::Impl {
         for (int id : m.hand)
             if (!has(inMeld, id) && !ok->isJoker(id)) left.push_back(id);
 
-        const bool pairTrack = !m.opened && pairs.value >= std::max(3, rc.minPairsToOpen - 2) &&
-                               series.value < rc.openThreshold - 15;
+        const bool pairTrack = !m.opened && pairs.value >= std::max(3, g->pairsOpenNeed() - 2) &&
+                               series.value < g->seriesOpenNeed() - 15;
         const bool pairOpener = m.opened && m.pairsOpener;
         // Endgame: how much points in hand matter against future potential.
         double potW = 1.0;
@@ -1544,7 +1558,6 @@ struct Bot::Impl {
 
         // Liveness as seen by this level (Easy is optimistic: ignores what is gone).
         auto live = [&](int c, int n) -> double {
-            if (n == ACE_HIGH_NUMBER) n = 1;
             if (n < 1 || n > NUM_NUMBERS) return 0.0;
             if (easy()) return 2.0 - know.mine[c][n];
             return know.live(c, n);
@@ -1562,9 +1575,8 @@ struct Bot::Impl {
                 if (c2 == c) {
                     const int d = std::abs(n2 - n);
                     const int lo = std::min(n, n2), hi = std::max(n, n2);
-                    if (d == 1) pot += 3.0 * (live(c, lo - 1) + (hi == 13 ? live(c, 1) : live(c, hi + 1)));
+                    if (d == 1) pot += 3.0 * (live(c, lo - 1) + live(c, hi + 1));  // (no 12-13-1 in 101)
                     else if (d == 2) pot += 2.5 * live(c, lo + 1);
-                    else if (d == 12 && lo == 1) pot += 2.0 * live(c, 12); // 1 and 13: 12-13-1
                 } else if (n2 == n) {
                     double miss = 0;
                     for (int c3 = 0; c3 < NUM_COLORS; ++c3)
@@ -1576,7 +1588,6 @@ struct Bot::Impl {
                 if (r.color != c) continue;
                 if (n == r.hi + 2 && r.hi + 1 <= NUM_NUMBERS) pot += 1.6 * live(c, r.hi + 1);
                 if (n == r.lo - 2 && r.lo - 1 >= 1) pot += 1.6 * live(c, r.lo - 1);
-                if (n == 1 && r.hi == 12) pot += 1.6 * live(c, 13);
             }
             return pot * (0.7 + n / 20.0);
         };

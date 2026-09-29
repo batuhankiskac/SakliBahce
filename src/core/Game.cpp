@@ -253,8 +253,38 @@ bool Game::isPlayableOnTable(int tile) const { return fitsAnyMeld(table_, tile, 
 int Game::handPoints(int seat) const {
     if (seat < 0 || seat >= NUM_PLAYERS) return 0;
     int sum = 0;
-    for (int id : players_[seat].hand) sum += okey_.handValue(id);
+    for (int id : players_[seat].hand)
+        if (!okey_.isJoker(id)) sum += okey_.faceNumber(id);  // an okey left in hand is a penalty instead
     return sum;
+}
+
+int Game::jokersInHand(int seat) const {
+    if (seat < 0 || seat >= NUM_PLAYERS) return 0;
+    int n = 0;
+    for (int id : players_[seat].hand) n += okey_.isJoker(id) ? 1 : 0;
+    return n;
+}
+
+int Game::seriesOpenNeed() const {
+    int need = cfg_.openThreshold;
+    if (cfg_.katlamali)
+        for (const PlayerInfo& p : players_)
+            if (p.opened && !p.openedWithPairs) need = std::max(need, p.openValue + 1);
+    return need;
+}
+
+int Game::pairsOpenNeed() const {
+    int need = cfg_.minPairsToOpen;
+    if (cfg_.katlamali)
+        for (const PlayerInfo& p : players_)
+            if (p.opened && p.openedWithPairs) need = std::max(need, p.openValue + 1);
+    return need;
+}
+
+bool Game::pairsOpenedByOther(int seat) const {
+    for (int s = 0; s < NUM_PLAYERS; ++s)
+        if (s != seat && players_[s].opened && players_[s].openedWithPairs) return true;
+    return false;
 }
 
 OpenCheck Game::checkOpen(int seat, const std::vector<std::vector<int>>& groups) const {
@@ -534,7 +564,10 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
         const PlayerInfo& w = players_[winner];
         r.finishedWithJoker = finishedWithJoker;
         r.finishedWithPairs = w.opened && w.openedWithPairs;
-        r.finishedInOneGo = w.opened && w.openedTurn == turnNumber_;
+        // elden bitiş: nobody had opened, and the winner laid the whole hand at once and finished
+        bool othersOpened = false;
+        for (int s = 0; s < NUM_PLAYERS; ++s) othersOpened = othersOpened || (s != winner && players_[s].opened);
+        r.finishedInOneGo = w.opened && w.openedTurn == turnNumber_ && !othersOpened;
         if (r.finishedWithJoker) mult *= 2;
         if (r.finishedWithPairs) mult *= 2;
         if (r.finishedInOneGo) mult *= 2;
@@ -543,6 +576,8 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
 
     for (int s = 0; s < NUM_PLAYERS; ++s) {
         PlayerInfo& p = players_[s];
+        // an okey left in an opened player's hand: +101 penalty (not multiplied)
+        if (s != winner && p.opened) p.handPenalty += cfg_.penalty * jokersInHand(s);
         const int rem = handPoints(s);
         int score;
         if (s == winner) score = cfg_.winnerScore * mult;
@@ -716,8 +751,9 @@ OpenCheck Game::evaluate(int seat, const std::vector<std::vector<int>>& groups, 
     if (groups.empty()) return failWith("Per seçmedin");
     if (anyPair && anySeries) return failWith("Seri ve çift karıştırılamaz");
     if (laying) {
-        if (p.openedWithPairs && !pairMode) return failWith("Çiftle açan sadece çift açabilir");
-        if (!p.openedWithPairs && pairMode) return failWith("Seriyle açan çift açamaz");
+        if (p.openedWithPairs && !pairMode) return failWith("Çiftle açan yeni seri açamaz, sadece çift açabilir");
+        if (!p.openedWithPairs && pairMode && !pairsOpenedByOther(seat))
+            return failWith("Seriyle açan, masada çift açan biri yokken çift açamaz");
     }
 
     std::vector<Meld> built;
@@ -725,13 +761,16 @@ OpenCheck Game::evaluate(int seat, const std::vector<std::vector<int>>& groups, 
     if (!buildGroups(seat, groups, pairMode, built, err)) return failWith(err);
 
     if (!laying) {
+        // (katlamalı: the bar is one above the last opening of the same kind)
+        const int needPairs = pairsOpenNeed(), needSeries = seriesOpenNeed();
         if (pairMode) {
-            if (c.pairCount < cfg_.minPairsToOpen)
-                return failWith("Çift açmak için en az " + std::to_string(cfg_.minPairsToOpen) +
-                                " çift gerekli (şu an " + std::to_string(c.pairCount) + ")");
-        } else if (c.value < cfg_.openThreshold) {
-            return failWith("Açmak için en az " + std::to_string(cfg_.openThreshold) + " gerekli (şu an " +
-                            std::to_string(c.value) + ")");
+            if (c.pairCount < needPairs)
+                return failWith(std::string(cfg_.katlamali ? "Katlamalı: çift" : "Çift") + " açmak için en az " +
+                                std::to_string(needPairs) + " çift gerekli (şu an " + std::to_string(c.pairCount) +
+                                ")");
+        } else if (c.value < needSeries) {
+            return failWith(std::string(cfg_.katlamali ? "Katlamalı: açmak" : "Açmak") + " için en az " +
+                            std::to_string(needSeries) + " gerekli (şu an " + std::to_string(c.value) + ")");
         }
     }
 

@@ -87,19 +87,28 @@ Mod her açılışta kapalı başlar; `--ai` ile oyunu doğrudan bu modda bir ma
 - **Tur:** Sıra sende: ya ortadan çekersin ya da solundaki oyuncunun attığı son taşı alırsın. Yandan aldığın taşı
   aynı turda masada kullanmak zorundasın; kullanamazsan geri verirsin (**101 ceza**). Sonra istersen el açar,
   per indirir, işler ya da okey alırsın ve bir taş atarak turu bitirirsin.
-- **Perler:** Aynı renkte ardışık en az üç taş (seri; 12-13-1 olur, 13-1-2 olmaz), aynı sayının farklı renklerinden
-  3–4 taş (grup) ya da iki özdeş taş (çift).
+- **Perler:** Aynı renkte ardışık en az üç taş (seri; seri 13'te biter: normal okeyin aksine 101'de 12-13-1 ve
+  13-1-2 olmaz, 1 yalnızca 1-2-3 diye başta kullanılır), aynı sayının farklı renklerinden 3–4 taş (grup) ya da iki
+  özdeş taş (çift).
 - **El açmak:** Seri ve gruplarla toplam en az **101** sayı, ya da en az **5 çift**. İkisi aynı açılışta karışmaz.
   Açılışa istediğin kadar per koyabilirsin ama açtığın turda işleyemez, yeni per indiremez, okey alamazsın.
-  Sonraki turlarda seriyle açan seri, çiftle açan çift indirir; açmış herkes masadaki seri ve gruplara taş
-  işleyebilir, okeyi gerçek taşıyla değiştirip alabilir. Elinde atacak en az bir taş kalmalıdır.
+  Sonraki turlarda çiftle açan yalnızca çift indirir; seriyle açan seri indirir, masada çiftle açmış başka biri
+  varsa çiftlerini de indirebilir. Açmış herkes masadaki seri ve gruplara taş işleyebilir, okeyi gerçek taşıyla
+  değiştirip alabilir. Elinde atacak en az bir taş kalmalıdır.
 - **Cezalar (+101):** okey atmak (bitiş taşı değilse), masadaki bir pere uyan (işlek) taşı atmak, yandan aldığın
   taşı geri vermek.
 - **El sonu:** Son taşını atan eli bitirir. Deste biterse el kazanansız biter.
 - **Puanlama (düşük puan iyidir):** Bitiren −101, hiç açmayan 202, açanlar elinde kalan taşların toplamını yazar
-  (okey 101 sayılır; çiftle açanın eli iki katı yazılır). Okeyle, çiftten ya da elden (açtığı turda) bitirmek
-  elin çarpanını her biri için ikiye katlar ve çarpan herkesin puanına uygulanır. Cezalar çarpana girmeden
-  eklenir. Maç ayarlardaki el sayısı kadar sürer; toplamı en düşük olan kazanır (eşitlikte birincilik paylaşılır).
+  (çiftle açanın eli iki katı yazılır); açmış birinin elinde okey kaldıysa her okey için **101 ceza**. Okeyle,
+  çiftten ya da elden bitirmek (henüz kimse açmamışken bütün eli tek seferde açıp bitirmek) elin çarpanını her
+  biri için ikiye katlar ve çarpan herkesin puanına uygulanır. Cezalar çarpana girmeden eklenir. Maç
+  ayarlardaki el sayısı kadar sürer; toplamı en düşük olan kazanır (eşitlikte birincilik paylaşılır).
+- **Katlamalı oyun (Ayarlar'dan ya da `--katlamali` ile):** Senden önce biri seriyle açtıysa onun toplamından en
+  az 1 fazlasıyla açarsın (116 → 117), çiftle açtıysa ondan 1 çift fazlasıyla (5 → 6). Seri ve çift ayrı sayılır;
+  masadaki sayaç ve skor tahtası bunu gösterir.
+- **Kaynak:** Kurallar Türkiye'deki yaygın 101 (Zynga 101 Okey Plus ve Digitoy Yüzbir SSS'leri, kahvehane
+  usulü) ile karşılaştırıldı. Bölgeden bölgeye değişen kural: yandan alınıp kullanılamayan taş burada geri verilir
+  ve 101 ceza yazılır.
 
 Kuralların tamamı oyunun içinde **Kurallar** ekranında örneklerle anlatılır.
 
@@ -129,6 +138,7 @@ ayarlarına dokunmaz.
 | `--hands N` | el sayısı (1–11) |
 | `--level L` | rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt |
 | `--ai` | Yapay Zeka modunda bir maçla başla (oyunda **Y** ile aç/kapa) |
+| `--katlamali` | katlamalı oyun: her açan, öncekinden en az 1 fazlasıyla açar (yalnızca o oturum için) |
 | `--autoplay` | senin yerine bir Usta bot oynar (izleme modu); maç bitince oyun kapanır |
 | `--speed X` | oyunu X kat hızlı oynat (ör. `--speed 4`) |
 | `--matches N` | (`--autoplay` ile) arka arkaya N maç; her ikincisi giriş ekranından geçer |
