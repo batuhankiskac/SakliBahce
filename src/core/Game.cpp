@@ -1,0 +1,774 @@
+// 101 Okey rules engine. Rules: DESIGN.md §2, semantics: DESIGN.md §3 and Game.h.
+#include "core/Game.h"
+
+#include <algorithm>
+#include <numeric>
+
+namespace okey {
+
+namespace {
+
+// Safety valve for headless loops that never drain the queue (the UI drains every frame).
+constexpr size_t MAX_QUEUED_EVENTS = 20000;
+constexpr int INITIAL_HAND = 21; // everyone gets 21, the starter one more
+
+// Minimal UTF-8 decoder (player names are short; stray bytes are passed through as-is).
+std::vector<unsigned> codePoints(const std::string& s) {
+    std::vector<unsigned> out;
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = (unsigned char)s[i];
+        int extra = 0;
+        unsigned cp = c;
+        if (c >= 0xF0) {
+            extra = 3;
+            cp = c & 0x07;
+        } else if (c >= 0xE0) {
+            extra = 2;
+            cp = c & 0x0F;
+        } else if (c >= 0xC0) {
+            extra = 1;
+            cp = c & 0x1F;
+        }
+        if (i + extra >= s.size()) extra = 0; // truncated sequence: keep the raw byte
+        for (int k = 1; k <= extra; ++k) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
+        out.push_back(extra ? cp : c);
+        i += 1 + extra;
+    }
+    return out;
+}
+
+// Turkish locative for a proper name with vowel harmony and consonant assimilation:
+// "Hacı Rıza'da", "Kel Mahmut'ta", "Emekli Nuri'de".
+std::string locative(const std::string& name) {
+    const std::vector<unsigned> cps = codePoints(name);
+    bool backVowel = true;
+    for (unsigned c : cps) {
+        switch (c) {
+        case 'a': case 'A': case 'o': case 'O': case 'u': case 'U': case 'I': case 0x131:
+            backVowel = true;
+            break;
+        case 'e': case 'E': case 'i': case 0x130: case 0xF6: case 0xD6: case 0xFC: case 0xDC:
+            backVowel = false;
+            break;
+        default:
+            break;
+        }
+    }
+    bool hard = false;
+    if (!cps.empty()) {
+        switch (cps.back()) {
+        case 'f': case 's': case 't': case 'k': case 'h': case 'p':
+        case 'F': case 'S': case 'T': case 'K': case 'H': case 'P':
+        case 0xE7: case 0xC7: case 0x15F: case 0x15E: // ç Ç ş Ş
+            hard = true;
+            break;
+        default:
+            break;
+        }
+    }
+    return name + "'" + (hard ? "t" : "d") + (backVowel ? "a" : "e");
+}
+
+// Tile name for event texts; the wild tile is simply "okey".
+std::string tileText(int id, const OkeyInfo& ok) { return ok.isJoker(id) ? std::string("okey") : tileNameTR(id, ok); }
+
+// The same name as a definite object (belirtme hali): "Kırmızı 10'u", "Mavi 2'yi", "okeyi",
+// "Sahte Okeyi (Sarı 7)". The suffix follows the spoken number: bir'i, iki'yi, üç'ü, ..., on'u.
+std::string tileAccusative(int id, const OkeyInfo& ok) {
+    if (ok.isJoker(id)) return "okeyi";
+    const std::string name = tileNameTR(id, ok);
+    if (!isValidTile(id)) return name;
+    if (isFakeJoker(id)) {
+        const size_t paren = name.find(" (");
+        return paren == std::string::npos ? name + "i" : name.substr(0, paren) + "i" + name.substr(paren);
+    }
+    // by last digit: on, bir, iki, üç, dört, beş, altı, yedi, sekiz, dokuz (11-13 end in bir/iki/üç)
+    static const char* const kSuffix[10] = {"'u", "'i", "'yi", "'ü", "'ü", "'i", "'yı", "'yi", "'i", "'u"};
+    return name + kSuffix[printedNumber(id) % 10];
+}
+
+// Upper-cases the first letter the Turkish way ("işlek" -> "İşlek", "ılık" -> "Ilık", "çiftten" -> "Çiftten").
+std::string capitalizeFirst(const std::string& s) {
+    if (s.empty()) return s;
+    if (s[0] == 'i') return "İ" + s.substr(1);
+    if (s[0] >= 'a' && s[0] <= 'z') return std::string(1, (char)(s[0] - 'a' + 'A')) + s.substr(1);
+    static const char* const kPairs[][2] = {{"ı", "I"}, {"ç", "Ç"}, {"ş", "Ş"}, {"ğ", "Ğ"}, {"ö", "Ö"}, {"ü", "Ü"}};
+    for (const auto& p : kPairs) {
+        const std::string lower = p[0];
+        if (s.compare(0, lower.size(), lower) == 0) return p[1] + s.substr(lower.size());
+    }
+    return s;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------------------------------------
+// setup
+
+Game::Game(const RulesConfig& cfg) {
+    setRules(cfg);
+    static const char* const kNames[NUM_PLAYERS] = {"Sen", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"};
+    for (int s = 0; s < NUM_PLAYERS; ++s) {
+        players_[s].name = kNames[s];
+        players_[s].human = (s == 0);
+    }
+}
+
+void Game::setRules(const RulesConfig& cfg) {
+    cfg_ = cfg;
+    if (cfg_.numHands < 1) cfg_.numHands = 1;
+    if (cfg_.minPairsToOpen < 1) cfg_.minPairsToOpen = 1;
+}
+
+void Game::setPlayer(int seat, const std::string& name, bool human) {
+    if (seat < 0 || seat >= NUM_PLAYERS) return;
+    players_[seat].name = name;
+    players_[seat].human = human;
+}
+
+void Game::startMatch(uint64_t seed) {
+    rng_.reseed(seed);
+    events_.clear();
+    for (PlayerInfo& p : players_) {
+        p.totalScore = 0;
+        p.handScores.clear();
+    }
+    lastResult_ = HandResult();
+    handIndex_ = 0;
+    turnNumber_ = 0;
+    firstStarter_ = rng_.range(NUM_PLAYERS);
+    starter_ = firstStarter_;
+
+    GameEvent e;
+    e.type = EvType::MatchStart;
+    e.amount = cfg_.numHands;
+    e.text = "Yeni maç başladı (" + std::to_string(cfg_.numHands) + " el)";
+    push(std::move(e));
+    dealHand();
+}
+
+void Game::startNextHand() {
+    if (handState_ != HandState::HandOver) return;
+    ++handIndex_;
+    starter_ = rightOf(starter_);
+    dealHand();
+}
+
+void Game::dealHand() {
+    for (PlayerInfo& p : players_) {
+        p.hand.clear();
+        p.discards.clear();
+        p.opened = false;
+        p.openedWithPairs = false;
+        p.openedTurn = -1;
+        p.openValue = 0;
+        p.handPenalty = 0;
+    }
+    table_.clear();
+    discardHistory_.clear();
+    pendingLeftTile_ = -1;
+    tookLeftThisTurn_ = false;
+    returnedLeftThisTurn_ = false;
+    lastResult_ = HandResult();
+
+    std::vector<int> deck(NUM_TILES);
+    std::iota(deck.begin(), deck.end(), 0);
+    rng_.shuffle(deck);
+
+    // Gösterge: the first numbered tile from the top. Skipped sahte okeys are shuffled back into the deck.
+    std::vector<int> skipped;
+    while (isFakeJoker(deck.back())) {
+        skipped.push_back(deck.back());
+        deck.pop_back();
+    }
+    const int indicator = deck.back();
+    deck.pop_back();
+    for (int f : skipped) deck.insert(deck.begin() + rng_.range((int)deck.size() + 1), f);
+    okey_ = OkeyInfo::fromIndicator(indicator);
+
+    for (int k = 0; k < INITIAL_HAND; ++k) {
+        for (int i = 0; i < NUM_PLAYERS; ++i) {
+            players_[(starter_ + i) % NUM_PLAYERS].hand.push_back(deck.back());
+            deck.pop_back();
+        }
+    }
+    players_[starter_].hand.push_back(deck.back());
+    deck.pop_back();
+    pile_ = std::move(deck);
+
+    handState_ = HandState::Playing;
+    GameEvent e;
+    e.type = EvType::HandStart;
+    e.player = starter_;
+    e.amount = handIndex_;
+    e.tile = indicator;
+    e.text = std::to_string(handIndex_ + 1) + ". el başladı · Gösterge: " + tileNameTR(indicator, okey_);
+    push(std::move(e));
+
+    beginTurn(starter_);
+    stage_ = TurnStage::Play; // the starter already holds 22 tiles: no draw
+}
+
+void Game::beginTurn(int seat) {
+    current_ = seat;
+    stage_ = TurnStage::NeedDraw;
+    ++turnNumber_;
+    pendingLeftTile_ = -1;
+    tookLeftThisTurn_ = false;
+    returnedLeftThisTurn_ = false;
+
+    GameEvent e;
+    e.type = EvType::TurnStart;
+    e.player = seat;
+    e.text = isSen(seat) ? std::string("Sıra sende") : "Sıra " + locative(players_[seat].name);
+    push(std::move(e));
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// queries
+
+int Game::topDiscard(int seat) const {
+    if (seat < 0 || seat >= NUM_PLAYERS || players_[seat].discards.empty()) return -1;
+    return players_[seat].discards.back();
+}
+
+bool Game::openedThisTurn(int seat) const {
+    if (seat < 0 || seat >= NUM_PLAYERS) return false;
+    return players_[seat].opened && players_[seat].openedTurn == turnNumber_;
+}
+
+bool Game::canTakeFromLeft(int seat) const {
+    return handState_ == HandState::Playing && seat == current_ && stage_ == TurnStage::NeedDraw &&
+           !returnedLeftThisTurn_ && topDiscard(leftOf(seat)) >= 0;
+}
+
+bool Game::canWorkTable(int seat) const {
+    if (handState_ != HandState::Playing || seat != current_ || stage_ != TurnStage::Play) return false;
+    const PlayerInfo& p = players_[seat];
+    return p.opened && (!cfg_.waitTurnAfterOpening || p.openedTurn != turnNumber_);
+}
+
+bool Game::isPlayableOnTable(int tile) const { return fitsAnyMeld(table_, tile, okey_); }
+
+int Game::handPoints(int seat) const {
+    if (seat < 0 || seat >= NUM_PLAYERS) return 0;
+    int sum = 0;
+    for (int id : players_[seat].hand) sum += okey_.handValue(id);
+    return sum;
+}
+
+OpenCheck Game::checkOpen(int seat, const std::vector<std::vector<int>>& groups) const {
+    return evaluate(seat, groups, false, nullptr);
+}
+
+OpenCheck Game::checkLay(int seat, const std::vector<std::vector<int>>& groups) const {
+    return evaluate(seat, groups, true, nullptr);
+}
+
+int Game::leaderSeat() const {
+    int best = 0;
+    for (int s = 1; s < NUM_PLAYERS; ++s)
+        if (players_[s].totalScore < players_[best].totalScore) best = s;
+    return best;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// actions
+
+ActionResult Game::drawFromPile(int seat) {
+    ActionResult r = checkTurn(seat, TurnStage::NeedDraw);
+    if (!r.ok) return r;
+    if (pile_.empty()) return ActionResult::fail("Ortada çekilecek taş kalmadı");
+
+    const int tile = pile_.back();
+    pile_.pop_back();
+    players_[seat].hand.push_back(tile);
+    stage_ = TurnStage::Play;
+
+    GameEvent e;
+    e.type = EvType::DrawPile;
+    e.player = seat;
+    e.tile = tile;
+    if (players_[seat].human) {
+        const std::string t = tileText(tile, okey_);
+        e.text = says(seat, "ortadan " + t + " çekti", "ortadan " + t + " çektin");
+    } else {
+        e.text = says(seat, "ortadan taş çekti", "ortadan taş çektin");
+    }
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::takeFromLeft(int seat) {
+    ActionResult r = checkTurn(seat, TurnStage::NeedDraw);
+    if (!r.ok) return r;
+    if (returnedLeftThisTurn_) return ActionResult::fail("Geri verdiğin taşı bu turda tekrar alamazsın");
+    PlayerInfo& left = players_[leftOf(seat)];
+    if (left.discards.empty()) return ActionResult::fail("Yandan alınacak taş yok");
+
+    const int tile = left.discards.back();
+    left.discards.pop_back();
+    players_[seat].hand.push_back(tile);
+    pendingLeftTile_ = tile;
+    tookLeftThisTurn_ = true;
+    stage_ = TurnStage::Play;
+
+    GameEvent e;
+    e.type = EvType::TakeLeft;
+    e.player = seat;
+    e.tile = tile;
+    const std::string t = tileText(tile, okey_);
+    e.text = says(seat, "yandan " + t + " aldı", "yandan " + t + " aldın");
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::returnLeftTile(int seat) {
+    ActionResult r = checkTurn(seat, stage_); // hand/seat checks only
+    if (!r.ok) return r;
+    if (pendingLeftTile_ < 0 || stage_ != TurnStage::Play) return ActionResult::fail("Geri verilecek taş yok");
+
+    const int tile = pendingLeftTile_;
+    removeFromHand(seat, tile);
+    players_[leftOf(seat)].discards.push_back(tile);
+    pendingLeftTile_ = -1;
+    returnedLeftThisTurn_ = true;
+    stage_ = TurnStage::NeedDraw;
+
+    GameEvent e;
+    e.type = EvType::ReturnLeft;
+    e.player = seat;
+    e.tile = tile;
+    const std::string t = tileAccusative(tile, okey_);
+    const std::string what = says(seat, "yandan aldığı " + t + " geri verdi", "yandan aldığın " + t + " geri verdin");
+    e.text = what;
+    push(std::move(e));
+
+    // The Penalty repeats the whole story ("... geri verdi: 101 ceza"), so a table that shows only the
+    // Penalty still tells what happened.
+    addPenalty(seat, what + ": " + std::to_string(cfg_.penalty) + " ceza");
+    return ActionResult::success();
+}
+
+ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& groups) {
+    std::vector<Meld> melds;
+    const OpenCheck c = evaluate(seat, groups, false, &melds);
+    if (!c.valid) return ActionResult::fail(c.error);
+
+    PlayerInfo& p = players_[seat];
+    const int first = (int)table_.size();
+    for (Meld& m : melds) {
+        for (const PlacedTile& t : m.tiles) {
+            removeFromHand(seat, t.id);
+            if (t.id == pendingLeftTile_) pendingLeftTile_ = -1;
+        }
+        table_.push_back(std::move(m));
+    }
+    p.opened = true;
+    p.openedWithPairs = c.pairs;
+    p.openedTurn = turnNumber_;
+    p.openValue = c.pairs ? c.pairCount : c.value;
+
+    GameEvent e;
+    e.type = EvType::Open;
+    e.player = seat;
+    e.meld = first;
+    e.count = (int)table_.size() - first;
+    e.amount = p.openValue;
+    if (c.pairs) {
+        const std::string n = " (" + std::to_string(c.pairCount) + " çift)";
+        e.text = says(seat, "çiftten açtı" + n, "çiftten açtın" + n);
+    } else {
+        const std::string v = " (" + std::to_string(c.value) + ")";
+        e.text = says(seat, "eli açtı" + v, "eli açtın" + v);
+    }
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::layMelds(int seat, const std::vector<std::vector<int>>& groups) {
+    std::vector<Meld> melds;
+    const OpenCheck c = evaluate(seat, groups, true, &melds);
+    if (!c.valid) return ActionResult::fail(c.error);
+
+    const int first = (int)table_.size();
+    for (Meld& m : melds) {
+        for (const PlacedTile& t : m.tiles) {
+            removeFromHand(seat, t.id);
+            if (t.id == pendingLeftTile_) pendingLeftTile_ = -1;
+        }
+        table_.push_back(std::move(m));
+    }
+
+    GameEvent e;
+    e.type = EvType::LayMelds;
+    e.player = seat;
+    e.meld = first;
+    e.count = (int)table_.size() - first;
+    e.amount = c.pairs ? c.pairCount : c.value;
+    const std::string what = std::string(e.count > 1 ? std::to_string(e.count) + " " : "") +
+                             (c.pairs ? "yeni çift açt" : "yeni per açt");
+    e.text = says(seat, what + "ı", what + "ın");
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
+    ActionResult r = checkTurn(seat, TurnStage::Play);
+    if (!r.ok) return r;
+    const PlayerInfo& p = players_[seat];
+    if (!p.opened) return ActionResult::fail("Önce elini açmalısın");
+    if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
+        return ActionResult::fail("Açtığın turda işleyemezsin, sonraki turunu bekle");
+    if (meldIndex < 0 || meldIndex >= (int)table_.size()) return ActionResult::fail("Böyle bir per yok");
+    if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
+    if (table_[meldIndex].kind == MeldKind::Pair) return ActionResult::fail("Çiftlere taş işlenemez");
+    Meld out;
+    if (!tryAddTile(table_[meldIndex], tile, okey_, side, out)) return ActionResult::fail("Bu taş o pere işlenemez");
+    if (p.hand.size() <= 1) return ActionResult::fail("Elde en az bir taş kalmalı");
+    // The tile kept for the discard can't be the pending left tile (it can't be discarded).
+    if (pendingLeftTile_ >= 0 && tile != pendingLeftTile_ && p.hand.size() <= 2)
+        return ActionResult::fail("Yandan aldığın taş dışında elde bir taş kalmalı");
+
+    table_[meldIndex] = std::move(out);
+    removeFromHand(seat, tile);
+    if (tile == pendingLeftTile_) pendingLeftTile_ = -1;
+
+    GameEvent e;
+    e.type = EvType::AddToMeld;
+    e.player = seat;
+    e.tile = tile;
+    e.meld = meldIndex;
+    const std::string t = tileAccusative(tile, okey_);
+    e.text = says(seat, t + " işledi", t + " işledin");
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::swapJoker(int seat, int tile, int meldIndex) {
+    ActionResult r = checkTurn(seat, TurnStage::Play);
+    if (!r.ok) return r;
+    const PlayerInfo& p = players_[seat];
+    if (!p.opened) return ActionResult::fail("Önce elini açmalısın");
+    if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
+        return ActionResult::fail("Açtığın turda okey alamazsın, sonraki turunu bekle");
+    if (meldIndex < 0 || meldIndex >= (int)table_.size()) return ActionResult::fail("Böyle bir per yok");
+    if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
+    const Meld& m = table_[meldIndex];
+    if (m.kind == MeldKind::Pair) return ActionResult::fail("Çiftteki okey alınamaz");
+    if (!m.hasJoker()) return ActionResult::fail("Bu perde okey yok");
+    if (okey_.isJoker(tile)) return ActionResult::fail("Okeyin yerine okey konmaz");
+    Meld out;
+    int freed = -1;
+    if (!trySwapJoker(m, tile, okey_, out, freed)) return ActionResult::fail("Bu taş okeyin yerine konamaz");
+
+    table_[meldIndex] = std::move(out);
+    removeFromHand(seat, tile);
+    players_[seat].hand.push_back(freed);
+    if (tile == pendingLeftTile_) pendingLeftTile_ = -1;
+
+    GameEvent e;
+    e.type = EvType::SwapJoker;
+    e.player = seat;
+    e.tile = tile;
+    e.meld = meldIndex;
+    e.amount = freed;
+    e.text = says(seat, "okeyi aldı", "okeyi aldın");
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::discard(int seat, int tile) {
+    ActionResult r = checkTurn(seat, TurnStage::Play);
+    if (!r.ok) return r;
+    if (pendingLeftTile_ >= 0)
+        return ActionResult::fail("Yandan aldığın taşı önce masada kullan ya da Geri Ver (" +
+                                  std::to_string(cfg_.penalty) + " ceza)");
+    if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
+
+    const bool joker = okey_.isJoker(tile);
+    const bool finishing = players_[seat].hand.size() == 1;
+    const bool islek = !joker && !finishing && cfg_.penaltyPlayableDiscard && isPlayableOnTable(tile);
+
+    removeFromHand(seat, tile);
+    players_[seat].discards.push_back(tile);
+    discardHistory_.push_back({seat, tile});
+
+    GameEvent e;
+    e.type = EvType::Discard;
+    e.player = seat;
+    e.tile = tile;
+    const std::string t = tileText(tile, okey_);
+    e.text = says(seat, t + " attı", t + " attın");
+    push(std::move(e));
+
+    if (!finishing) {
+        const std::string pen = ": " + std::to_string(cfg_.penalty) + " ceza";
+        if (joker && cfg_.penaltyJokerDiscard)
+            addPenalty(seat, says(seat, "okey attı", "okey attın") + pen);
+        else if (islek)
+            addPenalty(seat, says(seat, "işlek taş attı", "işlek taş attın") + pen);
+    }
+
+    if (finishing) endHand(HandEndReason::PlayerFinished, seat, joker);
+    else if (pile_.empty()) endHand(HandEndReason::PileExhausted, -1, false);
+    else beginTurn(rightOf(seat));
+    return ActionResult::success();
+}
+
+std::vector<GameEvent> Game::drainEvents() {
+    std::vector<GameEvent> out;
+    out.swap(events_);
+    return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// internals
+
+void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
+    HandResult r;
+    r.reason = reason;
+    r.winner = winner;
+    int mult = 1;
+    if (reason == HandEndReason::PlayerFinished && winner >= 0) {
+        const PlayerInfo& w = players_[winner];
+        r.finishedWithJoker = finishedWithJoker;
+        r.finishedWithPairs = w.opened && w.openedWithPairs;
+        r.finishedInOneGo = w.opened && w.openedTurn == turnNumber_;
+        if (r.finishedWithJoker) mult *= 2;
+        if (r.finishedWithPairs) mult *= 2;
+        if (r.finishedInOneGo) mult *= 2;
+    }
+    r.multiplier = mult;
+
+    for (int s = 0; s < NUM_PLAYERS; ++s) {
+        PlayerInfo& p = players_[s];
+        const int rem = handPoints(s);
+        int score;
+        if (s == winner) score = cfg_.winnerScore * mult;
+        else if (!p.opened) score = cfg_.unopenedScore * mult;
+        else if (p.openedWithPairs) score = rem * 2 * mult;
+        else score = rem * mult;
+        score += p.handPenalty;
+        r.remaining[s] = rem;
+        r.penalties[s] = p.handPenalty;
+        r.score[s] = score;
+        p.handScores.push_back(score);
+        p.totalScore += score;
+    }
+    lastResult_ = r;
+    pendingLeftTile_ = -1;
+
+    const bool matchOver = handIndex_ + 1 >= cfg_.numHands;
+    handState_ = matchOver ? HandState::MatchOver : HandState::HandOver;
+
+    GameEvent e;
+    e.type = EvType::HandEnd;
+    e.player = winner;
+    e.amount = mult;
+    if (winner >= 0) {
+        e.text = says(winner, "eli bitirdi!", "eli bitirdin!");
+        if (mult > 1) {
+            // same order and sign as the score sheet: okeyle, çiftten, elden ... ×N
+            std::string how;
+            if (r.finishedWithJoker) how += "okeyle";
+            if (r.finishedWithPairs) how += std::string(how.empty() ? "" : ", ") + "çiftten";
+            if (r.finishedInOneGo) how += std::string(how.empty() ? "" : ", ") + "elden";
+            e.text += " (" + how + " bitiş, ×" + std::to_string(mult) + ")";
+        }
+    } else {
+        e.text = "Ortada taş kalmadı, el bitti";
+    }
+    push(std::move(e));
+
+    if (matchOver) {
+        const int lead = leaderSeat();
+        GameEvent m;
+        m.type = EvType::MatchEnd;
+        m.player = lead;
+        m.amount = players_[lead].totalScore;
+        // Several seats on the lowest total share first place (the score sheet and match-over screen say so
+        // too); `player` stays leaderSeat() so listeners keep a single seat to look at.
+        std::vector<int> co;
+        bool humanCo = false;
+        for (int s = 0; s < NUM_PLAYERS; ++s) {
+            if (players_[s].totalScore != m.amount) continue;
+            if (isSen(s)) humanCo = true;
+            else co.push_back(s);
+        }
+        auto join = [&](const std::vector<int>& seats) {
+            std::string out;
+            for (size_t i = 0; i < seats.size(); ++i)
+                out += (i == 0 ? "" : i + 1 == seats.size() ? " ve " : ", ") + players_[seats[i]].name;
+            return out;
+        };
+        if (co.size() + (humanCo ? 1 : 0) <= 1)
+            m.text = isSen(lead) ? std::string("Maç bitti! Sen kazandın!")
+                                 : "Maç bitti! Kazanan: " + players_[lead].name;
+        else if (co.size() + (humanCo ? 1 : 0) == (size_t)NUM_PLAYERS)
+            m.text = "Maç berabere bitti! Birincilik herkesin";
+        else if (humanCo)
+            m.text = "Maç berabere bitti! Birinciliği " + join(co) + " ile paylaştın";
+        else
+            m.text = "Maç berabere bitti! Birinciliği " + join(co) + " paylaştı";
+        push(std::move(m));
+    }
+}
+
+void Game::push(GameEvent e) {
+    if (events_.size() >= MAX_QUEUED_EVENTS) events_.erase(events_.begin(), events_.begin() + MAX_QUEUED_EVENTS / 2);
+    events_.push_back(std::move(e));
+}
+
+ActionResult Game::checkTurn(int seat, TurnStage need) const {
+    if (handState_ != HandState::Playing) return ActionResult::fail("Şu an oynanan bir el yok");
+    if (seat < 0 || seat >= NUM_PLAYERS) return ActionResult::fail("Geçersiz oyuncu");
+    if (seat != current_) return ActionResult::fail("Sıra sende değil");
+    if (stage_ != need) {
+        if (need == TurnStage::Play) return ActionResult::fail("Önce taş çekmelisin");
+        if (seat == starter_ && discardHistory_.empty())
+            return ActionResult::fail("Başlayan oyuncu ilk turda taş çekmez, bir taş at");
+        return ActionResult::fail("Zaten taş çektin");
+    }
+    return ActionResult::success();
+}
+
+bool Game::removeFromHand(int seat, int tile) {
+    std::vector<int>& h = players_[seat].hand;
+    auto it = std::find(h.begin(), h.end(), tile);
+    if (it == h.end()) return false;
+    h.erase(it);
+    return true;
+}
+
+bool Game::handHas(int seat, int tile) const {
+    const std::vector<int>& h = players_[seat].hand;
+    return std::find(h.begin(), h.end(), tile) != h.end();
+}
+
+bool Game::buildGroups(int seat, const std::vector<std::vector<int>>& groups, bool pairMode,
+                       std::vector<Meld>& out, std::string& err) const {
+    std::vector<int> seen;
+    for (const std::vector<int>& g : groups) {
+        for (int id : g) {
+            if (!handHas(seat, id)) {
+                err = "Bu taş sende yok";
+                return false;
+            }
+            if (std::find(seen.begin(), seen.end(), id) != seen.end()) {
+                err = "Aynı taş iki kez kullanılamaz";
+                return false;
+            }
+            seen.push_back(id);
+        }
+    }
+    out.clear();
+    for (const std::vector<int>& g : groups) {
+        Meld m;
+        std::string why;
+        if (!makeMeld(g, okey_, m, pairMode, &why)) {
+            err = why;
+            return false;
+        }
+        m.owner = seat;
+        out.push_back(std::move(m));
+    }
+    return true;
+}
+
+OpenCheck Game::evaluate(int seat, const std::vector<std::vector<int>>& groups, bool laying,
+                         std::vector<Meld>* melds) const {
+    OpenCheck c;
+    bool anyPair = false, anySeries = false;
+    for (const std::vector<int>& g : groups) {
+        if (g.size() == 2) anyPair = true;
+        else if (g.size() >= 3) anySeries = true;
+    }
+    const bool pairMode = anyPair && !anySeries;
+    c.pairs = pairMode;
+
+    // Live counters, filled even when the attempt is not (yet) valid.
+    for (const std::vector<int>& g : groups) {
+        Meld m;
+        if (g.size() == 2) {
+            if (makePair(g, okey_, m)) ++c.pairCount;
+        } else if (g.size() >= 3) {
+            if (makeMeld(g, okey_, m, false)) c.value += m.value();
+        }
+    }
+
+    auto failWith = [&c](std::string e) {
+        c.valid = false;
+        c.error = std::move(e);
+        return c;
+    };
+
+    ActionResult t = checkTurn(seat, TurnStage::Play);
+    if (!t.ok) return failWith(t.error);
+    const PlayerInfo& p = players_[seat];
+    if (!laying) {
+        if (p.opened) return failWith("Elini zaten açtın");
+    } else {
+        if (!p.opened) return failWith("Önce elini açmalısın");
+        if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
+            return failWith("Açtığın turda yeni per açamazsın, sonraki turunu bekle");
+    }
+    if (groups.empty()) return failWith("Per seçmedin");
+    if (anyPair && anySeries) return failWith("Seri ve çift karıştırılamaz");
+    if (laying) {
+        if (p.openedWithPairs && !pairMode) return failWith("Çiftle açan sadece çift açabilir");
+        if (!p.openedWithPairs && pairMode) return failWith("Seriyle açan çift açamaz");
+    }
+
+    std::vector<Meld> built;
+    std::string err;
+    if (!buildGroups(seat, groups, pairMode, built, err)) return failWith(err);
+
+    if (!laying) {
+        if (pairMode) {
+            if (c.pairCount < cfg_.minPairsToOpen)
+                return failWith("Çift açmak için en az " + std::to_string(cfg_.minPairsToOpen) +
+                                " çift gerekli (şu an " + std::to_string(c.pairCount) + ")");
+        } else if (c.value < cfg_.openThreshold) {
+            return failWith("Açmak için en az " + std::to_string(cfg_.openThreshold) + " gerekli (şu an " +
+                            std::to_string(c.value) + ")");
+        }
+    }
+
+    size_t used = 0;
+    bool usesPending = false;
+    for (const Meld& m : built) {
+        used += m.tiles.size();
+        for (const PlacedTile& pt : m.tiles)
+            if (pt.id == pendingLeftTile_) usesPending = true;
+    }
+    if (!laying && pendingLeftTile_ >= 0 && !usesPending) return failWith("Yandan aldığın taş açılışta yer almalı");
+    if (used >= p.hand.size()) return failWith("Elde en az bir taş kalmalı");
+    if (pendingLeftTile_ >= 0 && !usesPending && used + 2 > p.hand.size())
+        return failWith("Yandan aldığın taş dışında elde bir taş kalmalı");
+
+    c.valid = true;
+    c.error.clear();
+    if (melds) *melds = std::move(built);
+    return c;
+}
+
+// "Sen" = the human at this table, whatever name they chose in Ayarlar.
+bool Game::isSen(int seat) const { return players_[seat].human; }
+
+// Turkish drops the pronoun: the human reads "Eli açtın (101)", the others "Hacı Rıza eli açtı (101)".
+std::string Game::says(int seat, const std::string& third, const std::string& second) const {
+    return isSen(seat) ? capitalizeFirst(second) : players_[seat].name + " " + third;
+}
+
+void Game::addPenalty(int seat, const std::string& text) {
+    players_[seat].handPenalty += cfg_.penalty;
+    GameEvent e;
+    e.type = EvType::Penalty;
+    e.player = seat;
+    e.amount = cfg_.penalty;
+    e.text = text;
+    push(std::move(e));
+}
+
+} // namespace okey
