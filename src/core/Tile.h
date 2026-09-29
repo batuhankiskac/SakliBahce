@@ -17,10 +17,8 @@ constexpr int FAKE_JOKER_A = 104;
 constexpr int FAKE_JOKER_B = 105;
 constexpr int NUM_PLAYERS = 4;
 
-// A "1" placed after 13 in a run (12-13-1) is represented as number 14 and is worth this many points.
-constexpr int ACE_HIGH_NUMBER = 14;
-constexpr int ACE_HIGH_VALUE = 14;
-// Value of an unplayed okey (wild) left in an opened player's hand when the hand is scored.
+// What an unplayed okey (wild) left in hand costs: an opened player gets a 101 penalty for it at the end of
+// the hand (Game::endHand). Bots weigh holding one by this.
 constexpr int JOKER_IN_HAND_VALUE = 101;
 
 enum TileColor : int { Yellow = 0, Blue = 1, Black = 2, Red = 3 }; // Sarı, Mavi, Siyah, Kırmızı

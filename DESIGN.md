@@ -58,14 +58,17 @@ in `TurnStage::Play` (no draw).
 2. **Play** (optional): open, lay further melds, add tiles to table melds (işlemek), swap jokers.
 3. **Discard** one tile onto your own discard pile (it becomes takeable by your right neighbour).
 
-**Melds.** Runs, groups, pairs — see `Meld.h`. A '1' may follow 13 (12‑13‑1, the 1 is worth 14), no
-wrap-around.
+**Melds.** Runs, groups, pairs — see `Meld.h`. A run ends at 13: unlike plain okey, 101 has no '1' after
+13 (12‑13‑1 is not a run) and no wrap-around; a '1' only starts a run (1‑2‑3).
 
 **Opening (el açmak).** A player who hasn't opened may open by laying either
 * series melds (runs/groups) whose total value ≥ 101, or
 * at least 5 pairs (çift açmak).
-Series and pairs can't be mixed in the opening. After opening:
-* series openers may later lay more series melds, pair openers may later lay more pairs;
+Series and pairs can't be mixed in the opening. **Katlamalı** (`RulesConfig::katlamali`, a setting): a series
+opening needs one more than the highest series opening already on the table this hand (116 → 117), a pair
+opening one pair more than the most pairs opened (5 → 6) — `Game::seriesOpenNeed` / `pairsOpenNeed`. After opening:
+* pair openers may later lay only pairs; series openers may later lay series melds, and pairs too once
+  another player has opened with pairs (Zynga/Digitoy rule);
 * both may add tiles to any run/group on the table (any owner) and swap jokers;
 * with `waitTurnAfterOpening` (default on) none of this is allowed in the same turn as the opening;
   the opening itself may contain as many melds as you like.
@@ -90,14 +93,14 @@ color of that number may replace the joker.
   no winner.
 
 **Scoring (lower is better).** Multiplier `m` = 1, ×2 if the winner's last discard was the okey
-(okeyle bitiş), ×2 if the winner had opened with pairs (çiftten bitiş), ×2 if the winner opened in their
-finishing turn (elden bitiş). Hand scores:
+(okeyle bitiş), ×2 if the winner had opened with pairs (çiftten bitiş), ×2 if nobody else had opened and the
+winner opened in their finishing turn, laying the whole hand at once (elden bitiş). Hand scores:
 * winner: `winnerScore × m` (−101, −202, …),
 * never opened: `unopenedScore × m` (202, 404, …),
 * opened with series: `handPoints × m`,
 * opened with pairs: `handPoints × 2 × m`,
-* plus penalties (not multiplied).
-`handPoints` = sum of face numbers, okey = 101 (`OkeyInfo::handValue`).
+* plus penalties (not multiplied), including +101 for every okey left in an opened loser's hand.
+`handPoints` = sum of the face numbers left in hand (okeys not counted).
 Pile exhausted: m = 1, no winner, same formulas for everybody.
 The match lasts `numHands` hands; lowest total wins.
 

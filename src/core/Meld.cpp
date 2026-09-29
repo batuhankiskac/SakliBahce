@@ -8,7 +8,6 @@ namespace okey {
 
 namespace {
 
-int numberValue(int number) { return number == ACE_HIGH_NUMBER ? ACE_HIGH_VALUE : number; }
 
 void setWhy(std::string* why, const char* msg) {
     if (why) *why = msg;
@@ -40,12 +39,11 @@ PlacedTile place(int id, int color, int number, bool joker) {
     return t;
 }
 
-// Can a non-wild tile with face number `face` stand at run position `pos` (1..14)?
-bool faceFitsPosition(int face, int pos) {
-    return face == pos || (face == 1 && pos == ACE_HIGH_NUMBER);
-}
+// Can a non-wild tile with face number `face` stand at run position `pos` (1..13)? In 101 a run ends at 13:
+// no '1' after 13 (12-13-1 is not a run, unlike in plain okey), no wrap-around.
+bool faceFitsPosition(int face, int pos) { return face == pos; }
 
-// Strict positional ascending reading: the i-th tile is number start+i. Returns the best valid reading.
+// Strict positional ascending reading: the i-th tile is number start+i.
 bool readAscending(const std::vector<int>& ids, const OkeyInfo& ok, int color, Meld& out) {
     const int n = (int)ids.size();
     int first = -1;
@@ -55,102 +53,64 @@ bool readAscending(const std::vector<int>& ids, const OkeyInfo& ok, int color, M
             break;
         }
     }
-    int starts[2];
-    int numStarts = 0;
-    if (first < 0) {
-        starts[numStarts++] = ACE_HIGH_NUMBER - n + 1; // only wild tiles: highest possible reading
-    } else {
-        const int f = ok.faceNumber(ids[first]);
-        starts[numStarts++] = f - first;
-        if (f == 1) starts[numStarts++] = ACE_HIGH_NUMBER - first; // the '1' read as a high ace
+    // only wild tiles: the highest possible reading; otherwise the first real tile fixes the start
+    const int s = first < 0 ? NUM_NUMBERS - n + 1 : ok.faceNumber(ids[first]) - first;
+    if (s < 1 || s + n - 1 > NUM_NUMBERS) return false;
+    Meld m;
+    m.kind = MeldKind::Run;
+    for (int i = 0; i < n; ++i) {
+        const int id = ids[i];
+        const int pos = s + i;
+        const bool joker = ok.isJoker(id);
+        if (!joker && !faceFitsPosition(ok.faceNumber(id), pos)) return false;
+        m.tiles.push_back(place(id, color, pos, joker));
     }
-
-    bool found = false;
-    int bestValue = -1;
-    for (int k = 0; k < numStarts; ++k) {
-        const int s = starts[k];
-        if (s < 1 || s + n - 1 > ACE_HIGH_NUMBER) continue;
-        Meld m;
-        m.kind = MeldKind::Run;
-        bool legal = true;
-        for (int i = 0; i < n && legal; ++i) {
-            const int id = ids[i];
-            const int pos = s + i;
-            const bool joker = ok.isJoker(id);
-            if (!joker && !faceFitsPosition(ok.faceNumber(id), pos)) legal = false;
-            m.tiles.push_back(place(id, color, pos, joker));
-        }
-        if (legal && m.value() > bestValue) {
-            bestValue = m.value();
-            out = std::move(m);
-            found = true;
-        }
-    }
-    return found;
+    out = std::move(m);
+    return true;
 }
 
 // Lenient reading: non-jokers sorted by number, jokers fill the internal gaps, then extend the high end
-// (up to 14), then the low end. Each '1' may be read as 1 or as the high ace. Best value wins.
+// (up to 13), then the low end.
 bool readLenient(const std::vector<int>& ids, const OkeyInfo& ok, int color, Meld& out) {
-    std::vector<int> plain, jokers, ones;
+    std::vector<std::pair<int, int>> numbered; // (represented number, id)
+    std::vector<int> jokers;
     for (int id : ids) {
-        if (ok.isJoker(id)) {
-            jokers.push_back(id);
+        if (ok.isJoker(id)) jokers.push_back(id);
+        else numbered.push_back({ok.faceNumber(id), id});
+    }
+    if (numbered.empty()) return false;
+    std::sort(numbered.begin(), numbered.end());
+    for (size_t i = 1; i < numbered.size(); ++i)
+        if (numbered[i].first == numbered[i - 1].first) return false;
+
+    int lo = numbered.front().first;
+    int hi = numbered.back().first;
+    const int gaps = hi - lo + 1 - (int)numbered.size();
+    if (gaps > (int)jokers.size()) return false;
+    int spare = (int)jokers.size() - gaps;
+    while (spare > 0 && hi < NUM_NUMBERS) {
+        ++hi;
+        --spare;
+    }
+    while (spare > 0 && lo > 1) {
+        --lo;
+        --spare;
+    }
+    if (spare > 0) return false;
+
+    Meld m;
+    m.kind = MeldKind::Run;
+    size_t next = 0, nextJoker = 0;
+    for (int pos = lo; pos <= hi; ++pos) {
+        if (next < numbered.size() && numbered[next].first == pos) {
+            m.tiles.push_back(place(numbered[next].second, color, pos, false));
+            ++next;
         } else {
-            if (ok.faceNumber(id) == 1) ones.push_back((int)plain.size());
-            plain.push_back(id);
+            m.tiles.push_back(place(jokers[nextJoker++], color, pos, true));
         }
     }
-    if (plain.empty() || ones.size() > 3) return false;
-
-    bool found = false;
-    int bestValue = -1;
-    const int combos = 1 << ones.size();
-    for (int mask = 0; mask < combos; ++mask) {
-        std::vector<std::pair<int, int>> numbered; // (represented number, id)
-        for (size_t i = 0; i < plain.size(); ++i) numbered.push_back({ok.faceNumber(plain[i]), plain[i]});
-        for (size_t b = 0; b < ones.size(); ++b)
-            if (mask & (1 << b)) numbered[ones[b]].first = ACE_HIGH_NUMBER;
-        std::sort(numbered.begin(), numbered.end());
-
-        bool distinct = true;
-        for (size_t i = 1; i < numbered.size(); ++i)
-            if (numbered[i].first == numbered[i - 1].first) distinct = false;
-        if (!distinct) continue;
-
-        int lo = numbered.front().first;
-        int hi = numbered.back().first;
-        const int gaps = hi - lo + 1 - (int)numbered.size();
-        if (gaps > (int)jokers.size()) continue;
-        int spare = (int)jokers.size() - gaps;
-        while (spare > 0 && hi < ACE_HIGH_NUMBER) {
-            ++hi;
-            --spare;
-        }
-        while (spare > 0 && lo > 1) {
-            --lo;
-            --spare;
-        }
-        if (spare > 0) continue;
-
-        Meld m;
-        m.kind = MeldKind::Run;
-        size_t next = 0, nextJoker = 0;
-        for (int pos = lo; pos <= hi; ++pos) {
-            if (next < numbered.size() && numbered[next].first == pos) {
-                m.tiles.push_back(place(numbered[next].second, color, pos, false));
-                ++next;
-            } else {
-                m.tiles.push_back(place(jokers[nextJoker++], color, pos, true));
-            }
-        }
-        if (m.value() > bestValue) {
-            bestValue = m.value();
-            out = std::move(m);
-            found = true;
-        }
-    }
-    return found;
+    out = std::move(m);
+    return true;
 }
 
 bool containsId(const Meld& m, int id) {
@@ -174,10 +134,10 @@ bool canAdd(const Meld& m, int id, const OkeyInfo& ok) {
     }
     const int backPos = m.tiles.back().number + 1;
     const int frontPos = m.tiles.front().number - 1;
-    if (joker) return backPos <= ACE_HIGH_NUMBER || frontPos >= 1;
+    if (joker) return backPos <= NUM_NUMBERS || frontPos >= 1;
     if (ok.faceColor(id) != m.tiles.front().color) return false;
     const int f = ok.faceNumber(id);
-    return (backPos <= ACE_HIGH_NUMBER && faceFitsPosition(f, backPos)) || (frontPos >= 1 && f == frontPos);
+    return (backPos <= NUM_NUMBERS && faceFitsPosition(f, backPos)) || (frontPos >= 1 && f == frontPos);
 }
 
 } // namespace
@@ -186,7 +146,7 @@ bool canAdd(const Meld& m, int id, const OkeyInfo& ok) {
 
 int Meld::value() const {
     int v = 0;
-    for (const PlacedTile& t : tiles) v += numberValue(t.number);
+    for (const PlacedTile& t : tiles) v += t.number;
     return v;
 }
 
@@ -210,13 +170,13 @@ bool makeRun(const std::vector<int>& ids, const OkeyInfo& ok, Meld& out, bool le
         setWhy(why, "Seri en az 3 taş olmalı");
         return false;
     }
-    if (n > ACE_HIGH_NUMBER) {
-        setWhy(why, "Seri en fazla 14 taş olabilir");
+    if (n > NUM_NUMBERS) {
+        setWhy(why, "Seri en fazla 13 taş olabilir");
         return false;
     }
 
     int color = -1;
-    int count[ACE_HIGH_NUMBER + 1] = {};
+    int count[NUM_NUMBERS + 1] = {};
     for (int id : ids) {
         if (ok.isJoker(id)) continue;
         const int c = ok.faceColor(id);
@@ -229,8 +189,7 @@ bool makeRun(const std::vector<int>& ids, const OkeyInfo& ok, Meld& out, bool le
         ++count[ok.faceNumber(id)];
     }
     for (int num = 1; num <= NUM_NUMBERS; ++num) {
-        // Two '1's are fine (1 at the start, high ace at the end); anything else must be unique.
-        if (count[num] > (num == 1 ? 2 : 1)) {
+        if (count[num] > 1) {
             setWhy(why, "Seride aynı sayı iki kez olamaz");
             return false;
         }
@@ -395,7 +354,7 @@ bool tryAddTile(const Meld& m, int id, const OkeyInfo& ok, AddSide side, Meld& o
     const bool joker = ok.isJoker(id);
     const int backPos = m.tiles.back().number + 1;
     const int frontPos = m.tiles.front().number - 1;
-    const bool canBack = backPos <= ACE_HIGH_NUMBER &&
+    const bool canBack = backPos <= NUM_NUMBERS &&
                          (joker || (ok.faceColor(id) == color && faceFitsPosition(ok.faceNumber(id), backPos)));
     const bool canFront = frontPos >= 1 && (joker || (ok.faceColor(id) == color && ok.faceNumber(id) == frontPos));
 

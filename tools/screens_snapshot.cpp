@@ -394,7 +394,7 @@ constexpr Rectangle kTitlePlay{640, 470, 320, 68};
 constexpr Rectangle kTitleWatchAi{660, 556, 280, 56};
 constexpr Rectangle kTitleRules{660, 626, 280, 56};
 constexpr Rectangle kTitleSettings{660, 696, 280, 56};
-constexpr Rectangle kSetName{720, 197, 340, 46};
+constexpr Rectangle kSetName{720, 189, 340, 46};
 constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 282.f};
 constexpr Vector2 kSetLevelKurt{720.f + 2 * 158.f + 73.f, 344.f};
 constexpr Vector2 kSetMusicToggle{760.f, 712.f};

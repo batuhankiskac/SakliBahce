@@ -308,18 +308,18 @@ void TableState::drawStatus() {
     std::vector<std::pair<std::string, Color>> parts;
     if (hints && playing() && !dealing()) {
         const okey::PlayerInfo& me = game->player(human);
-        const okey::RulesConfig& rc = game->rules();
+        const int needSeries = game->seriesOpenNeed(), needPairs = game->pairsOpenNeed();  // (katlamalı: rises)
         const Color dim = rgba(226, 216, 196);
         int seriesVal = 0;
         for (size_t i = 0; i < groups.size(); ++i)
             if (groupKind[i] == 1) seriesVal += groupValue[i];
         const int pc = (int)pairGroups.size();
         if (!me.opened) {
-            parts.push_back({"Seri " + std::to_string(seriesVal) + "/" + std::to_string(rc.openThreshold),
-                             seriesVal >= rc.openThreshold ? rgba(140, 240, 140) : dim});
+            parts.push_back({"Seri " + std::to_string(seriesVal) + "/" + std::to_string(needSeries),
+                             seriesVal >= needSeries ? rgba(140, 240, 140) : dim});
             parts.push_back({"  ·  ", fadeC(dim, 0.45f)});
-            parts.push_back({"Çift " + std::to_string(pc) + "/" + std::to_string(rc.minPairsToOpen),
-                             pc >= rc.minPairsToOpen ? rgba(140, 200, 255) : dim});
+            parts.push_back({"Çift " + std::to_string(pc) + "/" + std::to_string(needPairs),
+                             pc >= needPairs ? rgba(140, 200, 255) : dim});
         } else if (me.openedWithPairs) {
             parts.push_back({aiMode ? "Çiftten açtı" : "Çiftten açtın", rgba(140, 200, 255)});
             if (pc > 0) {

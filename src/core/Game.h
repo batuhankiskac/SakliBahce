@@ -27,6 +27,9 @@ struct RulesConfig {
     bool waitTurnAfterOpening = true;  // no işleme / new melds / joker swap in the turn you opened
     bool penaltyJokerDiscard = true;   // discarding the okey (except as the finishing tile)
     bool penaltyPlayableDiscard = true;// discarding a tile that fits a table meld ("işlek taş")
+    // Katlamalı oyun: after a series opening you must open series with at least one more than it (116 ->
+    // 117), after a pair opening with at least one more pair (5 -> 6). See seriesOpenNeed / pairsOpenNeed.
+    bool katlamali = false;
 };
 
 struct PlayerInfo {
@@ -139,7 +142,13 @@ public:
     bool canTakeFromLeft(int seat) const;              // stage/turn/pile checks only (not usefulness)
     bool canWorkTable(int seat) const;                 // may lay/işle/swap now (opened & not same turn)
     bool isPlayableOnTable(int tile) const;            // "işlek": fits some table run/group
-    int handPoints(int seat) const;                    // sum of okey.handValue over the hand
+    int handPoints(int seat) const;                    // face numbers left in hand (okeys not counted)
+    int jokersInHand(int seat) const;                  // okeys left in hand (each +penalty at hand end if opened)
+    bool pairsOpenedByOther(int seat) const;           // someone else opened with pairs (seri açan çift açabilir)
+    // What an opening needs right now: openThreshold / minPairsToOpen, or in a katlamalı game one more than
+    // the highest series opening / pair count already on the table this hand.
+    int seriesOpenNeed() const;
+    int pairsOpenNeed() const;
     OpenCheck checkOpen(int seat, const std::vector<std::vector<int>>& groups) const;
     OpenCheck checkLay(int seat, const std::vector<std::vector<int>>& groups) const;
     int leaderSeat() const;                            // lowest total score (ties: lower seat)
@@ -150,7 +159,7 @@ public:
     ActionResult returnLeftTile(int seat);             // give pending tile back, +penalty, -> NeedDraw
                                                        // (cannot take from left again this turn)
     // First opening. Each inner vector is one meld in display order (see makeMeld). All series, or all
-    // pairs. Series total >= openThreshold or pairs >= minPairsToOpen. Must include pendingLeftTile if
+    // pairs. Series total >= seriesOpenNeed() or pairs >= pairsOpenNeed(). Must include pendingLeftTile if
     // any. Must leave >= 1 tile in hand.
     ActionResult openHand(int seat, const std::vector<std::vector<int>>& groups);
     // Additional melds after opening (canWorkTable). Series openers lay series, pair openers lay pairs.

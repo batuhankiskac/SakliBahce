@@ -78,6 +78,7 @@ enum Sit {
     S_CayciIdle,        // the tea boy's own cheek
     S_CayciGoal,
     S_Cat,              // the kahvehane cat meowed
+    S_KatOpen,          // katlamalı: opened over somebody else's opening ({v} = the new total / pairs)
     S_Count
 };
 
@@ -465,6 +466,10 @@ LINES(kCatM, "Tekir, sen hangi takımı tutuyorsun?", "Pisi, gel buraya, uğur g
 LINES(kCatN, "Bu kedi benden yaşlı, bilirim.", "Pisi, dizlerime çıkma, ağrıyor.", "Rıfat Efendi'nin zamanından kalma bu kedi.",
       "Hıh, o da çay istiyor herhalde.")
 LINES(kCatC, "Aç değil abi, az önce yedi!", "Pisi, ocağa yaklaşma!")
+LINES(kKatR, "Katlamalıda {v}; sabırla geçtik.", "{v} ile geçtim, hayırlısı.", "Çıta yükseldi ama sabır geçti: {v}.")
+LINES(kKatM, "{v}! Katlamalı da olsa geçtim abi!", "Çıta yükseldi ama Mahmut uçtu: {v}!", "Katlamalıymış, {v} ile geçtim işte!")
+LINES(kKatN, "{v}. Katlamalıda bile açarım, ne sandınız.", "Hıh, {v}. Çıtayı yükseltin bakalım.",
+      "Bizim zamanımızda katlamalıda 150'yle açardık. {v} de fena değil.")
 LINES(kGoalR, "Maşallah, güzel gol.", "Gol mü oldu? Hayırlı olsun.", "Güzel vurmuş, maşallah.")
 LINES(kGoalM, "Gooool!", "Oley! Gördünüz mü?", "Ofsayt o abi, ofsayt!", "İşte bu! Gooool!", "Nasıl attı, nasıl!",
       "Hakem, o gol değil!")
@@ -534,6 +539,7 @@ const Tbl kTables[S_Count][4] = {
     {TN, TN, TN, T(kCayciIdle)},
     {TN, TN, TN, T(kCayciGoal)},
     {T(kCatR), T(kCatM), T(kCatN), T(kCatC)},
+    {T(kKatR), T(kKatM), T(kKatN), TN},
 };
 
 // Multi-line idle exchanges (2–5 lines): seats 1 Rıza, 2 Mahmut, 3 Nuri, 4 the çaycı. Lines may use {h}.
@@ -970,7 +976,13 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
     case EvType::Open: {
         bool pairs = actor >= 0 && actor < 4 && g.player(actor).openedWithPairs;
         int v = e.amount;
-        if (actorBot) {
+        // katlamalı: somebody had already opened the same way, so this one had to beat it
+        bool over = false;
+        for (int s = 0; s < 4 && g.rules().katlamali; ++s)
+            over = over || (s != actor && g.player(s).opened && g.player(s).openedWithPairs == pairs);
+        if (actorBot && over && chance(0.6f)) {
+            say(actor, S_KatOpen, 0.25f, true, v, actor, 4.f);
+        } else if (actorBot) {
             if (chance(0.9f)) say(actor, pairs ? S_OpenSelfPairs : S_OpenSelf, 0.25f, true, v, actor, 4.f);
             if (chance(0.35f)) {
                 int other = pickOther(actor);

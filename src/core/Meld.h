@@ -4,14 +4,12 @@
 // in the .cpp only.
 //
 // Rules (see DESIGN.md §2):
-//  * Run   : >= 3 tiles, same color, consecutive numbers 1..13; a "1" may follow 13 (12-13-1, represented
-//            as number 14 = ACE_HIGH_NUMBER, worth ACE_HIGH_VALUE). No wrap-around (13-1-2 is invalid).
-//            Max length 14 (1..13 + high ace is impossible since the same '1' can't be at both ends, but
-//            two different physical '1's could: 1..13,1 is legal, length 14).
+//  * Run   : 3..13 tiles, same color, consecutive numbers 1..13. A run ends at 13: unlike plain okey, 101
+//            has no '1' after 13 (12-13-1 is NOT a run) and no wrap-around (13-1-2 is invalid).
 //  * Group : 3 or 4 tiles, same number, all different colors.
 //  * Pair  : exactly 2 tiles with identical face (same color AND number).
 //  * Okey (wild, ok.isJoker(id)) can stand for any tile. Fake jokers are NOT wild: they play as the okey face.
-//  * Value : sum of the represented numbers (joker counts as the number it represents; a high ace = 14).
+//  * Value : sum of the represented numbers (a joker counts as the number it represents).
 #include "core/Tile.h"
 #include <string>
 #include <vector>
@@ -24,7 +22,7 @@ enum class MeldKind { Run, Group, Pair };
 struct PlacedTile {
     int id = -1;
     int color = 0;      // represented color
-    int number = 1;     // represented number (runs: 1..14, 14 = '1' after 13)
+    int number = 1;     // represented number (1..13)
     bool joker = false; // physical wild okey tile
 };
 
@@ -33,7 +31,7 @@ struct Meld {
     int owner = -1;                // seat that laid it
     std::vector<PlacedTile> tiles; // Run: ascending by number. Group: color order. Pair: 2 tiles.
 
-    int value() const;             // sum of represented values (number; 14 -> ACE_HIGH_VALUE)
+    int value() const;             // sum of represented numbers
     bool hasJoker() const;
     std::vector<int> ids() const;  // physical ids in display order
     int size() const { return (int)tiles.size(); }
@@ -46,7 +44,7 @@ struct Meld {
 //   result is normalised to ascending). Jokers take the number of their position.
 //   If `lenient` is true and the strict positional reading fails, jokers are re-placed freely:
 //   non-jokers sorted, internal gaps filled with jokers, remaining jokers appended at the high end
-//   (while <= 14 and legal), then at the low end. Returns the highest-value legal reading.
+//   (while <= 13), then at the low end.
 bool makeRun(const std::vector<int>& ids, const OkeyInfo& ok, Meld& out, bool lenient = true,
              std::string* why = nullptr);
 // makeGroup: 3..4 tiles; non-jokers share the number and have distinct colors; jokers take the missing
@@ -64,7 +62,7 @@ bool makeMeld(const std::vector<int>& ids, const OkeyInfo& ok, Meld& out, bool p
 enum class AddSide { Auto, Front, Back };
 // Add tile `id` to run/group `m` (pairs never accept tiles). Runs: Back = after the highest tile,
 // Front = before the lowest. Auto = Back if legal else Front (a joker prefers Back unless the run already
-// ends at 14). Groups ignore `side`. Owner is preserved. Returns false if illegal.
+// ends at 13). Groups ignore `side`. Owner is preserved. Returns false if illegal.
 bool tryAddTile(const Meld& m, int id, const OkeyInfo& ok, AddSide side, Meld& out);
 // Replace a joker in run/group `m` with the real tile `id` whose face matches what that joker represents
 // (groups: any missing color of the group's number is accepted when the group has a joker).

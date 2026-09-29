@@ -232,12 +232,12 @@ void TableState::arrange(bool pairs) {
 bool TableState::aiWantsPairs() {
     const okey::PlayerInfo& me = game->player(human);
     if (me.opened) return aiPairs = me.openedWithPairs;
-    const okey::RulesConfig& rc = game->rules();
+    const int needSeries = game->seriesOpenNeed(), needPairs = game->pairsOpenNeed();  // (katlamalı aware)
     const int pc = okey::solvePairs(me.hand, ok()).value;
-    if (pc < rc.minPairsToOpen - 1) return aiPairs = false; // (skips the series solve in the usual case)
+    if (pc < needPairs - 1) return aiPairs = false; // (skips the series solve in the usual case)
     const int sv = okey::solveSeries(me.hand, ok()).value;
-    if (aiPairs) return aiPairs = sv < rc.openThreshold;
-    return aiPairs = (sv < rc.openThreshold * 7 / 10) || (pc >= rc.minPairsToOpen && sv < rc.openThreshold);
+    if (aiPairs) return aiPairs = sv < needSeries;
+    return aiPairs = (sv < needSeries * 7 / 10) || (pc >= needPairs && sv < needSeries);
 }
 
 // Re-arranges the AI's istaka once it may (never mid-deal; a drawn tile flies straight to its group).

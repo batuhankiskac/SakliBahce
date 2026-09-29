@@ -114,22 +114,15 @@ int oracleMeldValue(const V& ids, const OkeyInfo& ok) {
     bool oneColor = true;
     for (int c : colors)
         if (c != colors[0]) oneColor = false;
-    if (oneColor && n <= 14) {
-        for (int s = 1; s + n - 1 <= 14; ++s) {
+    if (oneColor && n <= 13) {  // 101: runs end at 13 (no 12-13-1)
+        for (int s = 1; s + n - 1 <= 13; ++s) {
             const int e = s + n - 1;
-            bool used[15] = {};
+            bool used[14] = {};
             bool okRun = true;
-            int ones = 0;
             for (int f : faces) {
-                if (f == 1) {
-                    ++ones;
-                    continue;
-                }
                 if (f < s || f > e || used[f]) okRun = false;
                 else used[f] = true;
             }
-            int slotsForOnes = (s == 1 && !used[1] ? 1 : 0) + (e == 14 && !used[14] ? 1 : 0);
-            if (ones > slotsForOnes) okRun = false;
             if (!okRun) continue;
             int v = 0;
             for (int p = s; p <= e; ++p) v += p;
@@ -329,19 +322,19 @@ void testSolverFixed() {
         CHECK_EQ(r.tilesUsed, 6);
         CHECK_EQ((int)r.leftovers.size(), 1);
     }
-    // 12-13-1 is worth 39
+    // 12-13-1 is not a run in 101
     {
         V h = {T(R, 12), T(R, 13), T(R, 1)};
         SolveResult r = solveSeries(h, ok);
-        CHECK_EQ(r.value, 39);
-        CHECK_EQ((int)r.melds.size(), 1);
-        if (!r.melds.empty()) CHECK(r.melds[0] == V({T(R, 12), T(R, 13), T(R, 1)}));
+        CHECK_EQ(r.value, 0);
+        CHECK(r.melds.empty());
+        CHECK_EQ((int)r.leftovers.size(), 3);
     }
-    // okey + okey + 1 -> 12-13-14 (39)
+    // okey + okey + 1 -> 1-2-3 (6) beats 1-1-1 (3): a 1 never follows 13
     {
         V h = {J1, J2, T(Y, 1)};
         SolveResult r = solveSeries(h, ok);
-        CHECK_EQ(r.value, 39);
+        CHECK_EQ(r.value, 6);
     }
     // 13 + 2 okeys -> group 13-13-13 (39) beats 11-12-13 (36)
     {
@@ -351,14 +344,14 @@ void testSolverFixed() {
         Meld m;
         CHECK(!r.melds.empty() && makeMeld(r.melds[0], ok, m, false) && m.value() == 39);
     }
-    // full 1..13 + 1 run (length 14)
+    // full 1..13 run; a second 1 can't follow the 13
     {
         V h;
         for (int n = 1; n <= 13; ++n) h.push_back(T(B, n));
         h.push_back(T(B, 1, 1));
         SolveResult r = solveSeries(h, ok);
-        CHECK_EQ(r.value, 105);
-        CHECK_EQ(r.tilesUsed, 14);
+        CHECK_EQ(r.value, 91);
+        CHECK_EQ(r.tilesUsed, 13);
     }
     // fake jokers play as Black 5
     {
@@ -434,11 +427,10 @@ void testSolverOracle() {
         CHECK_MSG(valid, why + " hand " + tilesStr(hand, ok));
         CHECK_MSG(sc == o.score, "solver " + std::to_string(sc) + " oracle " + std::to_string(o.score) + " hand " +
                                      tilesStr(hand, ok) + " must " + (must >= 0 ? tileNameTR(must, ok) : "-"));
-        for (const V& m : r.melds) {
+        for (const V& m : r.melds) {  // runs that end at 13 (where plain okey would continue with a 1)
             Meld mm;
-            if (makeMeld(m, ok, mm, false))
-                for (const PlacedTile& t : mm.tiles)
-                    if (t.number == ACE_HIGH_NUMBER) ++withAce;
+            if (makeMeld(m, ok, mm, false) && mm.kind == MeldKind::Run && mm.tiles.back().number == NUM_NUMBERS)
+                ++withAce;
         }
 
         // Pairs against the oracle
@@ -464,7 +456,7 @@ void testSolverOracle() {
             CHECK(all == h);
         }
     }
-    std::printf("  oracle: %d hands (%d with okeys, %d with fakes, %d mustUse, %d high aces placed)\n", cases,
+    std::printf("  oracle: %d hands (%d with okeys, %d with fakes, %d mustUse, %d runs ending at 13)\n", cases,
                 withJokers, withFake, withMust, withAce);
 }
 

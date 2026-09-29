@@ -56,6 +56,7 @@ test: $(TESTS)
 	$(BUILD)/test_ai
 	$(BUILD)/sim --hands 400 --seed 7
 	$(BUILD)/sim --hands 400 --seed 11 --levels 2,0,1,2 --rotate
+	$(BUILD)/sim --hands 200 --seed 13 --levels 2,1,2,1 --rotate --katlamali
 
 run: $(GAME)
 	./$(GAME)

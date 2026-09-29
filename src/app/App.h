@@ -20,6 +20,7 @@ struct Options {
     int matches = 1;            // --matches N (autoplay): N matches back to back, every other one via the title screen
     int hands = 0;              // --hands N (1..11), 0 = from the settings
     int level = -1;             // --level 0..2 (Acemi / Usta / Kurt), -1 = from the settings
+    bool katlamali = false;     // --katlamali: this run's matches are katlamalı (else from the settings)
     bool start = false;         // --start: skip the title screen
     bool noAudio = false;       // --no-audio
     long maxFrames = 0;         // --max-frames N: quit after N frames (0 = never)
