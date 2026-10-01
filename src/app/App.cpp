@@ -240,6 +240,7 @@ void loadSettings(ui::Settings& s) {
         else if (k == "muzik") s.music = iv != 0;
         else if (k == "ipucu") s.hints = iv != 0;
         else if (k == "katlamali") s.katlamali = iv != 0;
+        else if (k == "yandanceza") s.yandanCeza = iv != 0;
         else if (k == "hiz") s.animSpeed = std::clamp((float)std::atof(v.c_str()), 0.5f, 2.f);
         else if (k == "isim" && !v.empty() && v.size() <= 64) s.playerName = v;
     }
@@ -253,9 +254,9 @@ void saveSettings(const ui::Settings& s) {
     char buf[512];
     std::snprintf(buf, sizeof buf,
                   "# SaklıBahçe ayarları\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\nkatlamali=%d\n"
-                  "hiz=%.2f\nisim=%s\n",
+                  "yandanceza=%d\nhiz=%.2f\nisim=%s\n",
                   s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
-                  s.katlamali ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
+                  s.katlamali ? 1 : 0, s.yandanCeza ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
     SaveFileText(path.c_str(), buf);
 }
 
@@ -872,6 +873,7 @@ void App::startMatch() {
     okey::RulesConfig cfg;
     cfg.numHands = std::clamp(st.numHands, 1, 11);
     cfg.katlamali = st.katlamali || opt_.katlamali;
+    cfg.leftOpenPenalty = st.yandanCeza;
     game_.setRules(cfg);
     const std::array<std::string, 4> nm = names();
     for (int s = 0; s < 4; ++s) game_.setPlayer(s, nm[s], s == HUMAN);

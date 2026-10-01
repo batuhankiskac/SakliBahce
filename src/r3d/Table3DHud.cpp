@@ -296,6 +296,7 @@ std::string TableState::statusText(Color& c) const {
     }
     if (game->pendingLeftTile() >= 0) {
         c = rgba(255, 170, 90);
+        if (!game->rules().penaltyReturnLeft) return "Yandan aldığın taşı kullan ya da Geri Ver";
         return "Yandan aldığın taşı kullan ya da Geri Ver (" + std::to_string(game->rules().penalty) + " ceza)";
     }
     if (game->openedThisTurn(human) && game->rules().waitTurnAfterOpening) return "Bir taş at (açtığın turda işlenmez)";

@@ -79,6 +79,8 @@ enum Sit {
     S_CayciGoal,
     S_Cat,              // the kahvehane cat meowed
     S_KatOpen,          // katlamalı: opened over somebody else's opening ({v} = the new total / pairs)
+    S_FedPenSelf,       // my discard was taken and opened with: {v} = the penalty, {p} = the opener
+    S_FedPenGloat,      // I opened with the left tile: {g} = the giver who pays {v}
     S_Count
 };
 
@@ -470,6 +472,19 @@ LINES(kKatR, "Katlamalıda {v}; sabırla geçtik.", "{v} ile geçtim, hayırlıs
 LINES(kKatM, "{v}! Katlamalı da olsa geçtim abi!", "Çıta yükseldi ama Mahmut uçtu: {v}!", "Katlamalıymış, {v} ile geçtim işte!")
 LINES(kKatN, "{v}. Katlamalıda bile açarım, ne sandınız.", "Hıh, {v}. Çıtayı yükseltin bakalım.",
       "Bizim zamanımızda katlamalıda 150'yle açardık. {v} de fena değil.")
+// ---------------------------------------------------------------- yandan alıp açma cezası (tile number x10 / x20)
+LINES(kFedSelfR, "Eh, {v} de bizden olsun.", "Verdiğim taşla açtın {p}, hayrını gör. {v} yazın.",
+      "Kısmet {p}. {v} yazıldı, sabır.", "Bir taş attık, {v} oldu. Hesap böyle.")
+LINES(kFedSelfM, "Olamaz! {v} ceza mı?", "Kendi kaleme attım abi, {v}!", "{p}, o taşı sana hediye ettim, {v} de üstüne!",
+      "Of be, {v}! Bu ne pahalı taşmış!", "Pas verdim, gol yedim: {v}!")
+LINES(kFedSelfN, "Hıh, {v}. Bu gözlükle olacağı buydu.", "Bizim zamanımızda bu kadar pahalı taş yoktu: {v}!",
+      "Yaz bakalım {v}. Emekli maaşından keseriz.", "{p}, benim taşımla mı açtın? {v} ha!")
+LINES(kGloatR, "Sağ ol {g}, açtık. {v} senin hanene.", "Allah razı olsun {g}; taşın bereketli, {v} yazılır.",
+      "Taşın işe yaradı {g}, kusura bakma: {v}.")
+LINES(kGloatM, "Sağ ol {g}! Açtım, {v} de senden!", "Gol pası gibi taş {g}! Sana {v} yazdılar!",
+      "{g}, taşın için teşekkürler; {v} ceza da cabası!", "Ver elini {g}, açtık! {v} senin!")
+LINES(kGloatN, "Hıh, {g}, attığın taşla açtım. {v} yazın.", "{g}, böyle taş atılmaz; al sana {v}.",
+      "Bizim zamanımızda bu hatayı yapanı kahveden kovarlardı {g}. {v}!")
 LINES(kGoalR, "Maşallah, güzel gol.", "Gol mü oldu? Hayırlı olsun.", "Güzel vurmuş, maşallah.")
 LINES(kGoalM, "Gooool!", "Oley! Gördünüz mü?", "Ofsayt o abi, ofsayt!", "İşte bu! Gooool!", "Nasıl attı, nasıl!",
       "Hakem, o gol değil!")
@@ -540,6 +555,8 @@ const Tbl kTables[S_Count][4] = {
     {TN, TN, TN, T(kCayciGoal)},
     {T(kCatR), T(kCatM), T(kCatN), T(kCatC)},
     {T(kKatR), T(kKatM), T(kKatN), TN},
+    {T(kFedSelfR), T(kFedSelfM), T(kFedSelfN), TN},
+    {T(kGloatR), T(kGloatM), T(kGloatN), TN},
 };
 
 // Multi-line idle exchanges (2–5 lines): seats 1 Rıza, 2 Mahmut, 3 Nuri, 4 the çaycı. Lines may use {h}.
@@ -936,6 +953,7 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
         humanWait_ = 0.f;
         nagLevel_ = 0;
         lastDiscardJoker_ = false;
+        lastOpenSeat_ = -1;
         if (actorBot && chance(0.035f)) say(actor, S_TurnSelf, 0.1f);
         else if (actor == 0 && chance(0.04f)) say(pickBot(), S_HumanTurn, 0.4f, false, 0, 0);
         break;
@@ -974,6 +992,7 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
         break;
     }
     case EvType::Open: {
+        lastOpenSeat_ = actor;
         bool pairs = actor >= 0 && actor < 4 && g.player(actor).openedWithPairs;
         int v = e.amount;
         // katlamalı: somebody had already opened the same way, so this one had to beat it
@@ -1011,6 +1030,13 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
         }
         break;
     case EvType::Penalty:
+        // yandan alıp açma: the opener (this turn's player) opened with the actor's discard
+        if (lastOpenSeat_ >= 0 && actor == okey::Game::leftOf(lastOpenSeat_)) {
+            const int opener = lastOpenSeat_;
+            if (opener != 0 && chance(0.7f)) say(opener, S_FedPenGloat, 0.6f, true, e.amount, opener, 4.f);
+            if (actorBot && chance(0.6f)) say(actor, S_FedPenSelf, 2.4f, true, e.amount, opener, 5.f);
+            break;
+        }
         if (actor == 0) {
             if (chance(0.85f))
                 say(pickBot(), lastDiscardJoker_ ? S_PenOkeyHuman : S_PenaltyHuman, 0.5f, true, 0, actor, 4.f);

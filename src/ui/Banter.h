@@ -80,6 +80,7 @@ private:
     bool handLive_ = false;
     bool lowPileSaid_ = false;
     bool lastDiscardJoker_ = false;       // the most recent discard this turn was the okey
+    int lastOpenSeat_ = -1;               // who opened this turn (a Penalty on their left = yandan açma cezası)
     int lastWinner_ = -2;                 // winner of the previous hand (-1 pile out, -2 none yet)
     float teaOrderCool_ = 25.f;
     int lastPick_[256] = {};              // anti-repeat memory per table

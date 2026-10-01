@@ -27,6 +27,10 @@ struct RulesConfig {
     bool waitTurnAfterOpening = true;  // no işleme / new melds / joker swap in the turn you opened
     bool penaltyJokerDiscard = true;   // discarding the okey (except as the finishing tile)
     bool penaltyPlayableDiscard = true;// discarding a tile that fits a table meld ("işlek taş")
+    bool penaltyReturnLeft = false;    // giving a tile taken from the left back costs a penalty (off: free)
+    // Yandan alıp açma: opening with the tile taken from the left writes that tile's number x10 (series
+    // opening) or x20 (pair opening) on the player who discarded it.
+    bool leftOpenPenalty = true;
     // Katlamalı oyun: after a series opening you must open series with at least one more than it (116 ->
     // 117), after a pair opening with at least one more pair (5 -> 6). See seriesOpenNeed / pairsOpenNeed.
     bool katlamali = false;
@@ -201,6 +205,7 @@ private:
     std::string says(int seat, const std::string& third, const std::string& second) const;
     bool isSen(int seat) const;
     void addPenalty(int seat, const std::string& text);
+    void addPenalty(int seat, const std::string& text, int amount);
 
     RulesConfig cfg_;
     std::array<PlayerInfo, 4> players_;

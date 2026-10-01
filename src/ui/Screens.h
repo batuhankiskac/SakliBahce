@@ -29,6 +29,7 @@ struct Settings {
     float animSpeed = 1.f;     // 0.5 .. 2
     bool hints = true;
     bool katlamali = false;    // Katlamalı oyun (okey::RulesConfig::katlamali), from the next match
+    bool yandanCeza = true;    // yandan alıp açma cezası (okey::RulesConfig::leftOpenPenalty), next match
     std::string playerName = "Sen";
 };
 

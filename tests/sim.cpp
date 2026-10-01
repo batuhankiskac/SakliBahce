@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
     long long seatScore[4] = {};
     long long handsPlayed = 0, finished = 0, exhausted = 0, turnsSum = 0;
     long long rejected = 0, fallbackRejected = 0;
-    long long penOkey = 0, penIslek = 0, penReturn = 0;
+    long long penOkey = 0, penIslek = 0, penReturn = 0, penLeftOpen = 0, penLeftOpenPts = 0;
     long long finishOkey = 0, finishPairs = 0, finishElden = 0;
     long long takeLeft = 0, returnLeft = 0, swaps = 0, adds = 0, lays = 0;
     long long openedSeatHands = 0;
@@ -272,6 +272,7 @@ int main(int argc, char** argv) {
                     case EvType::Discard: lastWasDiscardJoker = g.okey().isJoker(e.tile); break;
                     case EvType::Penalty:
                         if (lastEvType == (int)EvType::ReturnLeft) ++penReturn;
+                        else if (lastEvType == (int)EvType::Open) ++penLeftOpen, penLeftOpenPts += e.amount;
                         else if (lastWasDiscardJoker) ++penOkey;
                         else ++penIslek;
                         lv[seatLevel[e.player]].penalties++;
@@ -387,7 +388,8 @@ int main(int argc, char** argv) {
                 "işle %lld, lay %lld\n",
                 finishOkey, finishPairs, finishElden, takeLeft, returnLeft, swaps, adds, lays);
     std::printf("opening rate: %.1f%% of seat-hands\n", 100.0 * openedSeatHands / (4.0 * handsPlayed));
-    std::printf("penalties: okey %lld, işlek %lld, returned %lld\n", penOkey, penIslek, penReturn);
+    std::printf("penalties: okey %lld, işlek %lld, returned %lld, yandan açma %lld (avg %.0f)\n", penOkey, penIslek,
+                penReturn, penLeftOpen, penLeftOpen ? (double)penLeftOpenPts / (double)penLeftOpen : 0.0);
     std::printf("avg hand score per seat: %.1f %.1f %.1f %.1f\n", (double)seatScore[0] / handsPlayed,
                 (double)seatScore[1] / handsPlayed, (double)seatScore[2] / handsPlayed,
                 (double)seatScore[3] / handsPlayed);

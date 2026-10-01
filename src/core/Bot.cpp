@@ -1657,6 +1657,15 @@ struct Bot::Impl {
                 if (know.live(c, n) == 0) feed -= 1.5;
                 danger += feed;
             }
+            // Yandan açma cezası: an unopened right neighbour who opens with this tile writes its number x10
+            // (x20 for pairs) on us. Nothing tells which tile completes an opening, so weigh the expected cost:
+            // likelier as the pile runs down, less likely for a face they threw away themselves.
+            if (!easy() && rc.leftOpenPenalty && !know.rOpened && !ok->isJoker(x)) {
+                double p = 0.03 + 0.05 * std::clamp(1.0 - pile / 20.0, 0.0, 1.0);
+                if (know.rDiscarded[c][n]) p *= 0.3;
+                if (know.live(c, n) == 0) p *= 0.6;
+                danger += n * 10.0 * p;
+            }
             if (easy()) danger += rng.uniform(0.0f, 6.0f);
             scored.push_back({keep + danger, x});
         }

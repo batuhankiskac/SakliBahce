@@ -1160,9 +1160,9 @@ void testTakeReturnLeft() {
     if (!ev.empty()) CHECK(ev[0].text.find(tileNameTR(t, g.okey())) != std::string::npos);
 
     r = g.discard(s1, t);
-    CHECK_EQ(r.error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver (101 ceza)"));
+    CHECK_EQ(r.error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver"));
     r = g.discard(s1, firstNonJoker(g, s1));
-    CHECK_EQ(r.error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver (101 ceza)"));
+    CHECK_EQ(r.error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver"));
     r = g.addToMeld(s1, t, 0);
     CHECK_EQ(r.error, std::string("Önce elini açmalısın"));
     r = g.layMelds(s1, {{t, g.player(s1).hand[0], g.player(s1).hand[1]}});
@@ -1177,20 +1177,18 @@ void testTakeReturnLeft() {
     CHECK_EQ(g.topDiscard(s0), t);
     CHECK(!contains(g.player(s1).hand, t));
     CHECK_EQ((int)g.player(s1).hand.size(), 21);
-    CHECK_EQ(g.player(s1).handPenalty, 101);
+    CHECK_EQ(g.player(s1).handPenalty, 0); // giving it back is free by default
     CHECK(g.stage() == TurnStage::NeedDraw);
     CHECK_EQ(g.pendingLeftTile(), -1);
     CHECK(!g.canTakeFromLeft(s1));
     ev = g.drainEvents();
-    CHECK(ev.size() == 2);
-    if (ev.size() == 2) {
+    CHECK(ev.size() == 1);
+    if (ev.size() == 1) {
         CHECK(ev[0].type == EvType::ReturnLeft && ev[0].tile == t);
-        CHECK(ev[1].type == EvType::Penalty && ev[1].amount == 101 && ev[1].player == s1);
         const std::string acc = tileAcc(t, g.okey());
         const std::string what = g.player(s1).human ? "Yandan aldığın " + acc + " geri verdin"
                                                     : g.player(s1).name + " yandan aldığı " + acc + " geri verdi";
         CHECK_EQ(ev[0].text, what);
-        CHECK_EQ(ev[1].text, what + ": 101 ceza"); // the penalty alone tells the whole story
     }
     r = g.takeFromLeft(s1);
     CHECK(!r.ok);
@@ -1230,6 +1228,7 @@ void testReturnLeftTexts() {
             g.setPlayer(0, "Batuhan", true);
             g.setPlayer(2, "Kel Mahmut", false);
             Setup s;
+            s.cfg.penaltyReturnLeft = true;
             s.hands[seat] = FILL;
             if (seat != 0) s.hands[0] = {T(K, 13)};
             s.discards[Game::leftOf(seat)] = {tile};
@@ -1264,12 +1263,86 @@ void testReturnLeftTexts() {
     Game g;
     Setup s;
     s.cfg.penalty = 50;
+    s.cfg.penaltyReturnLeft = true;
     s.hands[0] = FILL;
     s.discards[3] = {T(R, 1)};
     s.stage = TurnStage::NeedDraw;
     apply(g, s);
     CHECK(g.takeFromLeft(0).ok);
     CHECK_EQ(g.discard(0, T(Y, 1)).error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver (50 ceza)"));
+}
+
+// Yandan alıp açma: opening with the left tile charges its discarder the number x10 (series) or x20 (pairs).
+void testLeftOpenPenalty() {
+    for (bool on : {true, false}) {
+        // the human opens series with Sarı 7 taken from Nuri
+        Game g;
+        g.setPlayer(0, "Batuhan", true);
+        g.setPlayer(3, "Nuri", false);
+        Setup s;
+        s.cfg.leftOpenPenalty = on;
+        s.hands[0] = {T(R, 10), T(R, 11), T(R, 12), T(R, 13), T(B, 10), T(B, 11), T(B, 12), T(B, 13),
+                      T(Y, 8),  T(Y, 9),  T(K, 1)};
+        s.hands[1] = FILL;
+        s.discards[3] = {T(Y, 7)};
+        s.stage = TurnStage::NeedDraw;
+        apply(g, s);
+        CHECK(g.takeFromLeft(0).ok);
+        CHECK(g.openHand(0, {{T(R, 10), T(R, 11), T(R, 12), T(R, 13)},
+                             {T(B, 10), T(B, 11), T(B, 12), T(B, 13)},
+                             {T(Y, 7), T(Y, 8), T(Y, 9)}}).ok);
+        std::vector<GameEvent> ev = g.drainEvents();
+        CHECK_EQ(g.player(0).handPenalty, 0);
+        CHECK_EQ(g.player(3).handPenalty, on ? 70 : 0);
+        CHECK_EQ(countType(ev, EvType::Penalty), on ? 1 : 0);
+        if (on && ev.size() >= 3) {
+            CHECK(ev[ev.size() - 2].type == EvType::Open); // the opening first, then the penalty
+            const GameEvent& p = ev.back();
+            CHECK(p.type == EvType::Penalty && p.player == 3 && p.amount == 70);
+            CHECK_EQ(p.text, std::string("Nuri Sarı 7 attı, onunla açıldı: 70 ceza"));
+        }
+        CHECK(conserved(g));
+    }
+    {
+        // a bot opens pairs with the human's Kırmızı 7: the human pays 7 x 20
+        Game g;
+        g.setPlayer(0, "Batuhan", true);
+        Setup s;
+        s.hands[0] = FILL;
+        s.hands[1] = {T(R, 1, 0), T(R, 1, 1), T(B, 2, 0), T(B, 2, 1), T(Y, 4, 0), T(Y, 4, 1),
+                      T(R, 5, 0), T(R, 5, 1), T(R, 7, 0), T(K, 1)};
+        s.discards[0] = {T(R, 7, 1)};
+        s.seat = 1;
+        s.stage = TurnStage::NeedDraw;
+        apply(g, s);
+        CHECK(g.takeFromLeft(1).ok);
+        CHECK(g.openHand(1, {{T(R, 1, 0), T(R, 1, 1)}, {T(B, 2, 0), T(B, 2, 1)}, {T(Y, 4, 0), T(Y, 4, 1)},
+                             {T(R, 5, 0), T(R, 5, 1)}, {T(R, 7, 0), T(R, 7, 1)}}).ok);
+        std::vector<GameEvent> ev = g.drainEvents();
+        CHECK_EQ(g.player(0).handPenalty, 140);
+        const GameEvent* p = findEv(ev, EvType::Penalty);
+        CHECK(p != nullptr);
+        if (p) {
+            CHECK(p->player == 0 && p->amount == 140);
+            CHECK_EQ(p->text, std::string("Kırmızı 7 attın, onunla açıldı: 140 ceza"));
+        }
+        CHECK(conserved(g));
+    }
+    {
+        // an already opened player laying a new series with the left tile: no penalty
+        Game g;
+        Setup s;
+        s.hands[0] = {T(Y, 8), T(Y, 9), T(K, 1), T(K, 13)};
+        s.hands[1] = FILL;
+        s.discards[3] = {T(Y, 7)};
+        s.stage = TurnStage::NeedDraw;
+        apply(g, s);
+        markOpened(g, 0, false);
+        CHECK(g.takeFromLeft(0).ok);
+        CHECK(g.layMelds(0, {{T(Y, 7), T(Y, 8), T(Y, 9)}}).ok);
+        CHECK_EQ(countType(g.drainEvents(), EvType::Penalty), 0);
+        CHECK_EQ(g.player(3).handPenalty, 0);
+    }
 }
 
 // 100 fails, 101 passes; value counters; errors.
@@ -1513,7 +1586,7 @@ void testPendingLeft() {
     markOpened(g, 1, false);
     CHECK(g.takeFromLeft(0).ok);
     CHECK(g.canWorkTable(0));
-    CHECK_EQ(g.discard(0, T(B, 2)).error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver (101 ceza)"));
+    CHECK_EQ(g.discard(0, T(B, 2)).error, std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver"));
     CHECK(g.addToMeld(0, T(R, 6), 0).ok);
     CHECK_EQ(g.pendingLeftTile(), -1);
     CHECK(g.discard(0, T(B, 2)).ok);
@@ -1550,7 +1623,7 @@ void testPendingLeft() {
     CHECK_EQ(g.addToMeld(0, T(R, 6), 0).error, std::string("Önce elini açmalısın"));
     CHECK(g.returnLeftTile(0).ok);
     CHECK_EQ(g.topDiscard(3), T(R, 6));
-    CHECK_EQ(g.player(0).handPenalty, 101);
+    CHECK_EQ(g.player(0).handPenalty, 0);
     CHECK(g.drawFromPile(0).ok);
     CHECK(g.discard(0, T(B, 2)).ok);
     CHECK(conserved(g));
@@ -2665,7 +2738,7 @@ private:
         const int before = g_.player(seat).handPenalty;
         const ActionResult r = act([&] { return g_.returnLeftTile(seat); });
         CHECK(r.ok);
-        CHECK_EQ(g_.player(seat).handPenalty, before + cfg_.penalty);
+        CHECK_EQ(g_.player(seat).handPenalty, before + (cfg_.penaltyReturnLeft ? cfg_.penalty : 0));
         ++st_.returns;
     }
 
@@ -3144,6 +3217,7 @@ int main(int argc, char** argv) {
         {"game: event texts", testTurnTexts},
         {"game: take/return left", testTakeReturnLeft},
         {"game: return-left texts", testReturnLeftTexts},
+        {"game: yandan açma cezası", testLeftOpenPenalty},
         {"game: opening threshold", testOpeningThreshold},
         {"game: opening errors", testOpeningErrors},
         {"game: pairs opening", testPairsOpening},

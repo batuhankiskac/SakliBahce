@@ -1345,7 +1345,9 @@ void TableState::onEvent(const okey::GameEvent& e) {
         }
         pushToast(isHuman ? "hmove" : "move", e.text, light, 2.2f);
         break;
-    case EvType::ReturnLeft: break; // the Penalty right after it tells the whole story ("... geri verdi: 101 ceza")
+    case EvType::ReturnLeft: // with the give-back penalty the Penalty right after it tells the whole story
+        if (!game->rules().penaltyReturnLeft) pushToast(isHuman ? "hmove" : "move", e.text, light, 2.2f);
+        break;
     case EvType::Open:
     case EvType::LayMelds:
         if ((int)meldBorn.size() < e.meld + e.count) meldBorn.resize(e.meld + e.count, -100.f);

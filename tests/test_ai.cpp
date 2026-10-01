@@ -689,10 +689,10 @@ struct TurnLog {
             if (a.kind == k) return &a;
         return nullptr;
     }
-    int penalties() const {
+    int penalties(int seat = -1) const {
         int n = 0;
         for (const GameEvent& e : events)
-            if (e.type == EvType::Penalty) ++n;
+            if (e.type == EvType::Penalty && (seat < 0 || e.player == seat)) ++n;
         return n;
     }
 };
@@ -777,13 +777,15 @@ void testBotTakesLeftToOpen() {
             Bot bot(LEVELS[l], 3);
             const TurnLog t = playTurn(g, bot);
             CHECK_EQ(t.rejected, 0);
-            CHECK_EQ(t.penalties(), 0);
+            CHECK_EQ(t.penalties(1), 0);
             CHECK(!t.acts.empty());
             if (t.acts.empty()) continue;
             const BotAction::Kind want = useful ? BotAction::Kind::TakeLeft : BotAction::Kind::DrawPile;
             CHECK_MSG(t.acts.front().kind == want,
                       std::string(LEVEL_NAMES[l]) + (useful ? ": should take K11" : ": should draw"));
             if (useful) CHECK_MSG(g.player(1).opened, LEVEL_NAMES[l]);
+            // yandan açma cezası: the human who discarded K11 pays 11 x 10
+            CHECK_EQ(g.player(0).handPenalty, useful ? 110 : 0);
         }
     }
 }

@@ -53,8 +53,9 @@ in `TurnStage::Play` (no draw).
 1. **Draw**: take the top of the pile, **or** take the top discard of your left neighbour (`leftOf(seat)`
    discard pile). A tile taken from the left must be used on the table in the same turn (in the
    opening if not yet opened, otherwise via layMelds/addToMeld/swapJoker). If you can't, you give it back
-   (`returnLeftTile`): **+101 penalty**, the tile returns to the pile it came from, and you must draw from
-   the pile (you can't take from the left again this turn).
+   (`returnLeftTile`, free unless `penaltyReturnLeft`): the tile returns to the pile it came from, and you
+   must draw from the pile (you can't take from the left again this turn). Opening with that tile charges
+   the left neighbour its number x10 (x20 for a pair opening) when `leftOpenPenalty` is on.
 2. **Play** (optional): open, lay further melds, add tiles to table melds (işlemek), swap jokers.
 3. **Discard** one tile onto your own discard pile (it becomes takeable by your right neighbour).
 
@@ -154,7 +155,9 @@ bottom (the viewer sits at the table). `ui::layout` in `Common.h` fixes all shar
 * İşle: drag a tile from the rack onto a table meld (drop on the left half = front, right half = back;
   dropping onto a joker inside the meld tries a joker swap).
 * **Seri Diz** / **Çift Diz**: auto-arrange the rack (Solver::arrangeSeries / arrangePairs).
-* **Geri Ver**: return a tile taken from the left (+101).
+* **Geri Ver**: return a tile taken from the left (free; `RulesConfig::penaltyReturnLeft` makes it +101).
+* **Yandan açma cezası** (`RulesConfig::leftOpenPenalty`, Ayarlar toggle): opening with the tile taken from the
+  left writes its number x10 (series opening) or x20 (pair opening) on the player who discarded it.
 * Discarding an işlek tile or the okey asks for confirmation ("Bu taş işlek, 101 ceza! Yine de at?").
 * The okey tiles get a small star badge on the human's rack (as most okey apps do).
 

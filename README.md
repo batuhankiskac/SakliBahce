@@ -48,7 +48,7 @@ Masada, kendi sandalyende oturuyorsun; ıstakan önünde, rakiplerin karşında 
 | El Aç / Per Aç | ıstakadaki geçerli grupları masaya indirir (**Enter**) |
 | İşlemek | taşı masadaki bir perin üzerine sürükle: sol yarısı başa, sağ yarısı sona; perdeki okeyin üzerine bırakırsan okeyi alırsın |
 | Seri Diz / Çift Diz | ıstakayı kendiliğinden dizer (**S** / **C**) |
-| Geri Ver | yandan aldığın ama kullanamadığın taşı geri verir (101 ceza) |
+| Geri Ver | yandan aldığın ama kullanamadığın taşı cezasız geri verir |
 | Uzaktaki bir per ya da atık yığını | üzerinde fareyle biraz bekle: büyütülmüş hâli açılır; taşı bir rakibin perinin üzerinde tutarsan taşının eklenmiş hâli görünür |
 | Yapay Zeka modunu açıp kapamak | **Y**, sağ alttaki **Yapay Zeka** düğmesi ya da Çay Molası menüsü (ESC) |
 | Duraklatmak | **ESC** ya da **Menü** düğmesi |
@@ -85,7 +85,7 @@ Mod her açılışta kapalı başlar; `--ai` ile oyunu doğrudan bu modda bir ma
 - **Dağıtım:** Eli başlatan oyuncuya 22, diğerlerine 21 taş; kalan 20 taş ortada kapalı destedir. Başlatan oyuncu
   çekmeden atar; başlatma sırası her el sağa geçer.
 - **Tur:** Sıra sende: ya ortadan çekersin ya da solundaki oyuncunun attığı son taşı alırsın. Yandan aldığın taşı
-  aynı turda masada kullanmak zorundasın; kullanamazsan geri verirsin (**101 ceza**). Sonra istersen el açar,
+  aynı turda masada kullanmak zorundasın; kullanamazsan cezasız geri verip ortadan çekersin. Sonra istersen el açar,
   per indirir, işler ya da okey alırsın ve bir taş atarak turu bitirirsin.
 - **Perler:** Aynı renkte ardışık en az üç taş (seri; seri 13'te biter: normal okeyin aksine 101'de 12-13-1 ve
   13-1-2 olmaz, 1 yalnızca 1-2-3 diye başta kullanılır), aynı sayının farklı renklerinden 3–4 taş (grup) ya da iki
@@ -95,8 +95,9 @@ Mod her açılışta kapalı başlar; `--ai` ile oyunu doğrudan bu modda bir ma
   Sonraki turlarda çiftle açan yalnızca çift indirir; seriyle açan seri indirir, masada çiftle açmış başka biri
   varsa çiftlerini de indirebilir. Açmış herkes masadaki seri ve gruplara taş işleyebilir, okeyi gerçek taşıyla
   değiştirip alabilir. Elinde atacak en az bir taş kalmalıdır.
-- **Cezalar (+101):** okey atmak (bitiş taşı değilse), masadaki bir pere uyan (işlek) taşı atmak, yandan aldığın
-  taşı geri vermek.
+- **Cezalar (+101):** okey atmak (bitiş taşı değilse), masadaki bir pere uyan (işlek) taşı atmak.
+- **Yandan açma cezası (Ayarlar'dan kapatılabilir):** Biri senin attığın taşı alıp onunla elini açarsa, taşın
+  sayısının seri açılışta 10, çift açılışta 20 katı sana ceza yazılır (yandan 7 alıp seriyle açtı: atana 70).
 - **El sonu:** Son taşını atan eli bitirir. Deste biterse el kazanansız biter.
 - **Puanlama (düşük puan iyidir):** Bitiren −101, hiç açmayan 202, açanlar elinde kalan taşların toplamını yazar
   (çiftle açanın eli iki katı yazılır); açmış birinin elinde okey kaldıysa her okey için **101 ceza**. Okeyle,
@@ -107,8 +108,8 @@ Mod her açılışta kapalı başlar; `--ai` ile oyunu doğrudan bu modda bir ma
   az 1 fazlasıyla açarsın (116 → 117), çiftle açtıysa ondan 1 çift fazlasıyla (5 → 6). Seri ve çift ayrı sayılır;
   masadaki sayaç ve skor tahtası bunu gösterir.
 - **Kaynak:** Kurallar Türkiye'deki yaygın 101 (Zynga 101 Okey Plus ve Digitoy Yüzbir SSS'leri, kahvehane
-  usulü) ile karşılaştırıldı. Bölgeden bölgeye değişen kural: yandan alınıp kullanılamayan taş burada geri verilir
-  ve 101 ceza yazılır.
+  usulü) ile karşılaştırıldı. Bölgeden bölgeye değişen kurallar: yandan alınıp kullanılamayan taş burada cezasız
+  geri verilir; yandan alınan taşla açılınca atana taş sayısının 10/20 katı ceza yazılır.
 
 Kuralların tamamı oyunun içinde **Kurallar** ekranında örneklerle anlatılır.
 

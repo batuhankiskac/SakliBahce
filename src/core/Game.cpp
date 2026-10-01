@@ -376,7 +376,7 @@ ActionResult Game::returnLeftTile(int seat) {
 
     // The Penalty repeats the whole story ("... geri verdi: 101 ceza"), so a table that shows only the
     // Penalty still tells what happened.
-    addPenalty(seat, what + ": " + std::to_string(cfg_.penalty) + " ceza");
+    if (cfg_.penaltyReturnLeft) addPenalty(seat, what + ": " + std::to_string(cfg_.penalty) + " ceza");
     return ActionResult::success();
 }
 
@@ -387,10 +387,15 @@ ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& group
 
     PlayerInfo& p = players_[seat];
     const int first = (int)table_.size();
+    int leftTile = -1, leftNumber = 0; // the tile taken from the left that this opening uses
     for (Meld& m : melds) {
         for (const PlacedTile& t : m.tiles) {
             removeFromHand(seat, t.id);
-            if (t.id == pendingLeftTile_) pendingLeftTile_ = -1;
+            if (t.id == pendingLeftTile_) {
+                pendingLeftTile_ = -1;
+                leftTile = t.id;
+                leftNumber = t.number;
+            }
         }
         table_.push_back(std::move(m));
     }
@@ -413,6 +418,17 @@ ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& group
         e.text = says(seat, "eli açtı" + v, "eli açtın" + v);
     }
     push(std::move(e));
+
+    // Yandan alıp açma: the player who discarded that tile pays its number x10 (series) or x20 (pairs).
+    if (leftTile >= 0 && cfg_.leftOpenPenalty) {
+        const int giver = leftOf(seat);
+        const int amount = leftNumber * (c.pairs ? 20 : 10);
+        const std::string t = tileText(leftTile, okey_);
+        addPenalty(giver,
+                   says(giver, t + " attı, onunla açıldı", t + " attın, onunla açıldı") + ": " +
+                       std::to_string(amount) + " ceza",
+                   amount);
+    }
     return ActionResult::success();
 }
 
@@ -512,8 +528,9 @@ ActionResult Game::discard(int seat, int tile) {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
     if (pendingLeftTile_ >= 0)
-        return ActionResult::fail("Yandan aldığın taşı önce masada kullan ya da Geri Ver (" +
-                                  std::to_string(cfg_.penalty) + " ceza)");
+        return ActionResult::fail(cfg_.penaltyReturnLeft ? "Yandan aldığın taşı önce masada kullan ya da Geri Ver (" +
+                                                               std::to_string(cfg_.penalty) + " ceza)"
+                                                         : std::string("Yandan aldığın taşı önce masada kullan ya da Geri Ver"));
     if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
 
     const bool joker = okey_.isJoker(tile);
@@ -800,12 +817,14 @@ std::string Game::says(int seat, const std::string& third, const std::string& se
     return isSen(seat) ? capitalizeFirst(second) : players_[seat].name + " " + third;
 }
 
-void Game::addPenalty(int seat, const std::string& text) {
-    players_[seat].handPenalty += cfg_.penalty;
+void Game::addPenalty(int seat, const std::string& text) { addPenalty(seat, text, cfg_.penalty); }
+
+void Game::addPenalty(int seat, const std::string& text, int amount) {
+    players_[seat].handPenalty += amount;
     GameEvent e;
     e.type = EvType::Penalty;
     e.player = seat;
-    e.amount = cfg_.penalty;
+    e.amount = amount;
     e.text = text;
     push(std::move(e));
 }
