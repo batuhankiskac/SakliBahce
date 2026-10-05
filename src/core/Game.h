@@ -1,5 +1,7 @@
 #pragma once
-// 101 Okey game engine: deck, dealing, turn flow, opening, işleme, penalties, scoring, match.
+// Okey game engine: 101 (tekli / eşli) and klasik okey. Deck, dealing, turn flow, opening, işleme, penalties,
+// scoring, match. Klasik okey (RulesConfig::variant == Variant::Okey) uses the same deck, turn flow and events
+// without the table: 14 tiles each (the starter 15), and a hand is finished with finishHand().
 // PUBLIC API FROZEN. Implementation: src/core/Game.cpp (engine owner). The engine owner may add
 // PRIVATE members/helpers below; nothing else may change without the architect.
 //
@@ -17,8 +19,14 @@
 
 namespace okey {
 
+enum class Variant { Yuzbir, Okey }; // 101, klasik (düz) okey
+
 struct RulesConfig {
-    int numHands = 5;                  // match length (el sayısı)
+    Variant variant = Variant::Yuzbir;
+    // Eşli 101: partners sit across (0 & 2, 1 & 3). When one finishes, the partner's hand is not counted (their
+    // written penalties stay); the match is won by the team with the lower combined total.
+    bool teams = false;
+    int numHands = 5;                  // match length (el sayısı; 101 only — klasik okey plays until someone hits 0)
     int openThreshold = 101;           // minimum series (run/group) total to open
     int minPairsToOpen = 5;            // minimum pairs to open with pairs (çift açmak)
     int penalty = 101;                 // one penalty (ceza)
@@ -34,6 +42,12 @@ struct RulesConfig {
     // Katlamalı oyun: after a series opening you must open series with at least one more than it (116 ->
     // 117), after a pair opening with at least one more pair (5 -> 6). See seriesOpenNeed / pairsOpenNeed.
     bool katlamali = false;
+    // Klasik okey: everyone starts with okeyStartPoints and counts down; a finish takes okeyFinishPoints from each
+    // other player (x2 finishing by discarding the okey, x2 with seven pairs), showing the gösterge takes
+    // okeyIndicatorPoints from each other player. The game ends when somebody reaches 0; the highest total wins.
+    int okeyStartPoints = 20;
+    int okeyFinishPoints = 2;
+    int okeyIndicatorPoints = 1;
 };
 
 struct PlayerInfo {
@@ -45,8 +59,9 @@ struct PlayerInfo {
     bool openedWithPairs = false;
     int openedTurn = -1;            // Game::turnNumber() when this player opened
     int openValue = 0;              // series total or number of pairs at opening
-    int handPenalty = 0;            // penalties accumulated in the current hand
-    int totalScore = 0;             // cumulative match score (lower is better)
+    int handPenalty = 0;            // penalties accumulated in the current hand (klasik okey: points lost to a gösterge)
+    int totalScore = 0;             // cumulative match score (101: lower is better; klasik okey: points left, higher
+                                    // is better)
     std::vector<int> handScores;    // score of each finished hand (incl. penalties)
 };
 
@@ -60,10 +75,12 @@ struct HandResult {
     bool finishedWithJoker = false;  // last discard was the okey (okeyle bitiş)
     bool finishedWithPairs = false;  // winner had opened with pairs (çiftten bitiş)
     bool finishedInOneGo = false;    // winner opened and finished in the same turn (elden bitiş)
+    int indicatorShownBy = -1;       // klasik okey: who showed the gösterge this hand
     int multiplier = 1;
     std::array<int, 4> remaining{};  // points left in hand (before multipliers)
     std::array<int, 4> penalties{};  // penalties this hand
-    std::array<int, 4> score{};      // final hand score written to the sheet (incl. penalties)
+    std::array<int, 4> score{};      // final hand score written to the sheet (incl. penalties; klasik okey: the points
+                                     // taken off, <= 0)
 };
 
 enum class EvType {
@@ -80,7 +97,8 @@ enum class EvType {
     Discard,     // player discarded `tile`
     Penalty,     // player got `amount` penalty; text = reason
     HandEnd,     // see lastHandResult(); player = winner or -1
-    MatchEnd     // player = seat with the lowest total
+    MatchEnd,    // player = seat with the lowest total (klasik okey: highest; eşli: a seat of the winning team)
+    ShowIndicator // klasik okey: player showed the gösterge's twin (`tile`); amount = points taken from each other
 };
 
 struct GameEvent {
@@ -155,7 +173,19 @@ public:
     int pairsOpenNeed() const;
     OpenCheck checkOpen(int seat, const std::vector<std::vector<int>>& groups) const;
     OpenCheck checkLay(int seat, const std::vector<std::vector<int>>& groups) const;
-    int leaderSeat() const;                            // lowest total score (ties: lower seat)
+    int leaderSeat() const;                            // lowest total score (ties: lower seat); klasik okey: highest;
+                                                       // eşli: the lower seat of the team with the lower total
+    bool classic() const { return cfg_.variant == Variant::Okey; }
+    bool teams() const { return cfg_.teams && !classic(); }
+    static int partnerOf(int seat) { return (seat + 2) % 4; }
+    int teamTotal(int seat) const { return players_[seat].totalScore + players_[partnerOf(seat)].totalScore; }
+    // ---- klasik okey ----
+    // The gösterge's twin in `seat`'s hand if they may show it now (their turn, before their first discard of the
+    // hand, nobody showed yet), else -1.
+    int indicatorTwin(int seat) const;
+    int indicatorShownBy() const { return indicatorShownBy_; }
+    // Would discarding `tile` finish the hand now? 0 no, 1 with sets, 2 with seven pairs.
+    int finishKind(int seat, int tile) const;
 
     // ---- actions (only valid for seat == current()) ----
     ActionResult drawFromPile(int seat);               // NeedDraw -> Play
@@ -173,6 +203,10 @@ public:
     // Ends the turn. Rejected while pendingLeftTile is unused. Empty hand after discard = finish.
     // After the discard: if the pile is empty the hand ends (PileExhausted).
     ActionResult discard(int seat, int tile);
+    // Klasik okey: put `tile` down and show the other 14 (sets or seven pairs) — the hand is finished. Finishing
+    // with the okey as that tile ("okey atarak") doubles, seven pairs double.
+    ActionResult finishHand(int seat, int tile);
+    ActionResult showIndicator(int seat);              // klasik okey: show the gösterge's twin
 
     // ---- events (UI animation/sound/banter; bots may observe) ----
     std::vector<GameEvent> drainEvents();              // returns and clears the queue
@@ -192,6 +226,9 @@ private:
     void dealHand();
     void beginTurn(int seat);
     void endHand(HandEndReason reason, int winner, bool finishedWithJoker);
+    void endClassicHand(HandEndReason reason, int winner, bool finishedWithJoker, bool pairs);
+    void pushMatchEnd();
+    ActionResult yuzbirOnly() const;
     void push(GameEvent e);
     ActionResult checkTurn(int seat, TurnStage need) const;
     bool removeFromHand(int seat, int tile);
@@ -224,6 +261,7 @@ private:
     int pendingLeftTile_ = -1;
     bool tookLeftThisTurn_ = false;
     bool returnedLeftThisTurn_ = false;
+    int indicatorShownBy_ = -1;
     HandResult lastResult_;
     std::vector<GameEvent> events_;
 };

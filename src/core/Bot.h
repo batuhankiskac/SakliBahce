@@ -12,10 +12,12 @@ namespace okey {
 enum class BotLevel { Easy = 0, Normal = 1, Hard = 2 }; // Acemi, Usta, Kurt
 
 struct BotAction {
-    enum class Kind { DrawPile, TakeLeft, ReturnLeft, Open, LayMelds, AddToMeld, SwapJoker, Discard };
+    enum class Kind { DrawPile, TakeLeft, ReturnLeft, Open, LayMelds, AddToMeld, SwapJoker, Discard,
+                      Finish,          // klasik okey: finish by putting `tile` down (Game::finishHand)
+                      ShowIndicator }; // klasik okey: show the gösterge's twin
     Kind kind = Kind::DrawPile;
     std::vector<std::vector<int>> melds; // Open / LayMelds
-    int tile = -1;                       // AddToMeld / SwapJoker / Discard
+    int tile = -1;                       // AddToMeld / SwapJoker / Discard / Finish
     int meld = -1;                       // AddToMeld / SwapJoker target table index
     AddSide side = AddSide::Auto;
 };

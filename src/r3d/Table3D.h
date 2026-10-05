@@ -45,6 +45,9 @@ public:
     // istaka is re-arranged into the groups the AI is going for (series or pairs) whenever tiles come or go.
     void setAiMode(bool on);
     bool consumeAiToggleRequest();          // "Yapay Zeka" button pressed (true once)
+    // The other games (tavla, the card games) sit at the same table: only the table and its felt are drawn —
+    // no istakas, tiles or okey stand.
+    void setFurnitureOnly(bool on);
     std::function<void(ui::Sfx)> playSfx;
 
 private:

@@ -790,6 +790,37 @@ void testBotTakesLeftToOpen() {
     }
 }
 
+// Yandan açma cezası: an opened bot holding only loose tiles dumps its 13 when the right neighbour has
+// opened, but not to an unopened neighbour who could open with it and write 130 on the bot.
+void testBotAvoidsFeedingHighTiles() {
+    for (int l = 1; l < 3; ++l) {
+        for (int rightOpened = 0; rightOpened < 2; ++rightOpened) {
+            Game g;
+            Setup s;
+            s.seat = 1;
+            s.stage = TurnStage::Play;
+            const OkeyInfo ok = OkeyInfo::fromIndicator(s.indicator);
+            s.table.push_back(meldOf({T(Y, 9), T(Y, 10), T(Y, 11)}, ok, 1));
+            s.opened[1] = true;
+            if (rightOpened) {
+                s.table.push_back(meldOf({T(B, 1), T(B, 2), T(B, 3)}, ok, 2));
+                s.opened[2] = true;
+            }
+            s.hands[1] = {T(R, 13), T(Y, 2), T(B, 6), T(K, 3)};
+            applySetup(g, s);
+            Bot bot(LEVELS[l], 5);
+            const TurnLog t = playTurn(g, bot);
+            CHECK_EQ(t.rejected, 0);
+            const BotAction* d = t.first(BotAction::Kind::Discard);
+            CHECK(d != nullptr);
+            if (!d) continue;
+            const bool threw13 = d->tile == T(R, 13);
+            CHECK_MSG(threw13 == (rightOpened == 1), std::string(LEVEL_NAMES[l]) +
+                                                         (rightOpened ? ": should dump R13" : ": fed R13"));
+        }
+    }
+}
+
 // Unopened, the only tiles without a use fit table melds (işlek) except one; the bot must keep the
 // işlek tiles and never throw the okey.
 void testBotAvoidsPenaltyDiscards() {
@@ -993,6 +1024,7 @@ void runBotTests() {
     testBotOpens();
     testBotTakesLeftToOpen();
     testBotAvoidsPenaltyDiscards();
+    testBotAvoidsFeedingHighTiles();
     testBotFinishes();
     testBotSwapsJoker();
     testBotOpensPairs();

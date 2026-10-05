@@ -7,10 +7,31 @@ Bazı geceler dışarıda yağmur yağar: damlalar cama vurup süzülür, olukta
 yolcular geçer. Kahvehanenin kedisi sobanın dibinde ya da boş bir sandalyede kıvrılıp uyur; arada bir uyanır,
 gerinir, yalanır, başka bir köşeye geçer, bazen de dönüp sana bakar.
 
-**SaklıBahçe**, üç bilgisayar rakibe karşı **101 Okey** oynadığın, birinci şahıs 3B bir masaüstü oyunudur
-(C++17 + raylib 6.0, macOS). Görüntülerin tamamı kodla üretilir: hiçbir resim ya da model dosyası yoktur; yazı
+**SaklıBahçe**, kahvehanenin müdavimlerine karşı oynadığın birinci şahıs 3B bir masaüstü oyunudur
+(C++17 + raylib 6.0, macOS). Masada yedi oyun var: **101**, **Eşli 101**, **Okey**, **Tavla**, **Pişti**,
+**Batak** ve **King**. Görüntülerin tamamı kodla üretilir: hiçbir resim ya da model dosyası yoktur; yazı
 tipleri macOS'un kendi yazı tiplerinden alınır. Canın oynamak istemediğinde **Yapay Zeka** modunu açıp arkana
 yaslanabilirsin: taşlarını senin yerine yapay zeka oynar, sen çayını içip izlersin.
+
+## Oyunlar
+
+Giriş ekranında **Oyna**'ya basınca hangi oyunu oynayacağını seçersin; son seçtiğin oyun hatırlanır. Her oyunun
+kuralları kendi "Nasıl Oynanır?" sayfasındadır (Kurallar), ayarları da Ayarlar'da o oyunun bölümündedir.
+
+| Oyun | Kimle | Kısaca |
+|---|---|---|
+| **101** | üç rakip | Per aç, 101'i geç, elini bitir; düşük puan kazanır. Katlamalı oyun ve yandan açma cezası ayarlardan. |
+| **Eşli 101** | Kel Mahmut ortağın | Biriniz bitirince ötekinin eli silinir; takım toplamı düşük olan kazanır. |
+| **Okey** | üç rakip | 14 taşı per ya da yedi çifte diz, 15.'yi atıp bit (12-13-1 geçerli). Herkes 20 puanla başlar, bitiş 2, okey atarak ya da çiftten 4, gösterge 1 düşer; sıfıra inen olunca oyun biter. |
+| **Tavla** | Kel Mahmut | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. Hacı Rıza ile Emekli Nuri seyredip laf atar. |
+| **Pişti** | dört kişi, eşli ya da Mahmut'la ikili | Aynı kâğıt ya da vale yerdekileri alır; tek kâğıda pişti 10, valeye vale 20. 101 ya da 151'e. |
+| **Batak** | tekli ya da eşli | İhaleli batak: ihaleyi al, kozu söyle; tutamazsan batarsın. 31, 51 ya da 71'e. |
+| **King** | üç rakip | 20 el: her oyuncu 2 koz, 3 ceza seçer (el almaz, kupa almaz, erkek almaz, kız almaz, rıfkı, son iki). |
+
+Rakiplerin üç seviyesi (Acemi, Usta, Kurt) her oyunda vardır. Botlar yalnızca masada görülebilenleri bilir;
+Kurt kart oyunlarında görmediği kâğıtları olası dağılımlarla örnekleyip el sonuna kadar oynayarak (Monte Carlo),
+tavlada rakibin 21 zar ihtimaline bakarak karar verir. Kâğıt oyunlarında kâğıdına tıklarsın (oynayabileceklerin
+parlak, ötekiler soluk), tavlada önce pulunun durduğu haneye sonra yeşil yanan haneye tıklarsın.
 
 ## Kurulum ve çalıştırma
 
@@ -27,7 +48,8 @@ Diğer hedefler:
 | Komut | Ne yapar |
 |---|---|
 | `make run` | derler ve oyunu başlatır |
-| `make test` | kural motoru ve yapay zekâ testleri, ardından kısa bot-bot simülasyonları |
+| `make test` | yedi oyunun kural motoru ve yapay zekâ testleri, ardından kısa bot-bot simülasyonları |
+| `make tablescheck` | tavla ve kâğıt oyunlarını gizli bir pencerede gerçek fare tıklamalarıyla oynatır |
 | `make asan` | AddressSanitizer + UBSan ile `build/asan/` altında oyunu ve testleri derler, testleri çalıştırır |
 | `make clean` | derleme çıktılarını siler |
 
@@ -122,9 +144,11 @@ Kuralların tamamı oyunun içinde **Kurallar** ekranında örneklerle anlatıl�
 | sol | **Emekli Nuri** | ak saçlı, gözlüklü, hırkalı; oralet içer, "bizim zamanımızda…" diye söylenir |
 
 Zorluk **Ayarlar**'dan seçilir: **Acemi**, **Usta** ya da **Kurt**. Botlar hileye başvurmaz: yalnızca masada
-görülebilen taşları ve kendi ellerini bilirler.
+görülebilen taşları ve kendi ellerini bilirler. Usta ile Kurt, henüz açmamış sağdaki oyuncuya yüksek taş
+vermenin yandan açma cezası riskini hesaplar; büyük taşları o açana kadar ellerinde tutmaya çalışırlar.
 
-Ayarlar (el sayısı, zorluk, ses/müzik/ortam sesi, animasyon hızı, ipuçları, oyuncu adı)
+Ayarlar (son oynanan oyun, oyunların kendi ayarları, zorluk, ses/müzik/ortam sesi, animasyon hızı, ipuçları,
+oyuncu adı)
 `~/Library/Application Support/SakliBahce/ayarlar.txt` dosyasında saklanır (oyunun eski adıyla kalmış
 `Kiraathane101/ayarlar.txt` varsa ilk açılışta o okunur). `--hands`, `--level` ve
 `--no-audio` yalnızca o oturum için geçerlidir; oturum sırasında Ayarlar'dan değiştirmediğin sürece kayıtlı
@@ -140,6 +164,8 @@ ayarlarına dokunmaz.
 | `--level L` | rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt |
 | `--ai` | Yapay Zeka modunda bir maçla başla (oyunda **Y** ile aç/kapa) |
 | `--katlamali` | katlamalı oyun: her açan, öncekinden en az 1 fazlasıyla açar (yalnızca o oturum için) |
+| `--game G` | oyun: `101`, `esli`, `okey`, `tavla`, `pisti`, `batak` ya da `king` |
+| `--set K=V` | bir ayar, `ayarlar.txt` anahtarlarıyla (ör. `--set batakesli=1`, `--set pistimasa=2`, `--set tavla=3`) |
 | `--autoplay` | senin yerine bir Usta bot oynar (izleme modu); maç bitince oyun kapanır |
 | `--speed X` | oyunu X kat hızlı oynat (ör. `--speed 4`) |
 | `--matches N` | (`--autoplay` ile) arka arkaya N maç; her ikincisi giriş ekranından geçer |
@@ -149,7 +175,7 @@ ayarlarına dokunmaz.
 | `--screenshot DOSYA` | `--max-frames` ile: son karede pencerenin görüntüsünü PNG olarak kaydet (`--state title`, `game`, `rules` ya da `settings` ile başlangıç ekranı seçilir) |
 | `--snapshot DOSYA` | gizli pencerede 1600×900 tek bir kare çizip PNG olarak kaydet ve çık |
 | `--frames N` | (`--snapshot` ile) görüntüden önce simüle edilecek kare sayısı |
-| `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules` ya da `settings` |
+| `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules`, `settings` ya da `games` |
 | `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` |
 | `--help` | yardım |
 
@@ -157,6 +183,8 @@ ayarlarına dokunmaz.
 
 ```sh
 ./saklibahce --ai --level 2                           # yapay zekayı Kurt'lara karşı izle
+./saklibahce --game tavla --start                      # doğrudan Kel Mahmut'la tavlaya otur
+./saklibahce --game batak --set batakesli=1 --autoplay --speed 4   # eşli batak izle
 ./saklibahce --autoplay --speed 4 --hands 3            # botları izle
 ./saklibahce --seed 42 --start --level 2               # Kurt'lara karşı, hep aynı dağıtım
 ./saklibahce --seed 42 --autoplay --speed 3 --frames 2400 \
@@ -183,11 +211,12 @@ klasör yoksa radyo eski sentezlenmiş ezgilerine döner. Radyo, Ayarlar'daki m�
 
 | Klasör | İçerik |
 |---|---|
-| `src/core/` | 101 kuralları (`Game`, `Meld`), en iyi per dağılımı (`Solver`) ve botlar (`Bot`); raylib kullanmaz |
-| `src/r3d/` | 3B dünya: çizici (`Gfx`), kahvehane (`Room`), insanlar (`Characters`), masa, taşlar ve oyuncu kamerası (`Table3D`, `PlayerCamera`) |
-| `src/ui/` | menüler ve skor kâğıdı (`Screens`), efektler, ortam sesi ve radyo (`Audio`), muhabbet (`Banter`), yazı tipleri ve düğmeler (`Common`), taş yüzleri (`TileRender`) |
-| `src/app/` | pencere, oyun döngüsü, maç akışı, bot temposu, komut satırı |
-| `tests/` | motor ve yapay zekâ testleri, bot-bot simülasyonu (`sim`) |
+| `src/core/` | oyunların kuralları ve botları, raylib kullanmaz: 101 ve okey (`Game`, `Meld`, `Solver`, `OkeyHand`, `Bot`), tavla (`Tavla`, `TavlaBot`), iskambil (`Cards`), pişti (`Pisti`, `PistiBot`), batak (`Batak`, `BatakBot`), king (`King`, `KingBot`) |
+| `src/r3d/` | 3B dünya: çizici (`Gfx`), kahvehane (`Room`), insanlar (`Characters`), masa, taşlar ve oyuncu kamerası (`Table3D`, `PlayerCamera`), kâğıtlar (`Cards3D`), tavla tahtası (`Tavla3D`), öteki oyunların HUD'u (`GameHud`) |
+| `src/ui/` | menüler, oyun seçimi ve skor kâğıdı (`Screens`), efektler, ortam sesi ve radyo (`Audio`), muhabbet (`Banter`), yazı tipleri ve düğmeler (`Common`), taş yüzleri (`TileRender`), kâğıt yüzleri (`CardRender`) |
+| `src/app/` | pencere, oyun döngüsü, maç akışı, bot temposu, komut satırı; tavla ve kâğıt oyunlarının masaları (`TableGame`, `CardTable`, `TavlaTable`, `PistiTable`, `BatakTable`, `KingTable`) |
+| `docs/` | tavla, pişti, batak ve king'in kural metinleri ve kaynakları (oyuna `tools/gen_rules.py` ile gömülür) |
+| `tests/` | her oyunun motor ve yapay zekâ testleri, bot-bot simülasyonları (`sim`, `tavla_sim`, `pisti_sim`, `batak_sim`, `king_sim`) |
 | `tools/` | geliştirme sırasında kullanılan görüntü alma araçları (oyuna derlenmez) |
 
 Tasarım belgeleri: `DESIGN.md` (kurallar, motor, botlar, ses) ve `DESIGN3D.md` (3B dünya).

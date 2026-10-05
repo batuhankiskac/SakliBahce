@@ -2,6 +2,7 @@
 // (okey::Game / okey::Bot), the 3D world (Room, Characters, Table3D, PlayerCamera), audio and the menu screens.
 // Frame structure: DESIGN3D.md §2. The Yapay Zeka mode (an AI plays the human's seat) lives here too.
 #include "app/App.h"
+#include "app/TableGame.h"
 
 #include "core/Bot.h"
 #include "core/Game.h"
@@ -75,6 +76,8 @@ const char* actionName(okey::BotAction::Kind k) {
     case K::AddToMeld: return "AddToMeld";
     case K::SwapJoker: return "SwapJoker";
     case K::Discard: return "Discard";
+    case K::Finish: return "Finish";
+    case K::ShowIndicator: return "ShowIndicator";
     }
     return "?";
 }
@@ -218,6 +221,28 @@ std::string legacySettingsPath() {
     return dir.empty() ? dir : dir + "Kiraathane101/ayarlar.txt";
 }
 
+// One "key=value" line of the settings file (also --set on the command line).
+void applySettingLine(ui::Settings& s, const std::string& k, const std::string& v) {
+    const int iv = std::atoi(v.c_str());
+    if (k == "el") s.numHands = std::clamp(iv, 1, 11);
+    else if (k == "seviye") s.difficulty = std::clamp(iv, 0, 2);
+    else if (k == "efekt") s.sfx = iv != 0;
+    else if (k == "ortam") s.ambient = iv != 0;
+    else if (k == "muzik") s.music = iv != 0;
+    else if (k == "ipucu") s.hints = iv != 0;
+    else if (k == "katlamali") s.katlamali = iv != 0;
+    else if (k == "yandanceza") s.yandanCeza = iv != 0;
+    else if (k == "oyun") s.game = ui::gameAvailable((ui::GameKind)std::clamp(iv, 0, (int)ui::GameKind::Count - 1)) ? std::clamp(iv, 0, (int)ui::GameKind::Count - 1) : 0;
+    else if (k == "okeypuan") s.okeyStart = std::clamp(iv, 1, 99);
+    else if (k == "tavla") s.tavlaPoints = std::clamp(iv, 1, 15);
+    else if (k == "batakesli") s.batakEsli = iv != 0;
+    else if (k == "batakhedef") s.batakTarget = std::clamp(iv, 11, 151);
+    else if (k == "pistihedef") s.pistiTarget = std::clamp(iv, 51, 301);
+    else if (k == "pistimasa") s.pistiMode = std::clamp(iv, 0, 2);
+    else if (k == "hiz") s.animSpeed = std::clamp((float)std::atof(v.c_str()), 0.5f, 2.f);
+    else if (k == "isim" && !v.empty() && v.size() <= 64) s.playerName = v;
+}
+
 void loadSettings(ui::Settings& s) {
     std::string path = settingsPath();
     if (path.empty()) return;
@@ -231,18 +256,7 @@ void loadSettings(ui::Settings& s) {
     while (std::getline(in, line)) {
         const size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
-        const std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
-        const int iv = std::atoi(v.c_str());
-        if (k == "el") s.numHands = std::clamp(iv, 1, 11);
-        else if (k == "seviye") s.difficulty = std::clamp(iv, 0, 2);
-        else if (k == "efekt") s.sfx = iv != 0;
-        else if (k == "ortam") s.ambient = iv != 0;
-        else if (k == "muzik") s.music = iv != 0;
-        else if (k == "ipucu") s.hints = iv != 0;
-        else if (k == "katlamali") s.katlamali = iv != 0;
-        else if (k == "yandanceza") s.yandanCeza = iv != 0;
-        else if (k == "hiz") s.animSpeed = std::clamp((float)std::atof(v.c_str()), 0.5f, 2.f);
-        else if (k == "isim" && !v.empty() && v.size() <= 64) s.playerName = v;
+        applySettingLine(s, trim(line.substr(0, eq)), trim(line.substr(eq + 1)));
     }
 }
 
@@ -251,12 +265,14 @@ void saveSettings(const ui::Settings& s) {
     if (path.empty()) return;
     const std::string dir = path.substr(0, path.find_last_of('/'));
     if (!DirectoryExists(dir.c_str()) && MakeDirectory(dir.c_str()) != 0) return;
-    char buf[512];
+    char buf[900];
     std::snprintf(buf, sizeof buf,
-                  "# SaklıBahçe ayarları\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\nkatlamali=%d\n"
-                  "yandanceza=%d\nhiz=%.2f\nisim=%s\n",
-                  s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
-                  s.katlamali ? 1 : 0, s.yandanCeza ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
+                  "# SaklıBahçe ayarları\noyun=%d\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\n"
+                  "katlamali=%d\nyandanceza=%d\nokeypuan=%d\ntavla=%d\nbatakesli=%d\nbatakhedef=%d\npistihedef=%d\n"
+                  "pistimasa=%d\nhiz=%.2f\nisim=%s\n",
+                  s.game, s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
+                  s.katlamali ? 1 : 0, s.yandanCeza ? 1 : 0, s.okeyStart, s.tavlaPoints, s.batakEsli ? 1 : 0,
+                  s.batakTarget, s.pistiTarget, s.pistiMode, (double)s.animSpeed, s.playerName.c_str());
     SaveFileText(path.c_str(), buf);
 }
 
@@ -306,7 +322,7 @@ public:
 
 private:
     enum class Flow { Title, Playing, HandOver, Summary, MatchOver };
-    enum class SnapState { Title, Game, Summary, MatchOver, Rules, Settings };
+    enum class SnapState { Title, Game, Summary, MatchOver, Rules, Settings, Games };
 
     struct Think {                 // the current bot turn's pacing and (possibly asynchronous) decision
         int seat = -1, turn = -1, actions = 0;
@@ -341,6 +357,7 @@ private:
     void handleScreenAction(ui::ScreenAction a);
     void startMatch();
     void startNextHand();
+    void startOtherMatch(ui::GameKind kind);
     void toTitle();
     void setTitleMode(bool on);
     void applySettings();
@@ -385,6 +402,10 @@ private:
     ui::Screens screens_;
     okey::Game game_;
     std::array<std::unique_ptr<okey::Bot>, 4> bots_;
+    // the other games (tavla, the card games): the active one, or null while an okey game is played
+    std::unique_ptr<TableGame> other_;
+    ui::GameKind otherKind_ = ui::GameKind::Yuzbir;
+    bool otherInGame() const { return other_ != nullptr && flow_ != Flow::Title; }
     RenderTexture2D rt_{};
 
     Flow flow_ = Flow::Title;
@@ -404,7 +425,7 @@ private:
     // --hands, --level and --no-audio shape this session only. The settings screen shows the values in force, but
     // the file keeps the loaded ones for every setting the player has not moved away from its command-line value.
     struct Overridden {
-        bool hands = false, level = false, sfx = false, ambient = false, music = false;
+        bool hands = false, level = false, sfx = false, ambient = false, music = false, game = false;
     } overridden_;
     ui::Settings loadedSettings_;  // as read from disk (or the defaults), before the command line
     ui::Settings cliSettings_;     // the session's starting values: loadedSettings_ plus the command line
@@ -484,6 +505,7 @@ bool App::init() {
                    : s == "matchover" ? SnapState::MatchOver
                    : s == "rules" ? SnapState::Rules
                    : s == "settings" ? SnapState::Settings
+                   : s == "games" ? SnapState::Games
                                      : SnapState::Game;
         if (snapState_ == SnapState::Summary || snapState_ == SnapState::MatchOver) opt_.autoplay = true;
         if (snapState_ == SnapState::MatchOver && opt_.hands <= 0) opt_.hands = 1;
@@ -494,6 +516,7 @@ bool App::init() {
             case SnapState::Summary: opt_.frames = 80; break;
             case SnapState::MatchOver: opt_.frames = 150; break;
             case SnapState::Rules:
+            case SnapState::Games:
             case SnapState::Settings: opt_.frames = 90; break;
             }
         }
@@ -541,6 +564,14 @@ bool App::init() {
         st.difficulty = std::clamp(opt_.level, 0, 2);
         overridden_.level = true;
     }
+    if (opt_.game >= 0) {
+        st.game = opt_.game;
+        overridden_.game = true;
+    }
+    for (const std::string& kv : opt_.sets) { // --set key=value (this run only: never saved when unattended)
+        const size_t eq = kv.find('=');
+        if (eq != std::string::npos) applySettingLine(st, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
+    }
     if (opt_.noAudio) {
         st.sfx = st.ambient = st.music = false;
         overridden_.sfx = overridden_.ambient = overridden_.music = true;
@@ -578,7 +609,8 @@ bool App::init() {
     table_.setAiMode(aiSeat());
     screens_.setAiMode(aiSeat());
     if (opt_.autoplay || opt_.start || (windowShot && opt_.state == "game") ||
-        (snapshot_ && snapState_ != SnapState::Title && snapState_ != SnapState::Rules && snapState_ != SnapState::Settings)) {
+        (snapshot_ && snapState_ != SnapState::Title && snapState_ != SnapState::Rules && snapState_ != SnapState::Settings &&
+         snapState_ != SnapState::Games)) {
         screens_.show(ui::ScreenId::None);
         if (opt_.ai || opt_.aiChaos) setAiMode(true);
         startMatch();
@@ -586,6 +618,8 @@ bool App::init() {
         screens_.show(ui::ScreenId::Rules);
     } else if ((snapshot_ && snapState_ == SnapState::Settings) || (windowShot && opt_.state == "settings")) {
         screens_.show(ui::ScreenId::Settings);
+    } else if ((snapshot_ && snapState_ == SnapState::Games) || (windowShot && opt_.state == "games")) {
+        screens_.show(ui::ScreenId::GameSelect);
     }
     lastFrameT_ = GetTime();
     return true;
@@ -593,6 +627,10 @@ bool App::init() {
 
 void App::shutdown() {
     cancelThink();
+    if (other_) {
+        other_->shutdown();
+        other_.reset();
+    }
     if (settingsDirty_ && !unattended()) persistSettings();
     table_.shutdown(renderer_);
     characters_.shutdown(renderer_);
@@ -720,7 +758,7 @@ void App::tick(float dt) {
         pcam_.update(dt, false);  // cinematic drift
         lookDrag_ = false;
     } else if (!blocked) {
-        const bool lookOk = !snapshot_ && !table_.mouseBusy();
+        const bool lookOk = !snapshot_ && !(otherInGame() ? other_->mouseBusy() : table_.mouseBusy());
         // a right-drag that started as a look keeps looking even when it crosses a tile or a button
         lookDrag_ = lookDrag_ ? IsMouseButtonDown(MOUSE_BUTTON_RIGHT) : (lookOk && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT));
         pcam_.update(dt, lookOk || lookDrag_);
@@ -732,13 +770,24 @@ void App::tick(float dt) {
     // in the Yapay Zeka mode the HUD's buttons still take the mouse (switching the mode off, the menu)
     const bool tableUp = inGame && !blocked && !blockedAtStart && !snapshot_;
     const bool human = tableUp && !aiSeat();
-    table_.update(simDt, cam_, tableUp && !opt_.autoplay ? mouse : NO_MOUSE, human);
-    if (table_.consumeMenuRequest() && inGame && !blocked) {
-        screens_.show(ui::ScreenId::Paused);
-        blocked = true;
+    if (otherInGame()) {
+        // the game runs only while no screen covers it (the bots wait behind the menus too)
+        if (!blocked) other_->update(simDt, cam_, tableUp && !opt_.autoplay ? mouse : NO_MOUSE, human, aiSeat());
+        if (other_->consumeMenuRequest() && !blocked) {
+            screens_.show(ui::ScreenId::Paused);
+            blocked = true;
+        }
+        const bool aiKey = tableUp && IsKeyPressed(KEY_Y);
+        if ((other_->consumeAiToggleRequest() || aiKey) && !blocked) setAiMode(!aiMode_);
+    } else {
+        table_.update(simDt, cam_, tableUp && !opt_.autoplay ? mouse : NO_MOUSE, human);
+        if (table_.consumeMenuRequest() && inGame && !blocked) {
+            screens_.show(ui::ScreenId::Paused);
+            blocked = true;
+        }
+        const bool aiKey = tableUp && !opt_.aiChaos && IsKeyPressed(KEY_Y);
+        if ((table_.consumeAiToggleRequest() || aiKey) && inGame && !blocked) setAiMode(!aiMode_);
     }
-    const bool aiKey = tableUp && !opt_.aiChaos && IsKeyPressed(KEY_Y);
-    if ((table_.consumeAiToggleRequest() || aiKey) && inGame && !blocked) setAiMode(!aiMode_);
     if (opt_.aiChaos && !blocked) updateChaos(simDt, false); // the stand-in plays where the player's clicks would
     pumpEvents();
 
@@ -751,11 +800,12 @@ void App::tick(float dt) {
 }
 
 void App::updateWorld(float dt, float simDt, const Camera3D& cam, bool blocked) {
-    const bool playing = flow_ == Flow::Playing && game_.handState() == okey::HandState::Playing;
+    const bool playing = otherInGame() ? flow_ == Flow::Playing && !other_->handOver()
+                                       : flow_ == Flow::Playing && game_.handState() == okey::HandState::Playing;
     std::array<Vector3, 4> heads;
     for (int s = 0; s < 4; ++s) heads[s] = characters_.headPosition(s);
     table_.setHeadAnchors(heads);
-    characters_.setActiveSeat(playing && !blocked ? game_.current() : -1);
+    characters_.setActiveSeat(playing && !blocked ? (otherInGame() ? other_->activeSeat() : game_.current()) : -1);
     Vector3 meowAt;
     if (room_.consumeCatMeow(meowAt)) characters_.onCatMeow(meowAt);
     if (room_.consumeTvGoal()) {
@@ -776,8 +826,10 @@ void App::updateWorld(float dt, float simDt, const Camera3D& cam, bool blocked) 
     if (audioOn_) audio_.update(dt);
     // the radio starts a new record: a quiet note at the table (it also credits the recording)
     std::string song;
-    if (audioOn_ && audio_.consumeNowPlaying(song) && flow_ != Flow::Title)
-        table_.toast("Radyoda: " + song, Color{214, 200, 170, 230}, 3.2f);
+    if (audioOn_ && audio_.consumeNowPlaying(song) && flow_ != Flow::Title) {
+        if (otherInGame()) other_->toast("Radyoda: " + song, Color{214, 200, 170, 230}, 3.2f);
+        else table_.toast("Radyoda: " + song, Color{214, 200, 170, 230}, 3.2f);
+    }
     updateScoreboard();
     if (settingsDirty_ && screens_.current() != ui::ScreenId::Settings && !unattended()) {
         persistSettings();
@@ -789,12 +841,16 @@ void App::submitWorld() {
     room_.submit(renderer_);
     characters_.submit(renderer_);
     table_.submit(renderer_);
+    if (otherInGame()) other_->submit(renderer_);
 }
 
 void App::drawOverlays(bool hud) {
     characters_.drawOverlay(renderer_);
     // the table's HUD (buttons, plates, status) steps aside while a menu or the score sheet covers the table
-    if (hud && flow_ != Flow::Title && !screens_.blocksGame()) table_.drawHUD(renderer_);
+    if (hud && flow_ != Flow::Title && !screens_.blocksGame()) {
+        if (otherInGame()) other_->drawHUD(renderer_, (snapshot_ || opt_.aiChaos) ? NO_MOUSE : ui::virtualMouse(), aiSeat());
+        else table_.drawHUD(renderer_);
+    }
     screens_.draw(flow_ == Flow::Title ? nullptr : &game_);
 }
 
@@ -871,6 +927,20 @@ void App::startMatch() {
     cancelThink();
     const ui::Settings& st = screens_.settings();
     okey::RulesConfig cfg;
+    const ui::GameKind kind = (ui::GameKind)std::clamp(st.game, 0, (int)ui::GameKind::Count - 1);
+    if (!ui::isOkeyFamily(kind)) {
+        startOtherMatch(kind);
+        return;
+    }
+    if (other_) {
+        other_->shutdown();
+        other_.reset();
+    }
+    table_.setFurnitureOnly(false);
+    screens_.clearSheet();
+    cfg.variant = kind == ui::GameKind::Okey ? okey::Variant::Okey : okey::Variant::Yuzbir;
+    cfg.teams = kind == ui::GameKind::YuzbirEsli;
+    cfg.okeyStartPoints = std::clamp(st.okeyStart, 1, 99);
     cfg.numHands = std::clamp(st.numHands, 1, 11);
     cfg.katlamali = st.katlamali || opt_.katlamali;
     cfg.leftOpenPenalty = st.yandanCeza;
@@ -900,12 +970,70 @@ void App::startMatch() {
     if (aiMode_ && !snapshot_)
         table_.toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
     if (opt_.autoplay || opt_.aiChaos)
-        std::printf("[%s] match %d: seed %llu, %d hands (frame %ld)%s\n", opt_.autoplay ? "autoplay" : "aichaos", matchCount_,
-                    (unsigned long long)matchSeed, cfg.numHands, frame_, aiMode_ ? ", Yapay Zeka on" : "");
+        std::printf("[%s] match %d (%s): seed %llu, %d hands (frame %ld)%s\n", opt_.autoplay ? "autoplay" : "aichaos",
+                    matchCount_, ui::gameInfo(kind).name, (unsigned long long)matchSeed, cfg.numHands, frame_,
+                    aiMode_ ? ", Yapay Zeka on" : "");
+}
+
+// A match of one of the other games (tavla, the card games): the table shows only its furniture, the game brings
+// its own pieces.
+void App::startOtherMatch(ui::GameKind kind) {
+    const ui::Settings& st = screens_.settings();
+    if (!other_ || otherKind_ != kind) {
+        if (other_) other_->shutdown();
+        other_ = makeTableGame(kind);
+        otherKind_ = kind;
+        if (!other_) {
+            std::fprintf(stderr, "Bu oyun henüz hazır değil.\n");
+            flow_ = Flow::Title;
+            return;
+        }
+        TableContext ctx;
+        ctx.renderer = &renderer_;
+        ctx.characters = &characters_;
+        ctx.sfx = [this](ui::Sfx s) {
+            if (audioOn_) audio_.play(s);
+        };
+        if (!other_->init(ctx)) {
+            std::fprintf(stderr, "Oyun masası kurulamadı.\n");
+            other_.reset();
+            flow_ = Flow::Title;
+            return;
+        }
+    }
+    for (auto& b : bots_) b.reset();
+    game_ = okey::Game(game_.rules()); // the okey game rests (not started)
+    table_.setFurnitureOnly(true);
+    screens_.clearSheet();
+    const std::array<std::string, 4> nm = names();
+    const uint64_t matchSeed = opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_ : mix64(baseSeed_ + (uint64_t)matchCount_);
+    ++matchCount_;
+    characters_.setNames(nm);
+    setTitleMode(false);
+    other_->setLevel(std::clamp(st.difficulty, 0, 2));
+    other_->setAnimationSpeed(st.animSpeed);
+    other_->setHints(st.hints);
+    characters_.setAnimationSpeed(st.animSpeed);
+    delayed_.clear();
+    think_ = Think{};
+    handOverT_ = screenT_ = 0.f;
+    flow_ = Flow::Playing;
+    other_->startMatch(st, nm, matchSeed);
+    if (aiMode_ && !snapshot_) other_->toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
+    if (opt_.autoplay)
+        std::printf("[autoplay] match %d (%s): seed %llu (frame %ld)\n", matchCount_, ui::gameInfo(kind).name,
+                    (unsigned long long)matchSeed, frame_);
 }
 
 void App::startNextHand() {
     cancelThink();
+    if (otherInGame()) {
+        if (!other_->handOver() || other_->matchOver()) return;
+        handOverT_ = 0.f;
+        flow_ = Flow::Playing;
+        other_->startNextHand();
+        return;
+    }
     if (game_.handState() != okey::HandState::HandOver) return;
     think_ = Think{};
     handOverT_ = 0.f;
@@ -916,6 +1044,12 @@ void App::startNextHand() {
 
 void App::toTitle() {
     cancelThink();
+    if (other_) {
+        other_->shutdown();
+        other_.reset();
+    }
+    table_.setFurnitureOnly(false);
+    screens_.clearSheet();
     think_ = Think{};
     delayed_.clear();
     const okey::RulesConfig cfg = game_.rules();
@@ -943,6 +1077,11 @@ void App::applySettings() {
     cancelThink();  // nothing may touch a bot while it is thinking on the worker thread
     for (int s = 1; s < 4; ++s)
         if (bots_[s]) bots_[s]->setLevel((okey::BotLevel)std::clamp(st.difficulty, 0, 2));
+    if (other_) {
+        other_->setLevel(std::clamp(st.difficulty, 0, 2));
+        other_->setAnimationSpeed(st.animSpeed);
+        other_->setHints(st.hints);
+    }
     if (game_.player(HUMAN).name != st.playerName) {
         game_.setPlayer(HUMAN, st.playerName, true);
         characters_.setNames(names());
@@ -959,6 +1098,7 @@ void App::releaseOverrides() {
     o.sfx = o.sfx && st.sfx == cliSettings_.sfx;
     o.ambient = o.ambient && st.ambient == cliSettings_.ambient;
     o.music = o.music && st.music == cliSettings_.music;
+    o.game = o.game && st.game == cliSettings_.game;
 }
 
 // Saves the settings file, keeping the loaded value of every setting that is still only a command-line override:
@@ -971,10 +1111,30 @@ void App::persistSettings() {
     if (overridden_.sfx) s.sfx = loadedSettings_.sfx;
     if (overridden_.ambient) s.ambient = loadedSettings_.ambient;
     if (overridden_.music) s.music = loadedSettings_.music;
+    if (overridden_.game) s.game = loadedSettings_.game;
     saveSettings(s);
 }
 
 void App::updateFlow(float simDt) {
+    if (otherInGame()) {
+        if (flow_ == Flow::Playing && other_->handOver()) {
+            flow_ = Flow::HandOver;
+            handOverT_ = 0.f;
+            ++handsPlayed_;
+            if (opt_.autoplay && !snapshot_)
+                std::printf("[autoplay] hand %d: %s\n", handsPlayed_, other_->lastLogLine().c_str());
+        }
+        if (flow_ == Flow::HandOver) {
+            handOverT_ += simDt;
+            if ((handOverT_ >= SUMMARY_DELAY && !other_->animating()) || handOverT_ >= SUMMARY_DELAY + 5.f) {
+                screens_.setSheet(other_->sheet(aiMode_));
+                screens_.show(ui::ScreenId::HandSummary);
+                flow_ = Flow::Summary;
+                screenT_ = 0.f;
+            }
+        }
+        return;
+    }
     switch (game_.handState()) {
     case okey::HandState::Playing: updateBots(simDt); break;
     case okey::HandState::HandOver:
@@ -1030,7 +1190,7 @@ void App::pressBetweenHands() {
     const ui::ScreenId cur = screens_.current();
     screenT_ = 0.f;
     if (cur == ui::ScreenId::HandSummary) {
-        if (game_.handState() == okey::HandState::MatchOver) {
+        if (otherInGame() ? other_->matchOver() : game_.handState() == okey::HandState::MatchOver) {
             screens_.show(ui::ScreenId::MatchOver);
             flow_ = Flow::MatchOver;
         } else {
@@ -1097,8 +1257,9 @@ void App::pumpEvents() {
             ++handsPlayed_;
             if (opt_.autoplay && !snapshot_) {
                 const okey::HandResult& r = game_.lastHandResult();
-                std::printf("[autoplay] hand %d/%d: %s | scores %d %d %d %d | totals %d %d %d %d\n", game_.handIndex() + 1,
-                            game_.numHands(), e.text.c_str(), r.score[0], r.score[1], r.score[2], r.score[3],
+                const std::string of = game_.classic() ? std::string() : "/" + std::to_string(game_.numHands());
+                std::printf("[autoplay] hand %d%s: %s | scores %d %d %d %d | totals %d %d %d %d\n", game_.handIndex() + 1,
+                            of.c_str(), e.text.c_str(), r.score[0], r.score[1], r.score[2], r.score[3],
                             game_.player(0).totalScore, game_.player(1).totalScore, game_.player(2).totalScore,
                             game_.player(3).totalScore);
             }
@@ -1146,17 +1307,31 @@ void App::updateDelayedAudio(float simDt) {
 }
 
 void App::updateScoreboard() {
+    if (otherInGame()) {
+        room_.setScoreboard(other_->scoreTitle(), other_->scoreLines());
+        return;
+    }
     if (flow_ == Flow::Title || game_.handState() == okey::HandState::NotStarted) {
         room_.setScoreboard("", {});
         return;
     }
-    const std::string title = game_.handState() == okey::HandState::MatchOver
-                                  ? std::string("Maç bitti")
-                                  : "El " + std::to_string(std::min(game_.handIndex() + 1, game_.numHands())) + " / " +
-                                        std::to_string(game_.numHands()) +
-                                        (game_.rules().katlamali ? " · Katlamalı" : "");
+    std::string title;
+    if (game_.classic())
+        title = game_.handState() == okey::HandState::MatchOver ? std::string("Okey bitti")
+                                                                 : "Okey · " + std::to_string(game_.handIndex() + 1) + ". el";
+    else
+        title = game_.handState() == okey::HandState::MatchOver
+                    ? std::string("Maç bitti")
+                    : std::string(game_.teams() ? "Eşli · " : "") + "El " +
+                          std::to_string(std::min(game_.handIndex() + 1, game_.numHands())) + " / " +
+                          std::to_string(game_.numHands()) + (game_.rules().katlamali ? " · Katlamalı" : "");
     std::vector<std::string> lines;
     for (int s = 0; s < 4; ++s) lines.push_back(game_.player(s).name + " ....... " + std::to_string(game_.player(s).totalScore));
+    if (game_.teams()) {
+        lines.clear();
+        for (int s = 0; s < 2; ++s)
+            lines.push_back(game_.player(s).name + " + " + game_.player(s + 2).name + " ... " + std::to_string(game_.teamTotal(s)));
+    }
     room_.setScoreboard(title, lines);
 }
 
@@ -1407,6 +1582,8 @@ void printUsage(const char* argv0) {
                 "  --level L         rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt\n"
                 "  --ai              Yapay Zeka modunda başla: senin yerine yapay zeka oynar (oyunda Y ile aç/kapa)\n"
                 "  --katlamali       katlamalı oyun: her açan, öncekinden en az 1 fazlasıyla açar\n"
+                "  --game G          oyun: 101, esli, okey, tavla, pisti, batak, king\n"
+                "  --set K=V         bir ayar (ayarlar.txt anahtarları, ör. batakesli=1, pistimasa=2, tavla=3)\n"
                 "  --autoplay        senin yerine de bir Usta bot oynar (izleme modu)\n"
                 "  --speed X         oyunu X kat hızlı oynat (ör. 4)\n"
                 "  --matches N       --autoplay ile: arka arkaya N maç (her ikincisi giriş ekranından geçer)\n"
@@ -1417,7 +1594,7 @@ void printUsage(const char* argv0) {
                 "                    (--state title | game | rules | settings ile başlangıç ekranı seçilebilir)\n"
                 "  --snapshot DOSYA  gizli pencerede 1600x900 bir kare çizip PNG olarak kaydet ve çık\n"
                 "      --frames N    görüntüden önce simüle edilecek kare sayısı\n"
-                "      --state S     title | game | summary | matchover | rules | settings\n"
+                "      --state S     title | game | summary | matchover | rules | settings | games\n"
                 "      --view V      seat | left | right | back | corner\n"
                 "  --help            bu yardım\n",
                 argv0);
@@ -1462,6 +1639,23 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
             o.ai = true;
         } else if (a == "--katlamali") {
             o.katlamali = true;
+        } else if (a == "--set") {
+            if (!(s = need(i, "--set"))) return false;
+            if (!std::strchr(s, '=')) {
+                error = "--set anahtar=değer bekliyor (ör. --set batakesli=1)";
+                return false;
+            }
+            o.sets.push_back(s);
+        } else if (a == "--game") {
+            if (!(s = need(i, "--game"))) return false;
+            static const char* const names[] = {"101", "esli", "okey", "tavla", "pisti", "batak", "king"};
+            o.game = -1;
+            for (int k = 0; k < 7; ++k)
+                if (std::string(s) == names[k]) o.game = k;
+            if (o.game < 0 || !ui::gameAvailable((ui::GameKind)o.game)) {
+                error = "--game: 101, esli, okey, tavla, pisti, batak, king (bu sürümde hazır olanlar)";
+                return false;
+            }
         } else if (a == "--ai-chaos") {
             o.aiChaos = true;
         } else if (a == "--speed") {
@@ -1513,9 +1707,9 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
         } else if (a == "--state") {
             if (!(s = need(i, "--state"))) return false;
             o.state = s;
-            static const char* const ok[] = {"title", "game", "summary", "matchover", "rules", "settings"};
+            static const char* const ok[] = {"title", "game", "summary", "matchover", "rules", "settings", "games"};
             if (std::none_of(std::begin(ok), std::end(ok), [&](const char* k) { return o.state == k; })) {
-                error = "--state: title, game, summary, matchover, rules ya da settings";
+                error = "--state: title, game, summary, matchover, rules, settings ya da games";
                 return false;
             }
         } else if (a == "--view") {

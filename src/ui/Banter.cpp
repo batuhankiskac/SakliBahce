@@ -81,6 +81,9 @@ enum Sit {
     S_KatOpen,          // katlamalı: opened over somebody else's opening ({v} = the new total / pairs)
     S_FedPenSelf,       // my discard was taken and opened with: {v} = the penalty, {p} = the opener
     S_FedPenGloat,      // I opened with the left tile: {g} = the giver who pays {v}
+    S_IndicatorSelf,    // klasik okey: the speaker shows the gösterge's twin
+    S_IndicatorReact,   // klasik okey: {p} showed the gösterge (one point off everybody else)
+    S_PartnerWin,       // eşli 101: the speaker's partner {p} finished the hand
     S_Count
 };
 
@@ -92,6 +95,22 @@ struct Tbl {
 #define LINES(name, ...) static const char* const name[] = {__VA_ARGS__};
 #define T(name) Tbl{name, (int)(sizeof(name) / sizeof(name[0]))}
 #define TN Tbl{nullptr, 0}
+
+// ---------------------------------------------------------------- klasik okey: the gösterge
+LINES(kIndSelfR, "Gösterge bende, bismillah.", "Bakın evlatlar, göstergenin eşi bende.", "Gösterge bizden, hayırlısı.")
+LINES(kIndSelfM, "Gösterge bende abi! Birer puan yazın!", "Daha başlamadan bir gol: gösterge!", "Göstergeee! Herkesten bir!")
+LINES(kIndSelfN, "Hıh, gösterge bende. Yazın birer.", "Göstergeyi gösteriyorum, gözlüğüm daha iyi görüyor.",
+      "Bizim zamanımızda gösterge iki puandı. Neyse, yazın.")
+LINES(kIndReactR, "Hayırlı olsun {p}, gösterge senden.", "Eh, bir puan da göstergeye gitti.", "Gösterge gitti, sabır.")
+LINES(kIndReactM, "Daha oyun başlamadan bir yedik!", "Gösterge mi? Vay be {p}!", "Ofsayttan gol bu {p}!")
+LINES(kIndReactN, "Hıh, gösterge. Şanslı adam.", "Bir puan gitti, oraletim de soğudu.", "Göstergeyle bitmez bu oyun {p}.")
+// ---------------------------------------------------------------- eşli 101: the partner finished
+LINES(kPartnerWinR, "Helal olsun ortak, elimi de sildin.", "Maşallah {p}, ikimize de hayırlı olsun.",
+      "Ortağım bitirdi, elhamdülillah.")
+LINES(kPartnerWinM, "Ortak! Asist benden, gol senden!", "İşte takım oyunu bu! Helal olsun {p}!",
+      "Ortağım bitirdi beyler, kucaklaşın!")
+LINES(kPartnerWinN, "Hıh, ortağım bitirdi; benim taşları sayan yok artık.", "Aferin {p}. Bizim zamanımızda da böyle oynardık.",
+      "Ortak bitirdi, elimdeki yük kalktı.")
 
 // ---------------------------------------------------------------- welcome (match start, {h})
 LINES(kWelcomeR, "Hoş geldin {h}, otur şöyle.", "{h} geldi, masa tamam. Bismillah.", "Buyur {h}, çayın geliyor.",
@@ -557,6 +576,9 @@ const Tbl kTables[S_Count][4] = {
     {T(kKatR), T(kKatM), T(kKatN), TN},
     {T(kFedSelfR), T(kFedSelfM), T(kFedSelfN), TN},
     {T(kGloatR), T(kGloatM), T(kGloatN), TN},
+    {T(kIndSelfR), T(kIndSelfM), T(kIndSelfN), TN},
+    {T(kIndReactR), T(kIndReactM), T(kIndReactN), TN},
+    {T(kPartnerWinR), T(kPartnerWinM), T(kPartnerWinN), TN},
 };
 
 // Multi-line idle exchanges (2–5 lines): seats 1 Rıza, 2 Mahmut, 3 Nuri, 4 the çaycı. Lines may use {h}.
@@ -888,6 +910,23 @@ void Banter::remember(const std::string& text) {
 }
 
 // ---------------------------------------------------------------- game events
+bool Banter::external(int seat, const std::string& text, bool important) {
+    if (!enabled_ || seat < 1 || seat > 4 || text.empty()) return false;
+    if (isRecent(text)) return false;
+    if (!important && (globalCool_ > 0.f || seatCool_[(size_t)seat] > 0.f)) return false;
+    Pending p;
+    p.line.seat = seat;
+    p.line.text = text;
+    p.line.delay = important ? 0.3f : 0.6f;
+    p.line.seconds = std::clamp(1.6f + 0.045f * (float)text.size(), 2.2f, 4.2f);
+    p.line.maxWait = important ? 4.f : 3.f;
+    queue_.push_back(p);
+    remember(text);
+    globalCool_ = std::max(globalCool_, important ? 1.2f : 2.4f);
+    seatCool_[(size_t)seat] = std::max(seatCool_[(size_t)seat], important ? 3.f : 7.f);
+    return true;
+}
+
 void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
     if (!enabled_) return;
     const int actor = e.player;
@@ -1029,6 +1068,10 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
             if (chance(0.6f)) say(pickBot(), S_SwapHuman, 0.5f, false, 0, actor);
         }
         break;
+    case EvType::ShowIndicator:
+        if (actorBot) say(actor, S_IndicatorSelf, 0.3f, true, e.amount, actor, 4.f);
+        if (chance(0.6f)) say(actor == 0 ? pickBot() : pickOther(actor), S_IndicatorReact, 2.2f, true, e.amount, actor, 5.f);
+        break;
     case EvType::Penalty:
         // yandan alıp açma: the opener (this turn's player) opened with the actor's discard
         if (lastOpenSeat_ >= 0 && actor == okey::Game::leftOf(lastOpenSeat_)) {
@@ -1051,6 +1094,10 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
         turnSeat_ = -1;
         const okey::HandResult& r = g.lastHandResult();
         int w = actor;
+        if (g.teams() && w >= 0) { // eşli: the winner's partner cheers (Mahmut cheers the human, the human never speaks)
+            const int partner = okey::Game::partnerOf(w);
+            if (partner != 0 && chance(0.75f)) say(partner, S_PartnerWin, 1.8f, true, 0, w, 6.f);
+        }
         if (w >= 1 && w <= 3) {
             say(w, r.finishedWithJoker ? S_WinOkey : S_WinSelf, 0.3f, true, 0, w, 6.f);
             const bool streak = (w == lastWinner_);

@@ -1232,7 +1232,65 @@ constexpr SfxDef kSfx[(int)Sfx::Count] = {
     {"error", 1, 2, -11.f, .02f, .05f},        {"dice", 4, 2, -13.f, .04f, .15f},
     {"chair", 3, 1, -15.f, .04f, .15f},        {"car_pass", 4, 1, -17.f, .05f, .2f, -.55f},
     {"meow", 3, 1, -19.f, .07f, .25f, .15f},
+    {"card_place", 4, 3, -12.f, .06f, .15f},  {"card_slap", 3, 2, -6.f, .05f, .1f},
+    {"card_shuffle", 2, 1, -11.f, .03f, .05f}, {"dice_throw", 4, 2, -6.f, .04f, .1f},
+    {"checker", 4, 3, -8.f, .05f, .12f},
 };
+
+// ---- the other games: cards, our own dice, tavla checkers
+Buf sfxCardPlace(Synth& s) {
+    Buf b = s.buf(.18f);
+    const float t0 = .002f;
+    s.noiseBurst(b, 0.f, 3.f, 22.f, 1800.f, 7000.f, .35f);            // the card slides through the air / felt
+    s.noiseBurst(b, t0 + s.u(.018f, .03f), .4f, 6.f, 900.f, 5000.f, .9f); // ... and lands flat
+    Mode felt[3] = {{180, .02f, .6f}, {320, .014f, .4f}, {640, .008f, .2f}};
+    s.jitter(felt, 3, .08f, .2f);
+    s.impact(b, t0 + .025f, felt, 3, s.u(.8f, 1.4f), .5f, .2f);
+    return b;
+}
+
+Buf sfxCardSlap(Synth& s) {
+    Buf b = s.buf(.35f);
+    s.noiseBurst(b, 0.f, 2.f, 14.f, 1500.f, 6000.f, .3f);
+    const float t = s.u(.02f, .035f);
+    Mode palm[4] = {{120, .045f, .8f}, {190, .035f, .8f}, {300, .025f, .6f}, {470, .018f, .4f}};
+    s.jitter(palm, 4, .06f, .2f);
+    s.impact(b, t, palm, 4, s.u(2.5f, 3.5f), 1.f, .2f);
+    s.noiseBurst(b, t, .3f, 9.f, 700.f, 4500.f, .9f);
+    return b;
+}
+
+Buf sfxCardShuffle(Synth& s) {
+    const float D = s.u(.95f, 1.15f);
+    Buf b = s.buf(D + .25f);
+    // riffle: two halves interleave, the clicks speed up and die away
+    float t = .02f;
+    const float riffle = D * .62f;
+    while (t < riffle) {
+        const float u = t / riffle;
+        s.noiseBurst(b, t, .15f, s.u(1.2f, 2.4f), 2200.f, 9000.f, s.u(.25f, .55f) * (1.f - .4f * u));
+        t += s.u(.006f, .014f) * (1.2f - .6f * u);
+    }
+    // the bridge: a soft whirr as the cards fall back into one deck, and a tap to square it
+    s.noiseBurst(b, riffle + .02f, 25.f, 90.f, 800.f, 4000.f, .35f);
+    Mode deck[3] = {{220, .03f, .7f}, {390, .02f, .5f}, {760, .012f, .3f}};
+    s.impact(b, D, deck, 3, 1.4f, .6f, .2f);
+    s.impact(b, D + s.u(.07f, .11f), deck, 3, 1.2f, .45f, .2f);
+    return b;
+}
+
+Buf sfxChecker(Synth& s) {
+    Buf b = s.buf(.22f);
+    Mode wood[4] = {{820, .022f, 1.f}, {1350, .016f, .7f}, {2150, .010f, .45f}, {3300, .006f, .25f}};
+    Mode board[3] = {{210, .04f, .6f}, {360, .03f, .5f}, {620, .02f, .35f}};
+    s.jitter(wood, 4, .07f, .25f);
+    s.jitter(board, 3, .07f, .25f);
+    const float fs = s.u(.9f, 1.12f);
+    s.impact(b, .001f, wood, 4, s.u(.2f, .32f), 1.f, .3f, fs);
+    s.impact(b, .001f, board, 3, .4f, .7f, .2f);
+    if (s.chance(.5f)) s.impact(b, .001f + s.u(.012f, .022f), wood, 4, .2f, s.u(.2f, .35f), .3f, fs);
+    return b;
+}
 
 Buf synthSfx(Sfx id, int v, Synth& s) {
     switch (id) {
@@ -1260,6 +1318,15 @@ Buf synthSfx(Sfx id, int v, Synth& s) {
     case Sfx::Chair: return sfxChair(s, v % 3);
     case Sfx::CarPass: return sfxCarPass(s, v);
     case Sfx::Meow: return sfxMeow(s, v % 3);
+    case Sfx::CardPlace: return sfxCardPlace(s);
+    case Sfx::CardSlap: return sfxCardSlap(s);
+    case Sfx::CardShuffle: return sfxCardShuffle(s);
+    case Sfx::DiceThrow: {
+        Buf b = sfxDiceRaw(s);
+        roomize(b, s.sr(), .1f, .35f);
+        return b;
+    }
+    case Sfx::Checker: return sfxChecker(s);
     default: return Buf(64, 0.f);
     }
 }

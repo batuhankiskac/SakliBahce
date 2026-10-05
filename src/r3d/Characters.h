@@ -30,6 +30,13 @@ public:
     void onTvGoal();                                        // someone reacts to the TV
     void onCatMeow(Vector3 where);                          // heads turn to the kahvehane cat
     void say(int seat, const std::string& text, float seconds = 3.f);
+    // The other games (tavla, the card games), which have no okey events: seat 1..3 reaches out — mode 0 takes
+    // something from `target` to their hand, 1 puts something from their hand down at `target` (timed like the
+    // tiles: w3d::BOT_TAKE_LEAD / BOT_GIVE_LEAD). `mood`: 0 none, 1 happy, 2 grumpy, 3 surprised.
+    void reach(int seat, Vector3 target, int mode);
+    void react(int seat, int mood, Vector3 lookAt);
+    // A line for the banter system's rate limits (the other games' reactions): queued like Banter lines.
+    bool chat(int seat, const std::string& text, bool important = false);
     void setTitleMode(bool on);                             // menu backdrop: no bubbles, relaxed idles
     void setAnimationSpeed(float speed);                    // Table3D's tile speed: reaches for tiles keep pace
 

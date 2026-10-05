@@ -391,13 +391,14 @@ std::string list(const std::vector<ui::ScreenAction>& v) {
 
 // Layout rectangles (mirrors of Screens.cpp's layout; the harness clicks through the real input path).
 constexpr Rectangle kTitlePlay{640, 470, 320, 68};
+constexpr Rectangle kCard101{158, 178, 300, 268}; // the game list's first card (101)
 constexpr Rectangle kTitleWatchAi{660, 556, 280, 56};
 constexpr Rectangle kTitleRules{660, 626, 280, 56};
 constexpr Rectangle kTitleSettings{660, 696, 280, 56};
 constexpr Rectangle kSetName{720, 183, 340, 46};
-constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 270.f};
-constexpr Vector2 kSetLevelKurt{720.f + 2 * 158.f + 73.f, 322.f};
-constexpr Vector2 kSetMusicToggle{760.f, 716.f};
+constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 446.f};
+constexpr Vector2 kSetLevelKurt{720.f + 2 * 158.f + 73.f, 256.f};
+constexpr Vector2 kSetMusicToggle{760.f, 736.f};
 constexpr Rectangle kSetBack{985, 776, 230, 58};
 // Devam, Yapay Zeka Oynasın / Kontrolü Geri Al, Kurallar, Ayarlar, Ana Menü
 constexpr Rectangle kPauseBtn[5] = {{650, 328, 300, 58}, {650, 400, 300, 58}, {650, 472, 300, 58}, {650, 544, 300, 58},
@@ -584,16 +585,23 @@ int main() {
     H.run(0.3);
     H.take();
     H.key(KEY_ENTER);
+    check(H.screens.current() == ui::ScreenId::GameSelect, "Enter on Title opens the game list");
+    H.run(0.5);
+    H.shot("games" + sfx);
+    H.key(KEY_ENTER);
     acts = H.take();
     check(has(acts, ui::ScreenAction::StartMatch) && H.screens.current() == ui::ScreenId::None,
-          "Enter on Title starts a match (" + list(acts) + ")");
+          "Enter on the game list starts a match (" + list(acts) + ")");
     H.screens.show(ui::ScreenId::Title);
     H.run(0.4);
     H.take();
     H.click(kTitlePlay);
+    check(H.screens.current() == ui::ScreenId::GameSelect, "Oyna opens the game list");
+    H.run(0.5);
+    H.click(kCard101);
     acts = H.take();
-    check(has(acts, ui::ScreenAction::StartMatch), "Oyna returns StartMatch (" + list(acts) + ")");
-    check(H.screens.current() == ui::ScreenId::None && !H.screens.blocksGame(), "Oyna switches to None");
+    check(has(acts, ui::ScreenAction::StartMatch), "the 101 card returns StartMatch (" + list(acts) + ")");
+    check(H.screens.current() == ui::ScreenId::None && !H.screens.blocksGame(), "the 101 card switches to None");
     sim.setup(lose.seed, 3);
     H.game = &sim.game;
     H.titleMode = false;
@@ -698,6 +706,8 @@ int main() {
     Sim sim2;
     H.game = nullptr;
     H.click(kTitlePlay);
+    H.run(0.5);
+    H.click(kCard101);
     sim2.setup(win.seed, 3);
     H.game = &sim2.game;
     for (int hand = 1; hand <= 3; ++hand) {

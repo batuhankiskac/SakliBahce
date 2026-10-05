@@ -19,6 +19,7 @@
 //   series is decided the same way. The look-ahead is budgeted in solver work, so decisions stay
 //   deterministic for a seed and take a few milliseconds.
 #include "core/Bot.h"
+#include "core/OkeyHand.h"
 #include "core/Solver.h"
 
 #include <algorithm>
@@ -32,6 +33,8 @@ namespace okey {
 namespace detail {
 SolveResult solveSeriesObjective(const std::vector<int>& tiles, const OkeyInfo& ok, int mustUse, int objective);
 uint64_t solverWork();
+// tests/sim --team-ab: seats (bit per seat) whose bots play eşli 101 as a team (default: all).
+unsigned teamAwareMask = 0xF;
 } // namespace detail
 
 namespace {
@@ -49,6 +52,22 @@ constexpr int UNOPENED_SAMPLES = 96;    // sampled futures (my pile draws + left
 constexpr int OPENED_SAMPLES = 64;      // ... after opening
 constexpr double DANGER_WEIGHT = 0.3;   // heuristic keep/danger difference added to rollout scores
 constexpr double ISLEK_KEEP = 5000.0;   // keep-score added to işlek tiles (discarding one costs 101)
+// Expected yandan açma cezası (points, see feedCost) in the heuristic keep-score, and on top of it in Kurt's
+// rollouts. Tuned with bot-vs-bot duplicate deals: Kurt gains most when it also counts the indirect cost (a
+// neighbour who opens can finish), so its rollouts weigh it above the plain expectation.
+constexpr double FEED_WEIGHT = 1.0;
+constexpr double FEED_WEIGHT_EASY = 0.4; // Acemi: only a vague "don't hand out big tiles"
+constexpr double FEED_ROLL = 2.0;
+// Klasik okey hand value: tiles in melds, the expected gain of the next draw and the chance that it finishes (the
+// next draw is looked at by Kurt only: worth about 0.27 points a hand in duplicate deals, which is what sets Kurt
+// apart from Usta; a second draw of look-ahead and other weights measured no better).
+constexpr double CLASSIC_WIN = 30.0;
+// Eşli 101: what the partner's hand is expected to cost the team when the opponents end the hand (pile out or an
+// opponent finishes): an unopened partner a share of the unopened score (they may still open), an opened one
+// about this much per tile left.
+constexpr double PARTNER_UNOPENED_SHARE = 0.4;
+constexpr double PARTNER_TILE_POINTS = 3.5;
+
 
 using Groups = std::vector<std::vector<int>>;
 
@@ -126,10 +145,17 @@ struct Knowledge {
     int rTook[NUM_COLORS][NUM_NUMBERS + 1] = {};      // faces my right neighbour took from my discards
     int rDiscarded[NUM_COLORS][NUM_NUMBERS + 1] = {}; // faces my right neighbour discarded
     int right = 0;
+    int rTurns = 0;            // turns my right neighbour has played this hand (their discards)
+    bool anyOpened = false;    // someone has opened this hand
     bool rOpened = false, rPairs = false, rCanSwapWork = false;
     int rHand = 21;
-    int minOpenedOppHand = 99; // smallest hand among opponents who opened
+    int minOpenedOppHand = 99; // smallest hand among opponents who opened (eşli: not counting the partner)
     int anyOppHandMin = 99;
+    // Eşli 101 (the bot plays for the team): the partner across.
+    bool team = false;
+    int partner = -1;
+    bool pOpened = false, pPairs = false;
+    int pHand = 21;
     int visibleJokers = 0, myJokers = 0;
     std::vector<int> unseen; // Kurt: physical tiles that may still come from the pile
 
@@ -232,8 +258,22 @@ struct Bot::Impl {
         know.rOpened = r.opened;
         know.rPairs = r.openedWithPairs;
         know.rHand = (int)r.hand.size(); // public: rack sizes are visible
+        if (!easy())
+            for (int id : r.discards) see(id, know.rDiscarded); // the pile right beside me
+        for (const DiscardRecord& rec : game.discardHistory())
+            if (rec.player == know.right) ++know.rTurns;
+        for (int s = 0; s < NUM_PLAYERS; ++s)
+            if (game.player(s).opened) know.anyOpened = true;
+        know.team = game.teams() && (detail::teamAwareMask >> seat & 1u);
+        if (know.team) {
+            know.partner = Game::partnerOf(seat);
+            const PlayerInfo& pp = game.player(know.partner);
+            know.pOpened = pp.opened;
+            know.pPairs = pp.openedWithPairs;
+            know.pHand = (int)pp.hand.size();
+        }
         for (int s = 0; s < NUM_PLAYERS; ++s) {
-            if (s == seat) continue;
+            if (s == seat || s == know.partner) continue;
             const PlayerInfo& q = game.player(s);
             know.anyOppHandMin = std::min(know.anyOppHandMin, (int)q.hand.size());
             if (q.opened) know.minOpenedOppHand = std::min(know.minOpenedOppHand, (int)q.hand.size());
@@ -245,7 +285,6 @@ struct Bot::Impl {
                 if (rec.player != seat) continue;
                 if (!removeOne(pile, rec.tile)) see(rec.tile, know.rTook);
             }
-            for (int id : r.discards) see(id, know.rDiscarded);
             // Every tile ever discarded is in a discard pile, on the table or in the hand of whoever took it.
             std::array<char, NUM_TILES> gone{};
             for (int id : game.player(seat).hand) gone[id] = 1;
@@ -1253,20 +1292,40 @@ struct Bot::Impl {
         return r.feasible && r.tilesUsed < (int)t.size();
     }
 
-    // Chance that some opponent finishes during the next round (before my next turn).
-    double roundHazard() const {
+    // How the hand may end before my next turn. `opp`: an opponent finishes (single 101: anybody else), my hand
+    // counts (plus `partCost`, the partner's expected hand in eşli); `part`: my partner finishes (eşli), my hand
+    // is not counted and the team gets `partWin`.
+    struct Hazard {
+        double opp = 0.0, part = 0.0;
+        double partWin = 0.0, partCost = 0.0;
+    };
+    static double finishChance(const PlayerInfo& p) {
+        if (!p.opened) return 0.01;
+        const int n = (int)p.hand.size();
+        return n <= 1 ? 0.5 : n == 2 ? 0.35 : n == 3 ? 0.25 : n == 4 ? 0.15 : n <= 6 ? 0.08 : 0.04;
+    }
+    Hazard roundHazard() const {
+        Hazard hz;
         double survive = 1.0;
         for (int s = 0; s < NUM_PLAYERS; ++s) {
-            if (s == seatNow) continue;
-            const PlayerInfo& p = g->player(s);
-            double h = 0.01;
-            if (p.opened) {
-                const int n = (int)p.hand.size();
-                h = n <= 1 ? 0.5 : n == 2 ? 0.35 : n == 3 ? 0.25 : n == 4 ? 0.15 : n <= 6 ? 0.08 : 0.04;
-            }
-            survive *= 1.0 - h;
+            if (s == seatNow || s == know.partner) continue;
+            survive *= 1.0 - finishChance(g->player(s));
         }
-        return 1.0 - survive;
+        hz.opp = 1.0 - survive;
+        if (know.team) {
+            const RulesConfig& rc = g->rules();
+            const double p = finishChance(g->player(know.partner));
+            // the partner finishes when no opponent did first (roughly: half the round comes before them)
+            hz.part = p * (1.0 - 0.5 * hz.opp);
+            hz.partWin = rc.winnerScore * (know.pPairs ? 2.0 : 1.0);
+            hz.partCost = know.pOpened ? PARTNER_TILE_POINTS * know.pHand * (know.pPairs ? 2.0 : 1.0)
+                                       : PARTNER_UNOPENED_SHARE * rc.unopenedScore;
+        }
+        return hz;
+    }
+    // Expected score of one round before my turn when the hand ends during it, given my cost `mine` if it does.
+    static double roundEnd(const Hazard& hz, double mine) {
+        return hz.opp * (mine + hz.partCost) + hz.part * hz.partWin;
     }
 
     // Plays my turns j..D-1 of a rollout for an opened hand (left tile taken when usable, else the pile;
@@ -1274,12 +1333,12 @@ struct Bot::Impl {
     // hand before each of my turns (hazard `hz`). Returns the expected final score from here, weighted
     // by the survival probability `surv` of reaching turn j.
     double finishRollout(std::vector<int>& hand, TableModel& tm, bool pairsOpener, int j, int D, double surv,
-                         double hz, const std::vector<int>& P, const std::vector<int>& L) const {
+                         const Hazard& hz, const std::vector<int>& P, const std::vector<int>& L) const {
         const double factor = pairsOpener ? 2.0 : 1.0;
         double ev = 0.0;
         for (; j < D; ++j) {
-            ev += surv * hz * factor * handPts(hand);
-            surv *= 1.0 - hz;
+            ev += surv * roundEnd(hz, factor * handPts(hand));
+            surv *= 1.0 - hz.opp - hz.part;
             const int tile = usableAfterOpening(hand, L[j], tm, pairsOpener) ? L[j] : P[j];
             hand.push_back(tile);
             rolloutSwaps(hand, tm);
@@ -1296,7 +1355,7 @@ struct Bot::Impl {
             if (worst < 0) worst = hand.front();
             removeOne(hand, worst);
         }
-        return ev + surv * factor * handPts(hand);
+        return ev + surv * (factor * handPts(hand) + hz.partCost);
     }
 
     // Opened hand: expected final score after discarding each candidate (rollouts over sampled draws).
@@ -1304,12 +1363,13 @@ struct Bot::Impl {
                                        const std::vector<std::vector<int>>& pileDraws,
                                        const std::vector<std::vector<int>>& leftDraws, uint64_t budget) const {
         const int D = pileDraws.empty() ? 0 : (int)pileDraws.front().size();
-        const double hz = roundHazard();
+        const Hazard hz = roundHazard();
         const double factor = m.pairsOpener ? 2.0 : 1.0;
         const TableModel tm0 = tableModel(m.table);
         std::vector<double> out(cands.size(), 0.0);
         if (pileDraws.empty()) {
-            for (size_t ci = 0; ci < cands.size(); ++ci) out[ci] = factor * handPts(without(m.hand, cands[ci]));
+            for (size_t ci = 0; ci < cands.size(); ++ci)
+                out[ci] = factor * handPts(without(m.hand, cands[ci])) + hz.partCost;
             return out;
         }
         const uint64_t work0 = workUsed();
@@ -1356,7 +1416,7 @@ struct Bot::Impl {
         const RulesConfig& rc = g->rules();
         const int thr = g->seriesOpenNeed();
         const int D = pileDraws.empty() ? 0 : (int)pileDraws.front().size();
-        const double hz = roundHazard();
+        const Hazard hz = roundHazard();
         const double unopened = rc.unopenedScore;
         const TableModel tm0 = tableModel(m.table);
         std::vector<double> total(cands.size(), 0.0);
@@ -1442,11 +1502,11 @@ struct Bot::Impl {
                 double ev = 0.0, surv = 1.0;
                 // the rounds before my opening turn (and before the end of the hand when I never open)
                 for (int j = 0; j < std::min(openTurn + 1, D); ++j) {
-                    ev += surv * hz * unopened;
-                    surv *= 1.0 - hz;
+                    ev += surv * roundEnd(hz, unopened);
+                    surv *= 1.0 - hz.opp - hz.part;
                 }
                 if (openTurn >= D) {
-                    total[ci] += ev + surv * unopened;
+                    total[ci] += ev + surv * (unopened + hz.partCost);
                     continue;
                 }
                 SolveResult op;
@@ -1500,10 +1560,39 @@ struct Bot::Impl {
             }
             ++done;
         }
-        std::vector<double> out(cands.size(), unopened);
+        std::vector<double> out(cands.size(), unopened + hz.partCost);
         if (done > 0)
             for (size_t ci = 0; ci < cands.size(); ++ci) out[ci] = total[ci] / done;
         return out;
+    }
+
+    // Yandan açma cezası: expected points written on us when the unopened right neighbour takes `x` and opens
+    // with it (number x10, x20 for a pair opening). Logistic model fitted on bot-vs-bot games (tests/sim
+    // --feed-log): about 15% of the tiles thrown to an unopened neighbour get used to open, 7% of the 1s and
+    // 21% of the 12s/13s; a face they threw away themselves is almost never taken.
+    double feedCost(int x) const {
+        const RulesConfig& rc = g->rules();
+        if (!rc.leftOpenPenalty || know.rOpened || ok->isJoker(x)) return 0.0;
+        const int c = ok->faceColor(x), n = ok->faceNumber(x);
+        int near = 0, sameNum = 0;
+        for (int n2 = std::max(1, n - 2); n2 <= std::min(NUM_NUMBERS, n + 2); ++n2)
+            if (n2 != n) near += know.rDiscarded[c][n2];
+        for (int c2 = 0; c2 < NUM_COLORS; ++c2)
+            if (c2 != c) sameNum += know.rDiscarded[c2][n];
+        const double nn = n / 13.0;
+        const int pile = g->pileCount();
+        double z = -3.60 + 2.54 * nn - 0.885 * nn * nn;
+        if (know.rTurns == 0) z += 0.78;
+        z += 0.80 * std::min(know.rTurns, 6) / 6.0;
+        z += 0.34 * std::clamp(1.0 - pile / 20.0, 0.0, 1.0);
+        if (!know.anyOpened) z += 0.39;
+        if (know.rDiscarded[c][n]) z -= 2.85;
+        z -= 0.225 * std::min(near, 2) + 0.425 * std::min(sameNum, 2);
+        if (know.live(c, n) > 0) z += 0.29; // the other copy may be in their hand (a pair or a group)
+        if (g->seriesOpenNeed() > rc.openThreshold) z -= 0.31; // katlamalı: harder to open
+        const double p = 1.0 / (1.0 + std::exp(-z));
+        // a fifth of these openings are pairs (x20)
+        return p * n * (know.rDiscarded[c][n] ? 10.0 : 11.3);
     }
 
     // ---- discard choice ----
@@ -1657,15 +1746,7 @@ struct Bot::Impl {
                 if (know.live(c, n) == 0) feed -= 1.5;
                 danger += feed;
             }
-            // Yandan açma cezası: an unopened right neighbour who opens with this tile writes its number x10
-            // (x20 for pairs) on us. Nothing tells which tile completes an opening, so weigh the expected cost:
-            // likelier as the pile runs down, less likely for a face they threw away themselves.
-            if (!easy() && rc.leftOpenPenalty && !know.rOpened && !ok->isJoker(x)) {
-                double p = 0.03 + 0.05 * std::clamp(1.0 - pile / 20.0, 0.0, 1.0);
-                if (know.rDiscarded[c][n]) p *= 0.3;
-                if (know.live(c, n) == 0) p *= 0.6;
-                danger += n * 10.0 * p;
-            }
+            danger += (easy() ? FEED_WEIGHT_EASY : FEED_WEIGHT) * feedCost(x); // yandan açma cezası
             if (easy()) danger += rng.uniform(0.0f, 6.0f);
             scored.push_back({keep + danger, x});
         }
@@ -1715,7 +1796,8 @@ struct Bot::Impl {
                                                 : unopenedRollouts(m, ids, pileD, leftD, budget);
         double best = 1e18;
         for (size_t i = 0; i < top.size(); ++i) {
-            const double score = ev[i] + DANGER_WEIGHT * (top[i].first - top.front().first);
+            const double score =
+                ev[i] + DANGER_WEIGHT * (top[i].first - top.front().first) + FEED_ROLL * feedCost(top[i].second);
             if (score < best) {
                 best = score;
                 bestId = top[i].second;
@@ -1814,6 +1896,167 @@ struct Bot::Impl {
             if (!r.chance(0.55f)) return a;
         }
         return act(BotAction::Kind::TakeLeft);
+    }
+
+    // ---- klasik okey ----
+    // A tile id with face (c, n) that is not in `hand` (a sahte okey for the okey's face), or -1.
+    int freeTileOf(int c, int n, const std::vector<int>& hand) const {
+        if (c == ok->color && n == ok->number) {
+            for (int f = FAKE_JOKER_A; f <= FAKE_JOKER_B; ++f)
+                if (!has(hand, f)) return f;
+            return -1;
+        }
+        for (int cp = 0; cp < 2; ++cp)
+            if (!has(hand, makeTileId(c, n, cp))) return makeTileId(c, n, cp);
+        return -1;
+    }
+
+    // Faces that might come next with their weight (unseen copies as this level knows them), okey last.
+    struct Draw {
+        int id;
+        double w;
+    };
+    std::vector<Draw> classicDraws(const std::vector<int>& hand) const {
+        std::vector<Draw> out;
+        for (int c = 0; c < NUM_COLORS; ++c)
+            for (int n = 1; n <= NUM_NUMBERS; ++n) {
+                const double live = easy() ? 2.0 - know.mine[c][n] : (double)know.live(c, n);
+                if (live <= 0) continue;
+                const int id = freeTileOf(c, n, hand);
+                if (id >= 0) out.push_back({id, live});
+            }
+        const int liveJ = std::max(0, 2 - know.visibleJokers - know.myJokers);
+        if (liveJ > 0)
+            for (int cp = 0; cp < 2; ++cp) {
+                const int j = makeTileId(ok->color, ok->number, cp);
+                if (!has(hand, j)) {
+                    out.push_back({j, (double)liveJ});
+                    break;
+                }
+            }
+        return out;
+    }
+
+    // Can a drawn face change anything for `hand`? (same color within two, wrapping 13-1, or same number)
+    bool relevant(int id, const std::vector<int>& hand) const {
+        if (ok->isJoker(id)) return true;
+        const int c = ok->faceColor(id), n = ok->faceNumber(id);
+        for (int h : hand) {
+            if (ok->isJoker(h)) continue;
+            const int c2 = ok->faceColor(h), n2 = ok->faceNumber(h);
+            if (n2 == n) return true;
+            if (c2 != c) continue;
+            const int d = std::abs(n2 - n);
+            if (d <= 2 || d >= 11) return true;
+        }
+        return false;
+    }
+
+    // How good a 14-tile hand is: tiles in melds now, the chance that the next draw finishes it, and the expected
+    // gain of that draw (series), or the same for seven pairs — whichever line is better.
+    double classicValue(const std::vector<int>& h14, const std::vector<Draw>& draws, bool lookahead) const {
+        const int cover = classicCoverFast(h14, *ok);
+        const int pairs = classicPairCount(h14, *ok);
+        if (!lookahead) return std::max<double>(cover, pairs >= 4 ? pairs * 2.0 : 0.0);
+        double wsum = 0, win = 0, gain = 0, pairWin = 0;
+        std::vector<int> t = h14;
+        t.push_back(-1);
+        for (const Draw& d : draws) {
+            wsum += d.w;
+            if (!relevant(d.id, h14)) continue;
+            t.back() = d.id;
+            const int c15 = classicCoverFast(t, *ok);
+            if (c15 >= 14) win += d.w;
+            else gain += d.w * (c15 - cover);
+            if (pairs >= 6 && classicPairCount(t, *ok) >= 7) pairWin += d.w;
+        }
+        if (wsum <= 0) return cover;
+        const double series = cover + 0.8 * gain / wsum + CLASSIC_WIN * win / wsum;
+        const double pairLine = pairs >= 4 ? pairs * 2.0 + CLASSIC_WIN * pairWin / wsum : 0.0;
+        return std::max(series, pairLine);
+    }
+
+    // Danger of handing `x` to the right neighbour (Kurt / Usta): faces next to what they took from me.
+    double classicDanger(int x) const {
+        if (easy()) return 0.0;
+        const int c = ok->faceColor(x), n = ok->faceNumber(x);
+        double d = 0;
+        for (int c2 = 0; c2 < NUM_COLORS; ++c2)
+            for (int n2 = 1; n2 <= NUM_NUMBERS; ++n2) {
+                const int took = know.rTook[c2][n2];
+                if (!took) continue;
+                const int dn = std::abs(n2 - n);
+                if (c2 == c && (dn <= 2 || dn >= 12)) d += 0.35 * took;
+                if (n2 == n && c2 != c) d += 0.3 * took;
+            }
+        if (know.rDiscarded[c][n]) d -= 0.3;
+        if (know.live(c, n) == 0) d -= 0.1;
+        return std::max(0.0, d);
+    }
+
+    BotAction classicNext(const Game& game, int seat) {
+        const std::vector<int>& hand = game.player(seat).hand;
+        Rng rng = turnRng(game, seat, 0xC1A5);
+        if (game.indicatorTwin(seat) >= 0) return act(BotAction::Kind::ShowIndicator);
+        if (game.stage() == TurnStage::NeedDraw) {
+            const int L = game.topDiscard(Game::leftOf(seat));
+            if (L < 0 || !game.canTakeFromLeft(seat)) return act(BotAction::Kind::DrawPile);
+            if (game.pileCount() == 0) return act(BotAction::Kind::TakeLeft);
+            // take the left tile when it finishes the hand or adds to the melds
+            std::vector<int> with = hand;
+            with.push_back(L);
+            if (classicCoverFast(with, *ok) >= 14 || classicPairCount(with, *ok) >= 7)
+                for (int x : with)
+                    if (classicFinishKind(with, x, *ok)) return act(BotAction::Kind::TakeLeft);
+            if (ok->isJoker(L)) return act(BotAction::Kind::TakeLeft);
+            const int before = classicCoverFast(hand, *ok), after = classicCoverFast(with, *ok);
+            const int pb = classicPairCount(hand, *ok), pa = classicPairCount(with, *ok);
+            bool take = after > before;
+            if (!take && pb >= 5 && pa > pb) take = true; // going for pairs
+            if (easy() && take && !rng.chance(0.6f)) take = false;
+            return act(take ? BotAction::Kind::TakeLeft : BotAction::Kind::DrawPile);
+        }
+        // finish when possible: the okey as the last tile doubles, pairs double
+        int bestFinish = -1, bestMult = 0;
+        const bool mayFinish = classicCoverFast(hand, *ok) >= 14 || classicPairCount(hand, *ok) >= 7;
+        for (int x : hand) {
+            if (!mayFinish) break;
+            const int kind = classicFinishKind(hand, x, *ok);
+            if (!kind) continue;
+            const int mult = (ok->isJoker(x) ? 2 : 1) * (kind == 2 ? 2 : 1);
+            if (mult > bestMult) {
+                bestMult = mult;
+                bestFinish = x;
+            }
+        }
+        if (bestFinish >= 0) {
+            BotAction f = act(BotAction::Kind::Finish);
+            f.tile = bestFinish;
+            return f;
+        }
+        // discard: best remaining hand (one draw of look-ahead for Kurt), never the okey
+        const std::vector<Draw> draws = classicDraws(hand);
+        std::vector<std::pair<int, int>> faces;
+        double best = -1e18;
+        int bestId = -1;
+        for (int x : hand) {
+            if (ok->isJoker(x)) continue;
+            const std::pair<int, int> fc(ok->faceColor(x), ok->faceNumber(x));
+            if (std::find(faces.begin(), faces.end(), fc) != faces.end()) continue;
+            faces.push_back(fc);
+            const std::vector<int> rest = without(hand, x);
+            double v = classicValue(rest, draws, hard());
+            v -= (hard() ? 1.0 : 0.6) * classicDanger(x);
+            if (easy()) v += rng.uniform(0.f, 1.2f);
+            v -= 0.002 * ok->faceNumber(x); // ties: let the lower tile go
+            if (v > best) {
+                best = v;
+                bestId = x;
+            }
+        }
+        BotAction d = act(BotAction::Kind::Discard);
+        d.tile = bestId >= 0 ? bestId : hand.front();
+        return d;
     }
 
     // ---- turn planning ----
@@ -1952,6 +2195,8 @@ bool validAction(const Game& g, int seat, const BotAction& a) {
     }
     case BotAction::Kind::Discard:
         return g.stage() == TurnStage::Play && pending < 0 && has(p.hand, a.tile);
+    case BotAction::Kind::Finish: return g.finishKind(seat, a.tile) > 0;
+    case BotAction::Kind::ShowIndicator: return g.indicatorTwin(seat) >= 0;
     }
     return false;
 }
@@ -1968,6 +2213,8 @@ ActionResult applyBotAction(Game& g, int seat, const BotAction& a) {
     case BotAction::Kind::AddToMeld: return g.addToMeld(seat, a.tile, a.meld, a.side);
     case BotAction::Kind::SwapJoker: return g.swapJoker(seat, a.tile, a.meld);
     case BotAction::Kind::Discard: return g.discard(seat, a.tile);
+    case BotAction::Kind::Finish: return g.finishHand(seat, a.tile);
+    case BotAction::Kind::ShowIndicator: return g.showIndicator(seat);
     }
     return ActionResult::fail("Geçersiz hamle");
 }
@@ -2057,6 +2304,14 @@ BotAction Bot::next(const Game& g, int seat) {
     if (g.handState() != HandState::Playing || g.current() != seat) return fallbackAction(g, seat);
     im.g = &g;
     im.ok = &g.okey();
+    if (g.classic()) {
+        // klasik okey: one decision at a time from the public state (no multi-step table plans)
+        im.seatNow = seat;
+        im.buildKnowledge(g, seat);
+        BotAction a = im.classicNext(g, seat);
+        if (!validAction(g, seat, a)) a = fallbackAction(g, seat);
+        return a;
+    }
 
     const PlayerInfo& p = g.player(seat);
     const uint64_t sig = signature(g.handIndex(), g.turnNumber(), g.stage(), g.pendingLeftTile(), p.hand, g.table());

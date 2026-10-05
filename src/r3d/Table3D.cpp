@@ -184,7 +184,13 @@ void TableState::reconcilePile() {
 bool TableState::arrangedSlots(bool pairs, Slots& out) const {
     const std::vector<int>& hand = game->player(human).hand;
     if (hand.empty()) return false;
-    const okey::RackArrangement a = pairs ? okey::arrangePairs(hand, ok()) : okey::arrangeSeries(hand, ok());
+    okey::RackArrangement a;
+    if (classic()) { // klasik okey melds (12-13-1 is a run here)
+        if (pairs) okey::classicPairCount(hand, ok(), &a.melds);
+        else okey::classicCover(hand, ok(), &a.melds);
+    } else {
+        a = pairs ? okey::arrangePairs(hand, ok()) : okey::arrangeSeries(hand, ok());
+    }
     std::array<int, NUM_TILES> need{};
     for (int id : hand)
         if (okey::isValidTile(id)) need[id] = 1;
@@ -674,7 +680,12 @@ void TableState::computeHints() {
     for (size_t i = 0; i < groups.size(); ++i) {
         const RackGroup& g = groups[i];
         Meld m;
-        if (g.len >= 3) {
+        if (g.len >= 3 && classic()) {
+            if (okey::classicMeldValid(g.ids, ok())) {
+                groupKind[i] = 1;
+                seriesGroups.push_back(g.ids);
+            }
+        } else if (g.len >= 3) {
             if (okey::makeMeld(g.ids, ok(), m, false)) {
                 groupKind[i] = 1;
                 groupValue[i] = m.value();
@@ -688,6 +699,26 @@ void TableState::computeHints() {
         }
     }
     const okey::PlayerInfo& me = game->player(human);
+    if (classic()) {
+        seriesCheck = pairCheck = okey::OpenCheck{};
+        finishTile = -1;
+        classicCoverNow = std::min(14, okey::classicCoverFast(me.hand, ok()));
+        classicPairsNow = std::min(7, okey::classicPairCount(me.hand, ok()));
+        if (playing() && myTurn() && game->stage() == okey::TurnStage::Play && me.hand.size() == 15 &&
+            (classicCoverNow >= 14 || classicPairsNow >= 7)) {
+            int bestMult = 0;
+            for (int id : me.hand) {
+                const int kind = game->finishKind(human, id);
+                if (!kind) continue;
+                const int mult = (ok().isJoker(id) ? 2 : 1) * (kind == 2 ? 2 : 1);
+                if (mult > bestMult) {
+                    bestMult = mult;
+                    finishTile = id;
+                }
+            }
+        }
+        return;
+    }
     if (!me.opened) {
         seriesCheck = game->checkOpen(human, seriesGroups);
         pairCheck = game->checkOpen(human, pairGroups);
@@ -877,7 +908,24 @@ void TableState::attemptDraw(bool fromLeft, int slot, bool after) {
 void TableState::attemptDiscard(int tile, bool confirmed) {
     if (!canAct() || tile < 0) return;
     const okey::PlayerInfo& me = game->player(human);
-    if (game->stage() == okey::TurnStage::Play && game->pendingLeftTile() < 0 && !confirmed) {
+    if (classic() && game->stage() == okey::TurnStage::Play) {
+        // putting down the tile that finishes the hand is finishing (you show the other 14)
+        if (game->finishKind(human, tile) > 0) {
+            const okey::ActionResult r = game->finishHand(human, tile);
+            if (!r.ok) error(r.error);
+            else pendingSync = true;
+            return;
+        }
+        if (ok().isJoker(tile) && !confirmed) {
+            confirm = Confirm{};
+            confirm.active = true;
+            confirm.tile = tile;
+            confirm.text = "Bu taş okey! Okeyi atmak istediğine emin misin?";
+            sound(ui::Sfx::Error);
+            return;
+        }
+    }
+    if (!classic() && game->stage() == okey::TurnStage::Play && game->pendingLeftTile() < 0 && !confirmed) {
         const bool finishing = me.hand.size() == 1;
         const bool joker = ok().isJoker(tile);
         const okey::RulesConfig& rc = game->rules();
@@ -957,6 +1005,29 @@ void TableState::doOpen() {
     pendingSync = true;
 }
 
+void TableState::doFinish() {
+    if (!canAct()) return;
+    if (game->stage() != okey::TurnStage::Play) {
+        error("Önce taş çekmelisin");
+        return;
+    }
+    computeHints();
+    if (finishTile < 0) {
+        error("Elin henüz bitmedi: 14 taşın per ya da yedi çift olmalı");
+        return;
+    }
+    const okey::ActionResult r = game->finishHand(human, finishTile);
+    if (!r.ok) error(r.error);
+    else pendingSync = true;
+}
+
+void TableState::doShowIndicator() {
+    if (!canAct()) return;
+    const okey::ActionResult r = game->showIndicator(human);
+    if (!r.ok) error(r.error);
+    else pendingSync = true;
+}
+
 void TableState::doGiveBack() {
     if (!canAct() || game->pendingLeftTile() < 0) return;
     const okey::ActionResult r = game->returnLeftTile(human);
@@ -972,8 +1043,14 @@ void TableState::notYourTurn() {
 
 void TableState::runButton(Btn b) {
     switch (b) {
-    case Btn::Open: doOpen(); break;
-    case Btn::GiveBack: doGiveBack(); break;
+    case Btn::Open:
+        if (classic()) doFinish();
+        else doOpen();
+        break;
+    case Btn::GiveBack:
+        if (classic()) doShowIndicator();
+        else doGiveBack();
+        break;
     case Btn::Series:
         if (rackInteractive()) {
             arrange(false);
@@ -1369,6 +1446,7 @@ void TableState::onEvent(const okey::GameEvent& e) {
     case EvType::Penalty: pushToast("", e.text, bad, 3.4f); break;
     case EvType::HandEnd: pushToast("hand", e.text, gold, 4.5f); break;
     case EvType::MatchEnd: pushToast("match", e.text, gold, 5.0f); break;
+    case EvType::ShowIndicator: pushToast("", e.text, gold, 3.6f); break;
     }
     if (e.type != EvType::TurnStart) layingMelds = e.type == EvType::Open || e.type == EvType::LayMelds;
     // the AI's istaka stays tidy: re-arranged whenever tiles come in or leave (no holes, groups as it plans them)
@@ -1483,6 +1561,7 @@ void Table3D::setHeadAnchors(const std::array<Vector3, 4>& heads) {
 }
 
 void Table3D::setAiMode(bool on) { impl_->setAiMode(on); }
+void Table3D::setFurnitureOnly(bool on) { impl_->furnitureOnly = on; }
 
 bool Table3D::consumeAiToggleRequest() {
     const bool r = impl_->aiToggleRequested;

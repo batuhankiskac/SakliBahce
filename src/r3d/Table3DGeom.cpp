@@ -677,6 +677,7 @@ void TableState::submitAll(Renderer& r) {
     };
     sub(&tableMesh, &matWood, MatrixIdentity(), CastShadow);
     sub(&feltMesh, &matFelt, MatrixIdentity(), 0);
+    if (furnitureOnly) return;
     sub(&standMesh, &matRack, MatrixIdentity(), CastShadow);
     for (int s = 0; s < 4; ++s) {
         float ang = 0.f;

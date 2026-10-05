@@ -129,6 +129,40 @@ void Characters::say(int seat, const std::string& text, float seconds) {
     m.pushLine(seat, text, seconds, 4.5f);
 }
 
+void Characters::reach(int seat, Vector3 target, int mode) {
+    Impl& m = *impl_;
+    if (!m.ready || seat < 1 || seat > 3) return;
+    chr::Opponent& o = m.opp[seat];
+    const Vector3 l = xfPoint(o.rootInv, target);
+    int pref = l.x >= 0.f ? 0 : 1;
+    if (o.kind == 0 && pref == 1 && l.x > -0.3f) pref = 0; // Rıza's tespih hand, Mahmut's cigarette hand
+    if (o.kind == 1 && pref == 0 && l.x < 0.3f) pref = 1;
+    if (o.arm[pref].track.on && o.arm[pref].track.kind == chr::TK_Sip) pref = 1 - pref;
+    m.reachTo(o, pref, target, mode == 1 ? 1 : 0);
+    o.chinRest = false;
+}
+
+void Characters::react(int seat, int mood, Vector3 lookAt) {
+    Impl& m = *impl_;
+    if (!m.ready) return;
+    for (int s = 1; s <= 3; ++s) {
+        chr::Opponent& o = m.opp[s];
+        if (s != seat && m.rng.chance(0.7f)) {
+            o.gazeGoal = lookAt;
+            o.gazeHold = m.rng.f(0.8f, 1.6f);
+        }
+    }
+    if (seat < 1 || seat > 3 || mood <= 0) return;
+    const chr::Mood md = mood == 1 ? chr::Mood::Happy : mood == 2 ? chr::Mood::Grumpy : chr::Mood::Surprised;
+    m.setMood(m.opp[seat], md, 2.2f);
+}
+
+bool Characters::chat(int seat, const std::string& text, bool important) {
+    Impl& m = *impl_;
+    if (!m.ready || m.titleMode || seat < 1 || seat > 4 || text.empty()) return false;
+    return m.banter.external(seat, text, important);
+}
+
 void Characters::onCatMeow(Vector3 where) {
     Impl& m = *impl_;
     // the regulars glance over unless they are busy with their own turn; patrons near it look too

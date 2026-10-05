@@ -28,6 +28,11 @@ enum class Sfx {
     Chair,        // chair scrape / creak
     CarPass,      // a car hissing past on the street outside (wet tyres on rainy nights), from the left
     Meow,         // the kahvehane cat, from across the room ("mrrp", "miyav")
+    CardPlace,    // a playing card put down on the felt (papery "fft-tap")
+    CardSlap,     // a card slapped down hard (pişti, a trick taken with a flourish)
+    CardShuffle,  // shuffling and dealing a deck (riffle, bridge)
+    DiceThrow,    // our own tavla dice thrown on the board (close, dry)
+    Checker,      // a tavla checker (pul) set down on the board (wooden "tok")
     Count
 };
 

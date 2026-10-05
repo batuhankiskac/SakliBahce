@@ -1,5 +1,6 @@
 // 101 Okey rules engine. Rules: DESIGN.md §2, semantics: DESIGN.md §3 and Game.h.
 #include "core/Game.h"
+#include "core/OkeyHand.h"
 
 #include <algorithm>
 #include <numeric>
@@ -10,7 +11,8 @@ namespace {
 
 // Safety valve for headless loops that never drain the queue (the UI drains every frame).
 constexpr size_t MAX_QUEUED_EVENTS = 20000;
-constexpr int INITIAL_HAND = 21; // everyone gets 21, the starter one more
+constexpr int INITIAL_HAND = 21;         // 101: everyone gets 21, the starter one more
+constexpr int INITIAL_HAND_CLASSIC = 14; // klasik okey: 14, the starter 15
 
 // Minimal UTF-8 decoder (player names are short; stray bytes are passed through as-is).
 std::vector<unsigned> codePoints(const std::string& s) {
@@ -130,7 +132,7 @@ void Game::startMatch(uint64_t seed) {
     rng_.reseed(seed);
     events_.clear();
     for (PlayerInfo& p : players_) {
-        p.totalScore = 0;
+        p.totalScore = classic() ? cfg_.okeyStartPoints : 0;
         p.handScores.clear();
     }
     lastResult_ = HandResult();
@@ -142,7 +144,8 @@ void Game::startMatch(uint64_t seed) {
     GameEvent e;
     e.type = EvType::MatchStart;
     e.amount = cfg_.numHands;
-    e.text = "Yeni maç başladı (" + std::to_string(cfg_.numHands) + " el)";
+    if (classic()) e.text = "Yeni okey oyunu başladı (herkes " + std::to_string(cfg_.okeyStartPoints) + " puanla)";
+    else e.text = std::string(teams() ? "Yeni eşli maç başladı (" : "Yeni maç başladı (") + std::to_string(cfg_.numHands) + " el)";
     push(std::move(e));
     dealHand();
 }
@@ -169,6 +172,7 @@ void Game::dealHand() {
     pendingLeftTile_ = -1;
     tookLeftThisTurn_ = false;
     returnedLeftThisTurn_ = false;
+    indicatorShownBy_ = -1;
     lastResult_ = HandResult();
 
     std::vector<int> deck(NUM_TILES);
@@ -186,7 +190,8 @@ void Game::dealHand() {
     for (int f : skipped) deck.insert(deck.begin() + rng_.range((int)deck.size() + 1), f);
     okey_ = OkeyInfo::fromIndicator(indicator);
 
-    for (int k = 0; k < INITIAL_HAND; ++k) {
+    const int dealt = classic() ? INITIAL_HAND_CLASSIC : INITIAL_HAND;
+    for (int k = 0; k < dealt; ++k) {
         for (int i = 0; i < NUM_PLAYERS; ++i) {
             players_[(starter_ + i) % NUM_PLAYERS].hand.push_back(deck.back());
             deck.pop_back();
@@ -206,7 +211,7 @@ void Game::dealHand() {
     push(std::move(e));
 
     beginTurn(starter_);
-    stage_ = TurnStage::Play; // the starter already holds 22 tiles: no draw
+    stage_ = TurnStage::Play; // the starter already holds one tile more (22 / 15): no draw
 }
 
 void Game::beginTurn(int seat) {
@@ -297,9 +302,34 @@ OpenCheck Game::checkLay(int seat, const std::vector<std::vector<int>>& groups) 
 
 int Game::leaderSeat() const {
     int best = 0;
-    for (int s = 1; s < NUM_PLAYERS; ++s)
-        if (players_[s].totalScore < players_[best].totalScore) best = s;
+    for (int s = 1; s < NUM_PLAYERS; ++s) {
+        if (classic()) {
+            if (players_[s].totalScore > players_[best].totalScore) best = s;
+        } else if (teams()) {
+            if (teamTotal(s) < teamTotal(best)) best = s;
+        } else if (players_[s].totalScore < players_[best].totalScore) {
+            best = s;
+        }
+    }
     return best;
+}
+
+int Game::indicatorTwin(int seat) const {
+    if (!classic() || handState_ != HandState::Playing || seat != current_ || indicatorShownBy_ >= 0) return -1;
+    for (const DiscardRecord& d : discardHistory_)
+        if (d.player == seat) return -1; // only before your first discard of the hand
+    const int ind = okey_.indicatorId;
+    for (int id : players_[seat].hand)
+        if (id != ind && id < FAKE_JOKER_A && printedColor(id) == printedColor(ind) && printedNumber(id) == printedNumber(ind))
+            return id;
+    return -1;
+}
+
+int Game::finishKind(int seat, int tile) const {
+    if (!classic() || handState_ != HandState::Playing || seat != current_ || stage_ != TurnStage::Play) return 0;
+    const std::vector<int>& h = players_[seat].hand;
+    if (h.size() != (size_t)INITIAL_HAND_CLASSIC + 1) return 0;
+    return classicFinishKind(h, tile, okey_);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -339,7 +369,7 @@ ActionResult Game::takeFromLeft(int seat) {
     const int tile = left.discards.back();
     left.discards.pop_back();
     players_[seat].hand.push_back(tile);
-    pendingLeftTile_ = tile;
+    pendingLeftTile_ = classic() ? -1 : tile; // klasik okey: the tile is simply yours
     tookLeftThisTurn_ = true;
     stage_ = TurnStage::Play;
 
@@ -462,6 +492,7 @@ ActionResult Game::layMelds(int seat, const std::vector<std::vector<int>>& group
 ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
+    if (classic()) return yuzbirOnly();
     const PlayerInfo& p = players_[seat];
     if (!p.opened) return ActionResult::fail("Önce elini açmalısın");
     if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
@@ -494,6 +525,7 @@ ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
 ActionResult Game::swapJoker(int seat, int tile, int meldIndex) {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
+    if (classic()) return yuzbirOnly();
     const PlayerInfo& p = players_[seat];
     if (!p.opened) return ActionResult::fail("Önce elini açmalısın");
     if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
@@ -534,8 +566,8 @@ ActionResult Game::discard(int seat, int tile) {
     if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
 
     const bool joker = okey_.isJoker(tile);
-    const bool finishing = players_[seat].hand.size() == 1;
-    const bool islek = !joker && !finishing && cfg_.penaltyPlayableDiscard && isPlayableOnTable(tile);
+    const bool finishing = !classic() && players_[seat].hand.size() == 1;
+    const bool islek = !joker && !finishing && !classic() && cfg_.penaltyPlayableDiscard && isPlayableOnTable(tile);
 
     removeFromHand(seat, tile);
     players_[seat].discards.push_back(tile);
@@ -549,7 +581,7 @@ ActionResult Game::discard(int seat, int tile) {
     e.text = says(seat, t + " attı", t + " attın");
     push(std::move(e));
 
-    if (!finishing) {
+    if (!finishing && !classic()) {
         const std::string pen = ": " + std::to_string(cfg_.penalty) + " ceza";
         if (joker && cfg_.penaltyJokerDiscard)
             addPenalty(seat, says(seat, "okey attı", "okey attın") + pen);
@@ -558,9 +590,64 @@ ActionResult Game::discard(int seat, int tile) {
     }
 
     if (finishing) endHand(HandEndReason::PlayerFinished, seat, joker);
+    else if (pile_.empty() && classic()) endClassicHand(HandEndReason::PileExhausted, -1, false, false);
     else if (pile_.empty()) endHand(HandEndReason::PileExhausted, -1, false);
     else beginTurn(rightOf(seat));
     return ActionResult::success();
+}
+
+ActionResult Game::finishHand(int seat, int tile) {
+    if (!classic()) return ActionResult::fail("101'de el, son taşı atınca biter");
+    ActionResult r = checkTurn(seat, TurnStage::Play);
+    if (!r.ok) return r;
+    if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
+    const int kind = finishKind(seat, tile);
+    if (kind == 0) return ActionResult::fail("Kalan 14 taş per ya da yedi çift olmuyor, bitemezsin");
+
+    const bool joker = okey_.isJoker(tile);
+    removeFromHand(seat, tile);
+    players_[seat].discards.push_back(tile);
+    discardHistory_.push_back({seat, tile});
+
+    GameEvent e;
+    e.type = EvType::Discard;
+    e.player = seat;
+    e.tile = tile;
+    e.count = 1; // the finishing tile
+    const std::string t = tileText(tile, okey_);
+    e.text = joker ? says(seat, "okeyi atarak bitti", "okeyi atarak bittin") : says(seat, t + " atıp bitti", t + " atıp bittin");
+    push(std::move(e));
+    endClassicHand(HandEndReason::PlayerFinished, seat, joker, kind == 2);
+    return ActionResult::success();
+}
+
+ActionResult Game::showIndicator(int seat) {
+    if (!classic()) return ActionResult::fail("Gösterge yalnızca okeyde gösterilir");
+    if (handState_ != HandState::Playing) return ActionResult::fail("Şu an oynanan bir el yok");
+    if (seat != current_) return ActionResult::fail("Sıra sende değil");
+    const int twin = indicatorTwin(seat);
+    if (twin < 0) {
+        if (indicatorShownBy_ >= 0) return ActionResult::fail("Gösterge bu el zaten gösterildi");
+        for (const DiscardRecord& d : discardHistory_)
+            if (d.player == seat) return ActionResult::fail("Göstergeyi ilk taşını atmadan göstermeliydin");
+        return ActionResult::fail("Elinde göstergenin eşi yok");
+    }
+    indicatorShownBy_ = seat;
+    for (int s = 0; s < NUM_PLAYERS; ++s)
+        if (s != seat) players_[s].handPenalty += cfg_.okeyIndicatorPoints;
+    GameEvent e;
+    e.type = EvType::ShowIndicator;
+    e.player = seat;
+    e.tile = twin;
+    e.amount = cfg_.okeyIndicatorPoints;
+    const std::string pts = ": herkesten " + std::to_string(cfg_.okeyIndicatorPoints) + " puan düştü";
+    e.text = says(seat, "göstergeyi gösterdi", "göstergeyi gösterdin") + pts;
+    push(std::move(e));
+    return ActionResult::success();
+}
+
+ActionResult Game::yuzbirOnly() const {
+    return ActionResult::fail("Okeyde masaya per açılmaz; elin bitince 14 taşını birden gösterirsin");
 }
 
 std::vector<GameEvent> Game::drainEvents() {
@@ -598,6 +685,7 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
         const int rem = handPoints(s);
         int score;
         if (s == winner) score = cfg_.winnerScore * mult;
+        else if (teams() && winner >= 0 && s == partnerOf(winner)) score = 0; // eşli: the partner's hand is wiped
         else if (!p.opened) score = cfg_.unopenedScore * mult;
         else if (p.openedWithPairs) score = rem * 2 * mult;
         else score = rem * mult;
@@ -633,38 +721,99 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
     }
     push(std::move(e));
 
-    if (matchOver) {
-        const int lead = leaderSeat();
-        GameEvent m;
-        m.type = EvType::MatchEnd;
-        m.player = lead;
-        m.amount = players_[lead].totalScore;
-        // Several seats on the lowest total share first place (the score sheet and match-over screen say so
-        // too); `player` stays leaderSeat() so listeners keep a single seat to look at.
-        std::vector<int> co;
-        bool humanCo = false;
-        for (int s = 0; s < NUM_PLAYERS; ++s) {
-            if (players_[s].totalScore != m.amount) continue;
-            if (isSen(s)) humanCo = true;
-            else co.push_back(s);
-        }
-        auto join = [&](const std::vector<int>& seats) {
-            std::string out;
-            for (size_t i = 0; i < seats.size(); ++i)
-                out += (i == 0 ? "" : i + 1 == seats.size() ? " ve " : ", ") + players_[seats[i]].name;
-            return out;
-        };
-        if (co.size() + (humanCo ? 1 : 0) <= 1)
-            m.text = isSen(lead) ? std::string("Maç bitti! Sen kazandın!")
-                                 : "Maç bitti! Kazanan: " + players_[lead].name;
-        else if (co.size() + (humanCo ? 1 : 0) == (size_t)NUM_PLAYERS)
-            m.text = "Maç berabere bitti! Birincilik herkesin";
-        else if (humanCo)
-            m.text = "Maç berabere bitti! Birinciliği " + join(co) + " ile paylaştın";
-        else
-            m.text = "Maç berabere bitti! Birinciliği " + join(co) + " paylaştı";
-        push(std::move(m));
+    if (matchOver) pushMatchEnd();
+}
+
+void Game::endClassicHand(HandEndReason reason, int winner, bool finishedWithJoker, bool pairs) {
+    HandResult r;
+    r.reason = reason;
+    r.winner = winner;
+    r.indicatorShownBy = indicatorShownBy_;
+    int mult = 1;
+    if (reason == HandEndReason::PlayerFinished && winner >= 0) {
+        r.finishedWithJoker = finishedWithJoker;
+        r.finishedWithPairs = pairs;
+        if (finishedWithJoker) mult *= 2;
+        if (pairs) mult *= 2;
     }
+    r.multiplier = mult;
+    bool someoneOut = false;
+    for (int s = 0; s < NUM_PLAYERS; ++s) {
+        PlayerInfo& p = players_[s];
+        int lost = p.handPenalty; // the gösterge
+        if (winner >= 0 && s != winner) lost += cfg_.okeyFinishPoints * mult;
+        r.remaining[s] = (int)p.hand.size();
+        r.penalties[s] = p.handPenalty;
+        r.score[s] = -lost;
+        p.handScores.push_back(-lost);
+        p.totalScore -= lost;
+        someoneOut = someoneOut || p.totalScore <= 0;
+    }
+    lastResult_ = r;
+    pendingLeftTile_ = -1;
+    handState_ = someoneOut ? HandState::MatchOver : HandState::HandOver;
+
+    GameEvent e;
+    e.type = EvType::HandEnd;
+    e.player = winner;
+    e.amount = mult;
+    if (winner >= 0) {
+        e.text = says(winner, "eli bitirdi!", "eli bitirdin!");
+        if (mult > 1) {
+            std::string how;
+            if (r.finishedWithJoker) how += "okey atarak";
+            if (r.finishedWithPairs) how += std::string(how.empty() ? "" : ", ") + "çiftten";
+            e.text += " (" + how + ", ×" + std::to_string(mult) + ")";
+        }
+    } else {
+        e.text = "Ortada taş kalmadı, el berabere bitti";
+    }
+    push(std::move(e));
+    if (someoneOut) pushMatchEnd();
+}
+
+void Game::pushMatchEnd() {
+    const int lead = leaderSeat();
+    GameEvent m;
+    m.type = EvType::MatchEnd;
+    m.player = lead;
+    m.amount = players_[lead].totalScore;
+    if (teams()) {
+        const int a = std::min(lead, partnerOf(lead)), b = std::max(lead, partnerOf(lead));
+        m.amount = teamTotal(lead);
+        if (teamTotal(0) == teamTotal(1)) m.text = "Maç berabere bitti! İki takım da " + std::to_string(m.amount);
+        else if (isSen(a) || isSen(b))
+            m.text = "Maç bitti! Sen ve " + players_[isSen(a) ? b : a].name + " kazandınız!";
+        else
+            m.text = "Maç bitti! Kazananlar: " + players_[a].name + " ve " + players_[b].name;
+        push(std::move(m));
+        return;
+    }
+    // Several seats on the best total share first place (the score sheet and match-over screen say so too);
+    // `player` stays leaderSeat() so listeners keep a single seat to look at.
+    std::vector<int> co;
+    bool humanCo = false;
+    for (int s = 0; s < NUM_PLAYERS; ++s) {
+        if (players_[s].totalScore != m.amount) continue;
+        if (isSen(s)) humanCo = true;
+        else co.push_back(s);
+    }
+    auto join = [&](const std::vector<int>& seats) {
+        std::string out;
+        for (size_t i = 0; i < seats.size(); ++i)
+            out += (i == 0 ? "" : i + 1 == seats.size() ? " ve " : ", ") + players_[seats[i]].name;
+        return out;
+    };
+    const char* over = classic() ? "Oyun bitti! " : "Maç bitti! ";
+    if (co.size() + (humanCo ? 1 : 0) <= 1)
+        m.text = isSen(lead) ? std::string(over) + "Sen kazandın!" : std::string(over) + "Kazanan: " + players_[lead].name;
+    else if (co.size() + (humanCo ? 1 : 0) == (size_t)NUM_PLAYERS)
+        m.text = std::string(classic() ? "Oyun" : "Maç") + " berabere bitti! Birincilik herkesin";
+    else if (humanCo)
+        m.text = std::string(classic() ? "Oyun" : "Maç") + " berabere bitti! Birinciliği " + join(co) + " ile paylaştın";
+    else
+        m.text = std::string(classic() ? "Oyun" : "Maç") + " berabere bitti! Birinciliği " + join(co) + " paylaştı";
+    push(std::move(m));
 }
 
 void Game::push(GameEvent e) {
@@ -757,6 +906,7 @@ OpenCheck Game::evaluate(int seat, const std::vector<std::vector<int>>& groups, 
 
     ActionResult t = checkTurn(seat, TurnStage::Play);
     if (!t.ok) return failWith(t.error);
+    if (classic()) return failWith(yuzbirOnly().error);
     const PlayerInfo& p = players_[seat];
     if (!laying) {
         if (p.opened) return failWith("Elini zaten açtın");

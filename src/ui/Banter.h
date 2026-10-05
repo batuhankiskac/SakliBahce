@@ -55,6 +55,9 @@ public:
     // A regular's one-off remark when the player hands their seat to the Yapay Zeka (`on`) or takes it back
     // (seat 1..3 + text; `pick` varies speaker and line). Pure: the caller shows it (Characters::say).
     static BanterLine aiModeLine(bool on, uint32_t pick);
+    // A ready-made line from another game (tavla, cards) through the same rate limits: `important` lines skip the
+    // cooldowns (big moments), casual ones may be dropped. True when queued.
+    bool external(int seat, const std::string& text, bool important);
 
     // exposed for tests / tools
     static int lineCount();            // total number of distinct lines (tables + exchanges)

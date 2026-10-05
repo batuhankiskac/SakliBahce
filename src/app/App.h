@@ -4,6 +4,7 @@
 // and the menu screens. Integration owner. Frame structure: DESIGN3D.md §2.
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace app {
 
@@ -21,6 +22,8 @@ struct Options {
     int hands = 0;              // --hands N (1..11), 0 = from the settings
     int level = -1;             // --level 0..2 (Acemi / Usta / Kurt), -1 = from the settings
     bool katlamali = false;     // --katlamali: this run's matches are katlamalı (else from the settings)
+    int game = -1;              // --game 101|esli|okey|...: this run's game (ui::GameKind), -1 = from the settings
+    std::vector<std::string> sets; // --set key=value: settings-file keys for this run
     bool start = false;         // --start: skip the title screen
     bool noAudio = false;       // --no-audio
     long maxFrames = 0;         // --max-frames N: quit after N frames (0 = never)

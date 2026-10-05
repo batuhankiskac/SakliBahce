@@ -1,17 +1,21 @@
 // Headless bot-vs-bot simulation for SaklıBahçe.
 //
 //   sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] [--no-wait] [--katlamali]
+//       [--okey] [--esli]
 //       [--match H]
-//       [--slow MS]
+//       [--slow MS] [--feed-log FILE]
 //
 // levels: 0 = Acemi (Easy), 1 = Usta (Normal), 2 = Kurt (Hard), one per seat. --rotate shifts the level
 // assignment by one seat every match so seat position does not bias the level comparison. --duplicate
 // (implies --rotate) replays every deal four times, once per rotation, so each level plays every seat with
 // the same cards; the level comparison is then also reported as a paired difference over deals, which
-// removes most of the luck of the deal from the standard error.
+// removes most of the luck of the deal from the standard error. --okey plays klasik okey (hand scores are the
+// points lost, <= 0: higher is better), --esli eşli 101.
 // Every bot action goes through applyBotAction; a rejected action is printed (state + error), counted,
 // and replaced by fallbackAction. --slow MS prints every bot decision that took longer than MS milliseconds
-// (with the position), to investigate the decision-time budget.
+// (with the position), to investigate the decision-time budget. --feed-log FILE writes one CSV row per
+// discard to an unopened right neighbour (public features + whether they opened with it), to calibrate the
+// bots' yandan açma cezası estimate.
 //
 // Build: clang++ -std=c++17 -O2 -Wall -Wextra -Isrc src/core/Meld.cpp src/core/Game.cpp src/core/Solver.cpp
 //        src/core/Bot.cpp tests/sim.cpp -o build/ai/sim
@@ -30,6 +34,10 @@
 #include <vector>
 
 using namespace okey;
+
+namespace okey::detail {
+extern unsigned teamAwareMask; // core/Bot.cpp
+}
 
 namespace {
 
@@ -127,6 +135,52 @@ double percentile(std::vector<float> v, double q) {
     return v[k];
 }
 
+// One discard to an unopened right neighbour (see --feed-log).
+struct FeedRow {
+    int pile, num, color, rturns, opened, need, rdiscSame, rdiscNear, rdiscNum, live, sopened, rlevel, rtookNear;
+    int taken = 0, fed = 0;
+};
+
+FeedRow feedRow(const Game& g, int s, int tile, int rturns, int rlevel, const std::vector<int>& rTookTiles) {
+    const OkeyInfo& ok = g.okey();
+    const int r = Game::rightOf(s);
+    const int c = ok.faceColor(tile), n = ok.faceNumber(tile);
+    FeedRow f{};
+    f.pile = g.pileCount();
+    f.num = n;
+    f.color = c;
+    f.rturns = rturns;
+    for (int q = 0; q < 4; ++q) f.opened += g.player(q).opened ? 1 : 0;
+    f.need = g.seriesOpenNeed();
+    for (int id : g.player(r).discards) {
+        if (ok.isJoker(id)) continue;
+        const int c2 = ok.faceColor(id), n2 = ok.faceNumber(id);
+        if (c2 == c && n2 == n) ++f.rdiscSame;
+        else if (c2 == c && std::abs(n2 - n) <= 2) ++f.rdiscNear;
+        else if (n2 == n) ++f.rdiscNum;
+    }
+    for (int id : rTookTiles) {
+        if (ok.isJoker(id)) continue;
+        const int c2 = ok.faceColor(id), n2 = ok.faceNumber(id);
+        if ((c2 == c && std::abs(n2 - n) <= 2) || (n2 == n && c2 != c)) ++f.rtookNear;
+    }
+    // copies of the face outside the discarder's hand and the public tiles
+    int seen = 0;
+    auto see = [&](int id) {
+        if (id != tile && !ok.isJoker(id) && ok.faceColor(id) == c && ok.faceNumber(id) == n) ++seen;
+    };
+    see(ok.indicatorId);
+    for (int q = 0; q < 4; ++q)
+        for (int id : g.player(q).discards) see(id);
+    for (const Meld& m : g.table())
+        for (const PlacedTile& t : m.tiles) see(t.id);
+    for (int id : g.player(s).hand) see(id);
+    f.live = std::max(0, 1 - seen);
+    f.sopened = g.player(s).opened ? 1 : 0;
+    f.rlevel = rlevel;
+    return f;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -135,6 +189,9 @@ int main(int argc, char** argv) {
     int levels[4] = {1, 1, 1, 1};
     bool verbose = false, rotate = false, duplicate = false;
     double slowMs = -1.0;
+    const char* feedLog = nullptr;
+    int teamAb = -1; // --team-ab L: eşli, every seat level L; one team plays for the team, the other does not
+
     RulesConfig rules;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--hands") && i + 1 < argc) hands = std::atoi(argv[++i]);
@@ -155,19 +212,35 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--duplicate")) duplicate = rotate = true;
         else if (!std::strcmp(argv[i], "--no-wait")) rules.waitTurnAfterOpening = false;
         else if (!std::strcmp(argv[i], "--katlamali")) rules.katlamali = true;
+        else if (!std::strcmp(argv[i], "--okey")) rules.variant = Variant::Okey;
+        else if (!std::strcmp(argv[i], "--esli")) rules.teams = true;
+        else if (!std::strcmp(argv[i], "--team-ab") && i + 1 < argc) {
+            teamAb = std::max(0, std::min(2, std::atoi(argv[++i])));
+            rules.teams = true;
+            duplicate = rotate = true;
+        }
         else if (!std::strcmp(argv[i], "--match") && i + 1 < argc) rules.numHands = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--slow") && i + 1 < argc) slowMs = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--feed-log") && i + 1 < argc) feedLog = argv[++i];
+
         else {
             std::fprintf(stderr, "usage: sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] "
-                                 "[--no-wait] [--katlamali] [--match H] [--slow MS]\n");
+                                 "[--no-wait] [--katlamali] [--okey] [--esli] [--match H] [--slow MS] [--feed-log FILE]\n");
             return 2;
         }
     }
 
     Game g(rules);
+    FILE* feed = feedLog ? std::fopen(feedLog, "w") : nullptr;
+    if (feed)
+        std::fprintf(feed, "pile,num,color,rturns,opened,need,rdisc_same,rdisc_near,rdisc_num,live,sopened,rlevel,"
+                           "rtook_near,taken,fed\n");
+    std::vector<FeedRow> feedRows;
     std::array<Bot, 4> bots = {Bot(BotLevel::Normal, seed * 4 + 1), Bot(BotLevel::Normal, seed * 4 + 2),
                                Bot(BotLevel::Normal, seed * 4 + 3), Bot(BotLevel::Normal, seed * 4 + 4)};
     int seatLevel[4];
+    if (teamAb >= 0) std::printf("team-ab: every seat plays %s; the stats say Acemi for the bots that ignore the "
+                                 "partner and Usta for the ones that play for the team\n", levelName(teamAb));
 
     LevelStats lv[3];
     long long seatScore[4] = {};
@@ -191,9 +264,11 @@ int main(int argc, char** argv) {
     while (handsPlayed < hands || (duplicate && matchIndex % 4 != 0)) {
         for (int s = 0; s < 4; ++s) {
             seatLevel[s] = rotate ? levels[(s + matchIndex) % 4] : levels[s];
-            bots[s].setLevel((BotLevel)seatLevel[s]);
+            if (teamAb >= 0) seatLevel[s] = (s + matchIndex) % 2 == 0 ? 1 : 0;
+            bots[s].setLevel((BotLevel)(teamAb >= 0 ? teamAb : seatLevel[s]));
             g.setPlayer(s, std::string("Bot") + std::to_string(s), false);
         }
+        if (teamAb >= 0) detail::teamAwareMask = matchIndex % 2 == 0 ? 0x5u : 0xAu;
         const uint64_t deal = duplicate ? (uint64_t)(matchIndex / 4) : (uint64_t)matchIndex;
         g.startMatch(seed * 1000003ull + deal);
         for (Bot& b : bots) b.resetForHand();
@@ -203,6 +278,8 @@ int main(int argc, char** argv) {
             std::vector<GameEvent> evs = g.drainEvents();
             const int handStartTurn = g.turnNumber();
             int ownTurns[4] = {0, 0, 0, 0};
+            int lastFeed[4] = {-1, -1, -1, -1};
+            std::vector<int> rTook[4]; // tiles each seat took from its left this hand
             int openTurn[4] = {-1, -1, -1, -1};
             bool lastWasDiscardJoker = false;
             int lastEvType = -1;
@@ -264,15 +341,31 @@ int main(int argc, char** argv) {
                     case EvType::Open:
                         openTurn[e.player] = ownTurns[e.player];
                         break;
-                    case EvType::TakeLeft: ++takeLeft; break;
+                    case EvType::TakeLeft:
+                        ++takeLeft;
+                        rTook[e.player].push_back(e.tile);
+                        if (lastFeed[Game::leftOf(e.player)] >= 0) feedRows[lastFeed[Game::leftOf(e.player)]].taken = 1;
+                        break;
                     case EvType::ReturnLeft: ++returnLeft; break;
                     case EvType::SwapJoker: ++swaps; break;
                     case EvType::AddToMeld: ++adds; break;
                     case EvType::LayMelds: ++lays; break;
-                    case EvType::Discard: lastWasDiscardJoker = g.okey().isJoker(e.tile); break;
+                    case EvType::Discard:
+                        lastWasDiscardJoker = g.okey().isJoker(e.tile);
+                        lastFeed[e.player] = -1;
+                        if (feed && !g.player(Game::rightOf(e.player)).opened && !g.okey().isJoker(e.tile) &&
+                            g.handState() == HandState::Playing) {
+                            const int r = Game::rightOf(e.player);
+                            feedRows.push_back(feedRow(g, e.player, e.tile, ownTurns[r], seatLevel[r], rTook[r]));
+                            lastFeed[e.player] = (int)feedRows.size() - 1;
+                        }
+                        break;
                     case EvType::Penalty:
                         if (lastEvType == (int)EvType::ReturnLeft) ++penReturn;
-                        else if (lastEvType == (int)EvType::Open) ++penLeftOpen, penLeftOpenPts += e.amount;
+                        else if (lastEvType == (int)EvType::Open) {
+                            ++penLeftOpen, penLeftOpenPts += e.amount;
+                            if (lastFeed[e.player] >= 0) feedRows[lastFeed[e.player]].fed = e.amount;
+                        }
                         else if (lastWasDiscardJoker) ++penOkey;
                         else ++penIslek;
                         lv[seatLevel[e.player]].penalties++;
@@ -309,6 +402,7 @@ int main(int argc, char** argv) {
                 seatScore[s] += hr.score[s];
                 blockSum[seatLevel[s]] += hr.score[s];
                 blockCnt[seatLevel[s]] += 1;
+
                 const PlayerInfo& p = g.player(s);
                 if (!p.opened) {
                     L.unopened++;
@@ -374,9 +468,17 @@ int main(int argc, char** argv) {
                 }
             }
             for (int l = 0; l < 3; ++l) blockSum[l] = blockCnt[l] = 0;
+
         }
     }
 
+    if (feed) {
+        for (const FeedRow& f : feedRows)
+            std::fprintf(feed, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", f.pile, f.num, f.color, f.rturns,
+                         f.opened, f.need, f.rdiscSame, f.rdiscNear, f.rdiscNum, f.live, f.sopened, f.rlevel,
+                         f.rtookNear, f.taken, f.fed);
+        std::fclose(feed);
+    }
     const double elapsed = (nowMs() - t0) / 1000.0;
     const char* mode = duplicate ? " duplicate" : (rotate ? " rotated" : "");
     std::printf("=== sim: %lld hands, seed %llu, levels %d,%d,%d,%d%s%s (%.1f s) ===\n", handsPlayed,

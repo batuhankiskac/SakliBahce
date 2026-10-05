@@ -123,6 +123,9 @@ The match lasts `numHands` hands; lowest total wins.
 Three levels: **Acemi** (Easy — plays simply, sometimes suboptimal, never illegal), **Usta** (Normal —
 solid), **Kurt** (Hard — remembers discards, avoids feeding the next player, plans the opening, times
 pair vs series openings, picks up left tiles to open, grabs jokers). Bots must be *fair* (see `Bot.h`).
+With the yandan açma cezası on, Usta and Kurt weigh the expected penalty of every discard to an unopened right
+neighbour (`Bot.cpp` `feedCost`: a logistic model of "they open with it", fitted on `sim --feed-log` data —
+about 7% for a 1, 21% for a 12/13, almost never a face they threw away themselves); Acemi only a little.
 Every bot turn must end with a legal discard; `sim` runs thousands of hands without a single rejected
 action on Normal/Hard (rejections are counted and reported).
 
@@ -211,3 +214,42 @@ App calls `ui::uiBeginFrame()` / `ui::uiEndFrame()` around each frame (cursor ha
   than what's inside your module.
 * Code style: 4-space indent, `camelCase` functions, `PascalCase` types, `trailing_` members, short
   comments only where they add information.
+
+## 7. The other games (2026-10)
+
+Seven games share the room, the people, the camera, the audio and the screens. `ui::GameKind` (Screens.h) names
+them; `ui::Settings::game` is the one the next match plays (the title's "Oyna" opens the game list,
+`ScreenId::GameSelect`).
+
+* **The okey family** stays on `okey::Game` + `okey::Bot` + `r3d::Table3D`:
+  * *101* is the default `RulesConfig`.
+  * *Eşli 101* sets `RulesConfig::teams`: partners across, the finisher's partner writes no hand (written
+    penalties stay), `teamTotal()` decides the match. The bots play for the team: in Kurt's rollouts the hand may end by an
+    opponent (my hand plus the partner's expected hand count) or by the partner (mine is wiped), and a partner
+    close to finishing is not treated as a threat (`Bot` Knowledge `team`, `roundHazard`; `sim --team-ab L`
+    compares team bots against self-playing ones on duplicate deals).
+  * *Klasik okey* sets `RulesConfig::variant = Variant::Okey`: 14 tiles (the starter 15), no table play, the
+    left tile is simply taken, `finishHand()` puts the 15th tile down when the other 14 are runs/groups (12-13-1 is
+    a run here) or seven pairs (`OkeyHand.{h,cpp}`: an exact cover search, plus a cached value-only count for the
+    bots), `showIndicator()` for the gösterge's twin. Everyone starts with `okeyStartPoints` (20) and counts down
+    (2 per finish, x2 okey / x2 pairs, 1 for the gösterge); the game ends when someone reaches 0. The bots
+    (`Bot::classicNext`) keep the hand with the most tiles in melds; Kurt also counts the next draw's chances (its
+    edge over Usta).
+* **Tavla, Pişti, Batak, King** are `app::TableGame`s (`src/app/TableGame.h`), built by `makeTableGame()`. Each owns
+  its engine and bots (`src/core/{Tavla,Pisti,Batak,King}*`, written to the same conventions as the okey engine:
+  Turkish event texts, `ActionResult` errors, deterministic seeds, fair bots at three levels, sims with paired
+  duplicate deals), its 3D pieces and a `r3d::GameHud`. App drives it (`startOtherMatch`, `updateFlow`) while
+  `Table3D::setFurnitureOnly(true)` leaves only the table and its felt.
+  * The card games derive from `app::CardTableBase` (CardTable.h): `r3d::Cards3D` (52 rounded cards textured from
+    `ui::cardgfx`'s procedural atlas, each flying to a target pose; `cardlayout` gives hands, the trick, won piles,
+    the deck, Pişti's middle), dealing, the trick held on the felt before it is swept, picking and highlighting the
+    player's cards, bot pacing and `Characters::reach` / `react` / `chat` for the people.
+  * Tavla uses `r3d::Tavla3D`: the box, 24 inlaid points, 30 checkers that hop between stacks (the engine's position
+    is reconciled checker by checker), two dice thrown to their numbers, highlights (lit checkers, green targets)
+    and ray picking of points / bar / bear-off.
+  * Between hands the game fills a `ui::SheetModel` (Screens.h): the same hand-written sheet and final standings as
+    the okey games, from rows the game chooses.
+  * `tools/tables_check` (`make tablescheck`) plays all four with real mouse clicks through
+    `TableGame::debugHumanClick`.
+* Rules pages: the okey family's are written in Screens.cpp; the others come from `docs/kurallar_*.md`, embedded by
+  `tools/gen_rules.py` into `src/ui/RulesText.inc` and parsed at runtime (headings become the page's tabs).

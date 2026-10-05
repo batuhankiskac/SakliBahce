@@ -3,6 +3,7 @@
 //        -o build/engine/test_engine
 #include "core/Game.h"
 #include "core/Meld.h"
+#include "core/OkeyHand.h"
 
 #include <algorithm>
 #include <array>
@@ -2709,6 +2710,7 @@ private:
             const PlayerInfo& p = g_.player(s);
             int expect;
             if (s == r.winner) expect = cfg_.winnerScore * mult;
+            else if (cfg_.teams && r.winner >= 0 && s == Game::partnerOf(r.winner)) expect = 0; // eşli
             else if (!p.opened) expect = cfg_.unopenedScore * mult;
             else if (p.openedWithPairs) expect = g_.handPoints(s) * 2 * mult;
             else expect = g_.handPoints(s) * mult;
@@ -3136,6 +3138,278 @@ void runFuzz(const char* name, const RulesConfig& cfg, std::array<Policy, 4> pol
     total.rejected += st.rejected;
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Klasik okey
+
+// Brute force: most tiles covered by disjoint klasik melds.
+int bruteCover(const V& t, const OkeyInfo& ok) {
+    const int n = (int)t.size();
+    int best = 0;
+    std::function<void(int, int)> rec = [&](int used, int cov) {
+        best = std::max(best, cov);
+        int i = 0;
+        while (i < n && ((used >> i) & 1)) ++i;
+        if (i >= n) return;
+        rec(used | (1 << i), cov);
+        const int rest = ((1 << n) - 1) & ~used & ~(1 << i);
+        for (int sub = rest; sub; sub = (sub - 1) & rest) {
+            const int sz = __builtin_popcount((unsigned)sub) + 1;
+            if (sz < 3) continue;
+            V ids{t[i]};
+            for (int j = 0; j < n; ++j)
+                if ((sub >> j) & 1) ids.push_back(t[j]);
+            if (classicMeldValid(ids, ok)) rec(used | sub | (1 << i), cov + sz);
+        }
+    };
+    rec(0, 0);
+    return best;
+}
+
+void testClassicMelds() {
+    const OkeyInfo& ok = GOK; // okey = Black 3
+    CHECK(classicMeldValid({T(R, 12), T(R, 13), T(R, 1)}, ok));           // 12-13-1
+    CHECK(classicMeldValid({T(R, 1), T(R, 13), T(R, 12), T(R, 11)}, ok)); // any order
+    CHECK(!classicMeldValid({T(R, 13), T(R, 1), T(R, 2)}, ok));           // 1 only as the last tile
+    CHECK(classicMeldValid({T(R, 1), T(R, 2), T(R, 3)}, ok));
+    CHECK(classicMeldValid({T(R, 12), GJ1, T(R, 1)}, ok));                  // okey as 13
+    CHECK(classicMeldValid({T(Y, 7), T(B, 7), T(R, 7), T(K, 7)}, ok));
+    CHECK(!classicMeldValid({T(Y, 7), T(Y, 7, 1), T(R, 7)}, ok));
+    CHECK(classicMeldValid({T(Y, 7), GJ1, GJ2}, ok));
+    CHECK(classicMeldValid({FAKE_JOKER_A, T(K, 4), T(K, 5)}, ok)); // the sahte okey is a Black 3
+    CHECK(!classicMeldValid({T(R, 4), T(R, 5)}, ok));
+    CHECK_EQ(classicRun({T(R, 1), T(R, 12), GJ1}, ok), (V{T(R, 12), GJ1, T(R, 1)}));
+    // complete hands
+    const V sets = {T(R, 11), T(R, 12), T(R, 13), T(R, 1), T(Y, 5), T(B, 5), T(K, 5),
+                    T(B, 7), T(B, 8), T(B, 9), T(Y, 2), T(Y, 3), T(Y, 4), GJ1};
+    G melds;
+    CHECK(classicSetsComplete(sets, ok, &melds));
+    int n = 0;
+    for (const V& m : melds) {
+        n += (int)m.size();
+        CHECK(classicMeldValid(m, ok));
+    }
+    CHECK_EQ(n, 14);
+    const V pairs = {T(R, 1), T(R, 1, 1), T(Y, 9), T(Y, 9, 1), T(B, 13), T(B, 13, 1), T(K, 6), T(K, 6, 1),
+                     T(R, 7), T(R, 7, 1), T(Y, 2), T(Y, 2, 1), T(B, 4), GJ1};
+    CHECK(classicPairsComplete(pairs, ok));
+    CHECK_EQ(classicPairCount(pairs, ok), 7);
+    CHECK(!classicSetsComplete(pairs, ok));
+    // the finish check on 15 tiles
+    V h15 = sets;
+    h15.push_back(T(R, 9));
+    CHECK_EQ(classicFinishKind(h15, T(R, 9), ok), 1);
+    CHECK_EQ(classicFinishKind(h15, T(Y, 5), ok), 0);
+    // solver vs brute force on random small hands (with okeys and sahte okeys)
+    Rng rng(31);
+    int bad = 0;
+    for (int it = 0; it < 1500; ++it) {
+        V deck(NUM_TILES);
+        for (int i = 0; i < NUM_TILES; ++i) deck[i] = i;
+        rng.shuffle(deck);
+        V t;
+        for (int id : deck) {
+            if ((int)t.size() >= 10) break;
+            if (id < FAKE_JOKER_A && printedNumber(id) > 5 && printedNumber(id) < 11) continue; // denser hands
+            t.push_back(id);
+        }
+        const int a = classicCover(t, ok), b = bruteCover(t, ok);
+        if (a != b) ++bad;
+        G m;
+        classicCover(t, ok, &m);
+        int used = 0;
+        for (const V& x : m) {
+            used += (int)x.size();
+            if (!classicMeldValid(x, ok)) ++bad;
+        }
+        if (used != a) ++bad;
+        if (classicCoverFast(t, ok) < a) ++bad; // the fast count never undercounts
+    }
+    CHECK_EQ(bad, 0);
+}
+
+void testClassicGame() {
+    RulesConfig cfg;
+    cfg.variant = Variant::Okey;
+    Game g(cfg);
+    g.startMatch(5);
+    CHECK(g.classic());
+    CHECK_EQ((int)g.player(g.starter()).hand.size(), 15);
+    for (int s = 0; s < 4; ++s) {
+        if (s != g.starter()) CHECK_EQ((int)g.player(s).hand.size(), 14);
+        CHECK_EQ(g.player(s).totalScore, 20);
+    }
+    CHECK_EQ(g.pileCount(), NUM_TILES - 1 - 57);
+    std::vector<GameEvent> ev = g.drainEvents();
+    CHECK(!ev.empty() && ev[0].text == "Yeni okey oyunu başladı (herkes 20 puanla)");
+
+    // no table play; the left tile is simply taken; any tile may be discarded (no penalties)
+    Setup s;
+    s.cfg = cfg;
+    s.hands[0] = {T(R, 4), T(R, 5), T(R, 6), T(Y, 1), T(B, 3), T(R, 9), T(Y, 11), T(B, 6), T(K, 8), T(Y, 8),
+                  T(B, 8), T(R, 12), T(B, 12), T(Y, 13)};
+    s.discards[3] = {T(R, 7)};
+    s.seat = 0;
+    s.stage = TurnStage::NeedDraw;
+    apply(g, s);
+    CHECK(g.takeFromLeft(0).ok);
+    CHECK_EQ(g.pendingLeftTile(), -1);
+    CHECK_EQ(g.openHand(0, {{T(R, 4), T(R, 5), T(R, 6), T(R, 7)}}).error,
+             std::string("Okeyde masaya per açılmaz; elin bitince 14 taşını birden gösterirsin"));
+    CHECK(!g.finishHand(0, T(Y, 1)).ok);
+    CHECK_EQ(g.finishKind(0, T(Y, 1)), 0);
+    CHECK(g.discard(0, T(R, 7)).ok); // the tile from the left may go straight back out
+    ev = g.drainEvents();
+    CHECK_EQ(countType(ev, EvType::Penalty), 0);
+    CHECK_EQ(g.current(), 1);
+
+    // finishing: normal (-2 each), okey (x2), pairs (x2), okey + pairs (x4)
+    const V sets = {T(R, 11), T(R, 12), T(R, 13), T(R, 1), T(Y, 5), T(B, 5), T(K, 5),
+                    T(B, 7), T(B, 8), T(B, 9), T(Y, 2), T(Y, 3), T(Y, 4), GJ1};
+    struct Case {
+        V hand;
+        int tile;
+        int mult;
+        bool joker, pairs;
+    };
+    V normal = sets;
+    normal.push_back(T(K, 10));
+    V withOkey = sets;
+    withOkey.back() = T(B, 10);
+    withOkey.push_back(GJ1); // B7 B8 B9 B10 run, the okey is the spare
+    const V pairs = {T(R, 1), T(R, 1, 1), T(Y, 9), T(Y, 9, 1), T(B, 13), T(B, 13, 1), T(K, 6), T(K, 6, 1),
+                     T(R, 7), T(R, 7, 1), T(Y, 2), T(Y, 2, 1), T(B, 4), T(B, 4, 1)};
+    V pairsN = pairs;
+    pairsN.push_back(T(K, 10));
+    V pairsJ = pairs;
+    pairsJ.push_back(GJ1);
+    const Case cases[] = {{normal, T(K, 10), 1, false, false},
+                          {withOkey, GJ1, 2, true, false},
+                          {pairsN, T(K, 10), 2, false, true},
+                          {pairsJ, GJ1, 4, true, true}};
+    for (const Case& c : cases) {
+        Setup f;
+        f.cfg = cfg;
+        f.hands[2] = c.hand;
+        f.seat = 2;
+        apply(g, f);
+        g.setPlayer(2, "Kel Mahmut", false);
+        CHECK(g.finishKind(2, c.tile) > 0);
+        CHECK(g.finishHand(2, c.tile).ok);
+        const HandResult& r = g.lastHandResult();
+        CHECK(r.reason == HandEndReason::PlayerFinished);
+        CHECK_EQ(r.winner, 2);
+        CHECK_EQ(r.multiplier, c.mult);
+        CHECK_EQ(r.finishedWithJoker, c.joker);
+        CHECK_EQ(r.finishedWithPairs, c.pairs);
+        CHECK_EQ(r.score[2], 0);
+        for (int p : {0, 1, 3}) {
+            CHECK_EQ(r.score[p], -2 * c.mult);
+            CHECK_EQ(g.player(p).totalScore, 20 - 2 * c.mult);
+        }
+        CHECK_EQ(g.player(2).totalScore, 20);
+        CHECK(g.handState() == HandState::HandOver);
+        ev = g.drainEvents();
+        const GameEvent* d = findEv(ev, EvType::Discard);
+        CHECK(d && d->count == 1 && d->tile == c.tile);
+        const GameEvent* he = findEv(ev, EvType::HandEnd);
+        CHECK(he != nullptr);
+        if (he && c.mult == 4) CHECK_EQ(he->text, std::string("Kel Mahmut eli bitirdi! (okey atarak, çiftten, ×4)"));
+        if (he && c.mult == 1) CHECK_EQ(he->text, std::string("Kel Mahmut eli bitirdi!"));
+        CHECK(conserved(g));
+    }
+
+    // gösterge: only the twin's holder, on their turn, before their first discard; -1 from everyone else
+    Setup ind;
+    ind.cfg = cfg;
+    ind.indicator = T(K, 2);
+    ind.hands[1] = {T(K, 2, 1), T(Y, 1), T(B, 3), T(R, 9), T(Y, 11), T(B, 6), T(K, 8), T(Y, 8), T(B, 8), T(R, 12),
+                    T(B, 12), T(Y, 13), T(R, 4), T(R, 5)};
+    ind.seat = 0;
+    ind.stage = TurnStage::NeedDraw;
+    apply(g, ind);
+    CHECK_EQ(g.indicatorTwin(1), -1); // not their turn
+    CHECK(!g.showIndicator(1).ok);
+    CHECK(g.drawFromPile(0).ok);
+    CHECK(g.discard(0, g.player(0).hand.empty() ? -1 : firstNonJoker(g, 0)).ok);
+    CHECK_EQ(g.indicatorTwin(1), T(K, 2, 1));
+    CHECK(g.showIndicator(1).ok);
+    CHECK_EQ(g.indicatorShownBy(), 1);
+    CHECK(!g.showIndicator(1).ok); // once
+    ev = g.drainEvents();
+    const GameEvent* si = findEv(ev, EvType::ShowIndicator);
+    CHECK(si && si->player == 1 && si->tile == T(K, 2, 1) && si->amount == 1);
+    CHECK(si && si->text == g.player(1).name + " göstergeyi gösterdi: herkesten 1 puan düştü");
+    CHECK(g.drawFromPile(1).ok);
+    CHECK(g.discard(1, T(Y, 1)).ok);
+    exhaustHand(g); // the hand ends with nobody finishing: only the gösterge counts
+    const HandResult& r = g.lastHandResult();
+    CHECK(r.reason == HandEndReason::PileExhausted);
+    CHECK_EQ(r.indicatorShownBy, 1);
+    CHECK_EQ(r.score[1], 0);
+    for (int p : {0, 2, 3}) CHECK_EQ(r.score[p], -1);
+
+    // the game ends when somebody reaches 0; the highest total wins
+    Setup last;
+    last.cfg = cfg;
+    last.hands[3] = normal;
+    last.seat = 3;
+    apply(g, last);
+    g.debugPlayer(0).totalScore = 2;
+    g.debugPlayer(1).totalScore = 9;
+    g.debugPlayer(2).totalScore = 5;
+    g.debugPlayer(3).totalScore = 4;
+    CHECK(g.finishHand(3, T(K, 10)).ok);
+    CHECK(g.handState() == HandState::MatchOver);
+    CHECK_EQ(g.player(0).totalScore, 0);
+    CHECK_EQ(g.leaderSeat(), 1);
+    ev = g.drainEvents();
+    const GameEvent* me = findEv(ev, EvType::MatchEnd);
+    CHECK(me && me->player == 1 && me->text == "Oyun bitti! Kazanan: " + g.player(1).name);
+}
+
+// Eşli 101: the finisher's partner writes nothing for the hand (their penalties stay); teams compare totals.
+void testTeams() {
+    Game g;
+    Setup s;
+    s.cfg.teams = true;
+    s.hands[0] = {T(R, 9)};
+    s.hands[1] = {T(Y, 1), T(Y, 2), T(B, 13)}; // unopened: 202
+    s.hands[2] = {T(B, 5), T(K, 9)};           // the partner: wiped
+    s.hands[3] = {T(Y, 4), T(K, 6)};           // opened: 10
+    apply(g, s);
+    CHECK(g.teams());
+    markOpened(g, 0, false);
+    markOpened(g, 3, false);
+    g.debugPlayer(2).handPenalty = 101;
+    CHECK(g.discard(0, T(R, 9)).ok);
+    const HandResult& r = g.lastHandResult();
+    CHECK_EQ(r.score[0], -101);
+    CHECK_EQ(r.score[2], 101); // only the written penalty
+    CHECK_EQ(r.score[1], 202);
+    CHECK_EQ(r.score[3], 10);
+    CHECK_EQ(g.teamTotal(0), 0);
+    CHECK_EQ(g.teamTotal(1), 212);
+    CHECK_EQ(g.teamTotal(2), g.teamTotal(0));
+    CHECK_EQ(g.leaderSeat(), 0);
+    // match end text names the team
+    RulesConfig one;
+    one.teams = true;
+    one.numHands = 1;
+    Game m(one);
+    m.startMatch(3);
+    m.drainEvents();
+    m.debugPlayer(1).totalScore = -300;
+    exhaustHand(m);
+    std::vector<GameEvent> ev = m.drainEvents();
+    const GameEvent* me = findEv(ev, EvType::MatchEnd);
+    CHECK(me != nullptr);
+    if (me) {
+        const int lead = m.leaderSeat();
+        CHECK(lead == 1 || lead == 3);
+        CHECK_EQ(me->text, "Maç bitti! Kazananlar: " + m.player(1).name + " ve " + m.player(3).name);
+    }
+}
+
 void testFuzz(int scale) {
     Stats total;
     const auto R_ = Policy::Random, G_ = Policy::Greedy;
@@ -3160,6 +3434,9 @@ void testFuzz(int scale) {
     kat.katlamali = true;
     kat.openThreshold = 70; // (so that several players reach an opening and the bar really climbs)
     runFuzz("greedy/katlamali", kat, {G_, G_, G_, G_}, 150 * scale, 6, total);
+    RulesConfig esli;
+    esli.teams = true;
+    runFuzz("greedy/esli", esli, {G_, G_, G_, G_}, 100 * scale, 7, total);
 
     // the greedy fuzz must really reach the interesting paths
     CHECK(total.finishes > 100);
@@ -3232,6 +3509,9 @@ int main(int argc, char** argv) {
         {"game: elden bitiş", testEldenBitis},
         {"game: pile exhaustion", testPileExhaustion},
         {"game: match end", testMatchEnd},
+        {"klasik: melds", testClassicMelds},
+        {"klasik: game", testClassicGame},
+        {"eşli 101", testTeams},
         {"game: determinism", testDeterminism},
         {"fuzz", [scale] { testFuzz(scale); }},
     };

@@ -1,6 +1,7 @@
 #pragma once
 // Internal to the table module (src/r3d/Table3D*.cpp): shared state of Table3D::Impl, rack logic, pose math
 // and table geometry. Not a public API — nothing outside the table module includes this.
+#include "core/OkeyHand.h"
 #include "core/Solver.h"
 #include "r3d/Table3D.h"
 #include "r3d/World.h"
@@ -293,6 +294,11 @@ struct TableState {
     std::vector<std::vector<int>> seriesGroups, pairGroups;
     okey::OpenCheck seriesCheck, pairCheck;
     std::vector<char> islek;
+    // klasik okey: the tile to put down to finish now (-1: the hand isn't finished), and how close the hand is
+    int finishTile = -1;
+    int classicCoverNow = 0, classicPairsNow = 0;
+    bool classic() const { return game && game->classic(); }
+    bool furnitureOnly = false;  // another game is played at this table: just the table and the felt
 
     int peekKind = 0;            // hover inspection: 0 none, 1 meld, 2 discard pile
     int peekIdx = -1;            // meld index / seat
@@ -356,6 +362,8 @@ struct TableState {
     void attemptIsle(int tile, int meld, int jokerIdx, bool front);
     void doOpen();
     void doGiveBack();
+    void doFinish();            // klasik okey "Bitir"
+    void doShowIndicator();     // klasik okey "Göster"
     void notYourTurn();          // a neutral hint when the human reaches for the table out of turn
     void runButton(t3d::Btn b);
     void queue(t3d::Btn b);

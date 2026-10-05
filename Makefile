@@ -22,16 +22,17 @@ GAME     ?= saklibahce
 CORE_SRC := $(wildcard src/core/*.cpp)
 UI_SRC   := $(wildcard src/ui/*.cpp) $(wildcard src/r3d/*.cpp)
 APP_SRC  := $(wildcard src/app/*.cpp)
-TEST_SRC := tests/test_engine.cpp tests/test_ai.cpp tests/sim.cpp
+TEST_NAMES := test_engine test_ai sim test_tavla tavla_sim test_batak batak_sim test_king king_sim test_pisti pisti_sim
+TEST_SRC := $(TEST_NAMES:%=tests/%.cpp)
 CORE_OBJ := $(CORE_SRC:%.cpp=$(BUILD)/%.o)
 UI_OBJ   := $(UI_SRC:%.cpp=$(BUILD)/%.o)
 APP_OBJ  := $(APP_SRC:%.cpp=$(BUILD)/%.o)
 TEST_OBJ := $(TEST_SRC:%.cpp=$(BUILD)/%.o)
-TESTS    := $(BUILD)/test_engine $(BUILD)/test_ai $(BUILD)/sim
+TESTS    := $(TEST_NAMES:%=$(BUILD)/%)
 
 ASAN_FLAGS := -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra
 
-.PHONY: all test tests run clean asan
+.PHONY: all test tests run clean asan tablescheck
 all: $(GAME)
 
 $(GAME): $(CORE_OBJ) $(UI_OBJ) $(APP_OBJ)
@@ -42,11 +43,7 @@ $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c $< -o $@
 
-$(BUILD)/test_engine: $(BUILD)/tests/test_engine.o $(CORE_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
-$(BUILD)/test_ai: $(BUILD)/tests/test_ai.o $(CORE_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
-$(BUILD)/sim: $(BUILD)/tests/sim.o $(CORE_OBJ)
+$(TESTS): $(BUILD)/%: $(BUILD)/tests/%.o $(CORE_OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
 
 tests: $(TESTS)
@@ -57,6 +54,25 @@ test: $(TESTS)
 	$(BUILD)/sim --hands 400 --seed 7
 	$(BUILD)/sim --hands 400 --seed 11 --levels 2,0,1,2 --rotate
 	$(BUILD)/sim --hands 200 --seed 13 --levels 2,1,2,1 --rotate --katlamali
+	$(BUILD)/sim --hands 200 --seed 19 --levels 2,1,2,1 --rotate --esli
+	$(BUILD)/sim --hands 100 --seed 17 --levels 2,1,0,2 --rotate --okey
+	$(BUILD)/test_tavla
+	$(BUILD)/tavla_sim --games 200 --seed 3 --levels 2,1
+	$(BUILD)/test_batak
+	$(BUILD)/batak_sim --hands 100 --seed 3 --levels 2,1,0,1
+	$(BUILD)/batak_sim --hands 60 --seed 4 --levels 2,1,2,1 --esli
+	$(BUILD)/test_king
+	$(BUILD)/king_sim --games 4 --seed 3 --levels 2,1,0,1
+	$(BUILD)/test_pisti
+	$(BUILD)/pisti_sim --hands 200 --seed 3 --levels 2,1,0,1
+	$(BUILD)/pisti_sim --hands 100 --seed 4 --levels 2,1,2,1 --mode esli
+
+# The other table games played by the mouse in a hidden window (needs a display: run it awake, not over ssh)
+TABLES_CHECK_OBJ := $(CORE_OBJ) $(UI_OBJ) $(filter-out $(BUILD)/src/app/App.o $(BUILD)/src/app/main.o,$(APP_OBJ))
+$(BUILD)/tables_check: $(BUILD)/tools/tables_check.o $(TABLES_CHECK_OBJ)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+tablescheck: $(BUILD)/tables_check
+	$(BUILD)/tables_check --hands 2
 
 run: $(GAME)
 	./$(GAME)
@@ -68,6 +84,11 @@ asan:
 	ASAN_OPTIONS=detect_leaks=0 build/asan/test_engine
 	ASAN_OPTIONS=detect_leaks=0 build/asan/test_ai
 	ASAN_OPTIONS=detect_leaks=0 build/asan/sim --hands 200 --seed 5 --levels 2,1,0,2
+	ASAN_OPTIONS=detect_leaks=0 build/asan/sim --hands 40 --seed 6 --levels 2,1,0,2 --okey
+	ASAN_OPTIONS=detect_leaks=0 build/asan/test_tavla
+	ASAN_OPTIONS=detect_leaks=0 build/asan/test_batak
+	ASAN_OPTIONS=detect_leaks=0 build/asan/test_king
+	ASAN_OPTIONS=detect_leaks=0 build/asan/test_pisti
 
 clean:
 	rm -rf build/make build/asan $(GAME)

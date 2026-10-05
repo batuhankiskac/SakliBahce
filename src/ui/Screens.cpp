@@ -37,6 +37,18 @@ constexpr Color kSignRed{132, 42, 22, 255};
 constexpr Color kGold{238, 198, 112, 255};
 
 const int kHandChoices[] = {1, 3, 5, 7, 9, 11};
+const int kOkeyStartChoices[] = {6, 12, 20};
+const int kTavlaChoices[] = {3, 5, 7};
+const int kBatakTargets[] = {31, 51, 71};
+const int kPistiTargets[] = {101, 151};
+// The closest choice's index (settings loaded from an older file may hold any value).
+template <size_t N>
+int closest(const int (&choices)[N], int v) {
+    int best = 0;
+    for (int i = 1; i < (int)N; ++i)
+        if (std::abs(choices[i] - v) < std::abs(choices[best] - v)) best = i;
+    return best;
+}
 const float kAnimChoices[] = {0.6f, 1.f, 1.7f};
 const char* const kLevelNames[] = {"Acemi", "Usta", "Kurt"};
 const char* const kLevelHints[] = {"Rahat rakipler, ara sıra hata yapar", "Sağlam, dikkatli oyuncular",
@@ -480,7 +492,12 @@ MiniTile TM(int c, int n) { return MiniTile{c, n, 0, true}; }
 MiniTile TOkey() { return MiniTile{1, 7, 1, false}; } // the okey of the examples (gösterge Mavi 6)
 MiniTile TFake() { return MiniTile{1, 7, 2, false}; }
 
-std::vector<RuleBlock> buildRules() {
+// A section tab on the rules page: its label and the heading it jumps to.
+struct RuleTab {
+    std::string label, heading;
+};
+
+std::vector<RuleBlock> buildRules101(bool esli) {
     std::vector<RuleBlock> v;
     auto H = [&](const char* s) { RuleBlock b; b.kind = RuleBlock::Heading; b.text = s; v.push_back(b); };
     auto P = [&](const char* s) { RuleBlock b; b.kind = RuleBlock::Para; b.text = s; v.push_back(b); };
@@ -503,6 +520,17 @@ std::vector<RuleBlock> buildRules() {
     P("101, dört kişiyle oynanan bir okey oyunudur. Taşlarını seri, grup ya da çift olarak masaya açar, "
       "sonra kalanları işleyerek elini bitirmeye çalışırsın. Her elin puanı hesap kağıdına yazılır ve "
       "*düşük puan iyidir*: maçın sonunda toplamı en düşük olan kazanır.");
+    if (esli) {
+        H("Eşli oyun");
+        P("Eşli 101'de karşında oturan oyuncu *ortağındır*: sen ve Kel Mahmut bir takım, Hacı Rıza ile Emekli Nuri "
+          "öbür takım. Kurallar tekli 101'le aynıdır, şu farklarla:");
+        B("Ortaklardan biri elini bitirince *ötekinin eli silinir*: o el elinde kalan taşlar sayılmaz, açmamış olsa "
+          "bile 202 yazılmaz. Yazılmış cezaları (işlek taş, okey atmak) yine de sayılır.");
+        B("Takımın puanı iki ortağın toplamıdır; maçın sonunda *toplamı düşük olan takım* kazanır.");
+        B("Attığın taşı her zaman bir rakip alır: sağındaki de solundaki de karşı takımdandır. Ortağının perlerine "
+          "de herkesinki gibi taş işleyebilirsin.");
+        B("*Yandan açma cezası* karşı takıma yazılır: senin attığın taşla açılırsa ceza sana gelir.");
+    }
 
     H("Taşlar");
     P("Toplam 106 taş vardır: Sarı, Mavi, Siyah ve Kırmızı renklerde 1'den 13'e kadar sayılar, her taştan "
@@ -638,6 +666,255 @@ std::vector<RuleBlock> buildRules() {
     return v;
 }
 
+std::vector<RuleBlock> buildRulesOkey() {
+    std::vector<RuleBlock> v;
+    auto H = [&](const char* s) { RuleBlock b; b.kind = RuleBlock::Heading; b.text = s; v.push_back(b); };
+    auto P = [&](const char* s) { RuleBlock b; b.kind = RuleBlock::Para; b.text = s; v.push_back(b); };
+    auto B = [&](const char* s, const char* label = "") {
+        RuleBlock b;
+        b.kind = RuleBlock::Bullet;
+        b.text = s;
+        b.label = label;
+        v.push_back(b);
+    };
+    auto X = [&](std::vector<RuleItem> items) {
+        RuleBlock b;
+        b.kind = RuleBlock::Tiles;
+        b.items = std::move(items);
+        v.push_back(b);
+    };
+    enum { Y = 0, M = 1, K = 2, R = 3 };
+
+    H("Oyunun amacı");
+    P("Okey, kahvenin en çok oynanan oyunudur. Elindeki 14 taşı *per*lere (seri ya da grup) ya da *yedi çifte* "
+      "diz; sıran gelince bir taş çek, fazla taşı atıp elini göster: *bittin*. 101'deki gibi masaya per açılmaz, "
+      "el bitene kadar taşlar ıstakanda kalır.");
+
+    H("Taşlar ve okey");
+    P("106 taşla oynanır: dört renkte 1'den 13'e kadar her taştan iki tane ve iki *sahte okey*. Dağıtımdan "
+      "sonra açılan taş *gösterge*dir; aynı renkte bir üst sayısı o elin *okey*idir ve her taşın yerine geçer. "
+      "Sahte okey joker değildir, okeyin rengi ve sayısı yerine oynanır.");
+    X({{{T(M, 6)}, "Gösterge: Mavi 6"}, {{TOkey()}, "Okey: Mavi 7 (joker)"}, {{TFake()}, "Sahte okey = Mavi 7"}});
+
+    H("Dağıtım ve tur");
+    P("Herkese 14 taş dağıtılır; eli başlatan oyuncu 15 taşla başlar, ilk turunda taş çekmeden bir taş atar. "
+      "Sıra sağa döner. Sıran gelince:");
+    B("*Taş al:* ortadan bir taş çek ya da solundakinin attığı son taşı al. 101'den farklı olarak yandan aldığın "
+      "taşı kullanma zorunluluğu yoktur.", "1.");
+    B("*Taş at:* bir taşı kendi atık yerine at. Sağındaki oyuncu onu alabilir.", "2.");
+
+    H("Perler");
+    B("*Seri:* aynı renkten en az 3 ardışık sayı. Okeyde 1, 13'ün arkasından da gelebilir (*12-13-1*), ama "
+      "serinin son taşı olur: 13-1-2 olmaz.");
+    {
+        std::vector<RuleItem> it = {{{T(R, 5), T(R, 6), T(R, 7)}, "Kırmızı 5-6-7"},
+                                    {{T(M, 12), T(M, 13), T(M, 1)}, "12-13-1 olur"},
+                                    {{T(K, 13), T(K, 1), T(K, 2)}, "13-1-2 olmaz"}};
+        it[2].wrong = true;
+        X(it);
+    }
+    B("*Grup:* aynı sayının farklı renkleri, 3 ya da 4 taş.");
+    X({{{T(Y, 9), T(M, 9), T(K, 9)}, "Üçlü grup"}, {{T(R, 5), TOkey(), T(R, 7)}, "Okey eksiği tamamlar"}});
+    B("*Çift:* birebir aynı iki taş. Elinde *yedi çift* toplarsan çiftten bitersin (*çifte gitmek*).");
+
+    H("Bitmek");
+    P("Taşını çektikten sonra elindeki 15 taştan 14'ü perlere ya da yedi çifte oturuyorsa, fazla taşı atıp "
+      "elini gösterirsin: *bittin*. Masada bunu yapmak için taşı ortaya, *Bitir* yerine sürükle (ya da taşı "
+      "seçip *Bitir*'e bas). Oyun ıstakanı kendisi kontrol eder; perlerin dizili olmasa da olur.");
+    P("Elin bittiği hâlde okeyi fazla taş olarak atabiliyorsan *okey atarak* bitersin (*okeye dönmek*): "
+      "puan iki katına çıkar.");
+
+    H("Gösterge");
+    P("Elinde göstergenin eşi (aynı renk ve sayıdaki öbür taş) varsa, ilk taşını atmadan önce onu "
+      "gösterebilirsin: *Göster* düğmesine bas. Diğer herkesin puanından ^1^ düşülür. Bir elde gösterge bir "
+      "kez gösterilir.");
+
+    H("Puanlama");
+    P("Herkes oyuna aynı puanla başlar (ayarlardan *6, 12 ya da 20*; çoğu kahvede 20). Puanlar geriye sayılır, "
+      "*yüksek puan iyidir*:");
+    B("Biri bitince diğer üç oyuncunun puanından ^2^ düşülür.");
+    B("*Okey atarak* bitişte ^4^, *çiftten* bitişte ^4^, ikisi birden olursa ^8^ düşülür.");
+    B("Gösterge gösterilince diğerlerinden ^1^ düşülür.");
+    B("Ortadaki taşlar biter ve kimse bitemezse el berabere biter; yalnızca gösterge sayılır.");
+    P("Puanı sıfıra (ya da altına) inen biri olunca oyun biter; *en yüksek puanda kalan* kazanır.");
+
+    H("Kontroller");
+    B("*Taş çekmek:* ortadaki desteye ya da sol alttaki atık taşına tıkla veya onu ıstakana sürükle.");
+    B("*Taş atmak:* taşı sağ alttaki atık yerine sürükle ya da taşa çift tıkla.");
+    B("*Bitmek:* fazla taşı masanın ortasına (*Bitir* yazan yere) sürükle. El bitmeye hazırsa ipucu açıkken "
+      "*Bitir* parlar.");
+    B("*Seri Diz / Çift Diz:* ıstakanı seri ya da çift düzenine göre kendiliğinden dizer (*S* / *C*).");
+    B("*Göster:* göstergenin eşini gösterir (yalnızca ilk taşını atmadan önce).");
+    B("*Etrafa bakmak:* sağ tuşla sürükle; *Y* yapay zekaya bırakır, *ESC* duraklatır.");
+    return v;
+}
+
+#include "ui/RulesText.inc"
+
+// The other games' rules pages, from their embedded docs (light markdown, see tools/gen_rules.py).
+std::vector<RuleBlock> parseRulesMd(const char* md) {
+    std::vector<RuleBlock> v;
+    std::string para;
+    auto bold = [](std::string t) { // **x** -> *x* (the rich text's bold)
+        size_t p;
+        while ((p = t.find("**")) != std::string::npos) t.replace(p, 2, "*");
+        return t;
+    };
+    auto flush = [&]() {
+        if (para.empty()) return;
+        RuleBlock b;
+        b.kind = RuleBlock::Para;
+        b.text = bold(para);
+        v.push_back(b);
+        para.clear();
+    };
+    std::string line;
+    const std::string src = md;
+    size_t pos = 0;
+    bool tableHeader = true;
+    while (pos <= src.size()) {
+        const size_t nl = src.find('\n', pos);
+        line = src.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        pos = nl == std::string::npos ? src.size() + 1 : nl + 1;
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\r')) line.pop_back();
+        if (line.empty()) {
+            flush();
+            tableHeader = true;
+            continue;
+        }
+        if (line.rfind("## ", 0) == 0) {
+            flush();
+            RuleBlock b;
+            b.kind = RuleBlock::Heading;
+            b.text = line.substr(3);
+            v.push_back(b);
+            continue;
+        }
+        if (line[0] == '|') {
+            flush();
+            std::vector<std::string> cells;
+            size_t a = 1;
+            while (a < line.size()) {
+                const size_t e = line.find('|', a);
+                if (e == std::string::npos) break;
+                std::string c = line.substr(a, e - a);
+                while (!c.empty() && c.front() == ' ') c.erase(c.begin());
+                while (!c.empty() && c.back() == ' ') c.pop_back();
+                cells.push_back(c);
+                a = e + 1;
+            }
+            const bool sep = !cells.empty() && cells[0].find_first_not_of("-: ") == std::string::npos;
+            if (sep || tableHeader) { // the header row and the |---| row
+                tableHeader = false;
+                continue;
+            }
+            if (cells.size() >= 2) {
+                RuleBlock b;
+                b.kind = RuleBlock::Bullet;
+                b.text = "*" + bold(cells[0]) + "*: " + bold(cells[1]);
+                for (size_t i = 2; i < cells.size(); ++i) b.text += " \xC2\xB7 " + bold(cells[i]);
+                v.push_back(b);
+            }
+            continue;
+        }
+        size_t digits = 0;
+        while (digits < line.size() && line[digits] >= '0' && line[digits] <= '9') ++digits;
+        if (line.rfind("- ", 0) == 0 || (digits > 0 && line.compare(digits, 2, ". ") == 0)) {
+            flush();
+            RuleBlock b;
+            b.kind = RuleBlock::Bullet;
+            if (line[0] == '-') {
+                b.text = bold(line.substr(2));
+            } else {
+                b.label = line.substr(0, digits + 1);
+                b.text = bold(line.substr(digits + 2));
+            }
+            v.push_back(b);
+            continue;
+        }
+        if (!v.empty() && v.back().kind == RuleBlock::Bullet && para.empty() && line[0] == ' ') { // a bullet's 2nd line
+            v.back().text += " " + bold(line.substr(line.find_first_not_of(' ')));
+            continue;
+        }
+        para += (para.empty() ? "" : " ") + line;
+    }
+    flush();
+    return v;
+}
+
+void addControls(std::vector<RuleBlock>& v, GameKind g) {
+    auto H = [&](const char* s) { RuleBlock b; b.kind = RuleBlock::Heading; b.text = s; v.push_back(b); };
+    auto B = [&](const char* s) { RuleBlock b; b.kind = RuleBlock::Bullet; b.text = s; v.push_back(b); };
+    H("Kontroller");
+    if (g == GameKind::Tavla) {
+        B("*Zar At* düğmesi (ya da *boşluk*) zarları atar; ilk elde kimin başlayacağını da böyle belirlersiniz.");
+        B("Oynamak için önce pulunun durduğu haneye tıkla, sonra yeşil yanan haneye. Kırık pulun varsa önce o seçilir.");
+        B("Pul toplarken sağdaki toplama alanına tıkla. Yanlış oynadıysan *Geri Al* (ya da *geri tuşu*) son hamleni geri alır.");
+        B("Sağ tık seçimi bırakır. İpuçları açıkken oynayabileceğin pullar parlar, pip sayıları da altta görünür.");
+    } else {
+        B("Sıra sende olunca oynayabileceğin kâğıtlar parlak, oynayamayacakların soluk görünür. Kâğıdın üstüne gelip tıkla.");
+        if (g == GameKind::Batak) B("İhalede ortada açılan panelden sayını ya da *Pas*'ı, ihaleyi alınca kozu seç.");
+        if (g == GameKind::King) B("Seçme sırası sendeyken ortadaki panelden oyunu seç; koz seçersen hangi rengin koz olacağını da sorar.");
+        B("Masaya atılan kâğıtlar bir an ortada kalır, sonra eli alanın önüne gider.");
+    }
+    B("*Yapay Zeka* düğmesi ya da *Y* seni yapay zekaya bırakır; *ESC* ya da *Menü* oyunu duraklatır.");
+}
+
+std::vector<RuleBlock> buildRules(GameKind g) {
+    switch (g) {
+    case GameKind::Tavla:
+    case GameKind::Pisti:
+    case GameKind::Batak:
+    case GameKind::King: {
+        const char* md = g == GameKind::Tavla ? kRules_tavla : g == GameKind::Pisti ? kRules_pisti
+                         : g == GameKind::Batak ? kRules_batak : kRules_king;
+        std::vector<RuleBlock> v = parseRulesMd(md);
+        addControls(v, g);
+        return v;
+    }
+    case GameKind::Okey: return buildRulesOkey();
+    case GameKind::YuzbirEsli: return buildRules101(true);
+    default: return buildRules101(false);
+    }
+}
+
+std::vector<RuleTab> ruleTabsFor(GameKind g) {
+    if (g == GameKind::Tavla || g == GameKind::Pisti || g == GameKind::Batak || g == GameKind::King) {
+        static const char* const shortNames[][2] = {
+            {"Masadan masaya değişenler", "Farklar"}, {"Kahvehane usulleri (değişebilenler)", "Usuller"},
+            {"Kapı, açık pul, kırık pul", "Kırık pul"}, {"Zarların adları", "Zar adları"}, {"Dağıtım ve ihale", "İhale"},
+            {"Koz ve ilk el", "Koz"}, {"Oyun kuralları", "Kurallar"}, {"Kimlerle oynanır?", "Kimlerle"},
+            {"Kim başlar?", "Başlangıç"}, {"Kim seçer?", "Kim seçer"}, {"Puanlar ve maç", "Puanlar"},
+            {"Diziliş ve yön", "Diziliş"}, {"Zarı oynamak", "Zar"}, {"Pul toplamak", "Toplamak"},
+            {"Cezalar (12 el)", "Cezalar"}, {"Koz (8 el)", "Koz"}, {"Elde oyun", "Oyun"}, {"Oyunun sonu", "Son"},
+            {"Eşli batak", "Eşli"}};
+        std::vector<RuleTab> tabs;
+        for (const RuleBlock& b : buildRules(g)) {
+            if (b.kind != RuleBlock::Heading) continue;
+            std::string label = b.text;
+            for (const auto& sn : shortNames)
+                if (b.text == sn[0]) label = sn[1];
+            if (label.size() > 14) label = label.substr(0, label.find(' '));
+            tabs.push_back({label, b.text});
+        }
+        if (tabs.size() > 8) tabs.erase(tabs.begin() + 7, tabs.end() - 1); // keep the controls tab
+        return tabs;
+    }
+    switch (g) {
+    case GameKind::Okey:
+        return {{"Taşlar", "Taşlar ve okey"}, {"Tur", "Dağıtım ve tur"}, {"Perler", "Perler"}, {"Bitmek", "Bitmek"},
+                {"Gösterge", "Gösterge"},    {"Puanlama", "Puanlama"},     {"Kontroller", "Kontroller"}};
+    case GameKind::YuzbirEsli:
+        return {{"Eşli", "Eşli oyun"},   {"Taşlar", "Taşlar"},     {"Tur", "Sıra ve tur"},
+                {"Perler", "Perler: seri, grup, çift"}, {"El açmak", "Elini açmak"}, {"Cezalar", "Cezalar"},
+                {"Puanlama", "Puanlama"}, {"Kontroller", "Kontroller"}};
+    default:
+        return {{"Taşlar", "Taşlar"},      {"Okey", "Gösterge ve okey"}, {"Tur", "Sıra ve tur"},
+                {"Perler", "Perler: seri, grup, çift"}, {"El açmak", "Elini açmak"}, {"Cezalar", "Cezalar"},
+                {"Puanlama", "Puanlama"}, {"Kontroller", "Kontroller"}};
+    }
+}
+
 // ---------------------------------------------------------------- confetti
 struct Confetti {
     Vector2 p{0, 0};
@@ -733,6 +1010,80 @@ void drawPencil(Vector2 p, float angleDeg) {
     rlPopMatrix();
 }
 
+// ---------------------------------------------------------------- the games
+const GameInfo kGames[(int)GameKind::Count] = {
+    {"101", "101", "4 kişi", "Per aç, 101'i geç, elini bitir. Düşük puan kazanır."},
+    {"Eşli 101", "EŞLİ 101", "4 kişi \xC2\xB7 eşli", "Karşındaki ortağın: biriniz bitirince ötekinin eli silinir."},
+    {"Okey", "OKEY", "4 kişi", "14 taşı per ya da yedi çift yap, 15.'yü atıp bit. 20'den geri sayılır."},
+    {"Tavla", "TAVLA", "2 kişi", "Zarı at, pullarını topla. Mars iki sayı."},
+    {"Pişti", "PİŞTİ", "4 kişi", "Aynı kağıt ya da vale yerdekileri alır. Tek kağıda pişti!"},
+    {"Batak", "BATAK", "4 kişi", "İhaleyi al, kozu sen söyle; sözünü tutamazsan batarsın."},
+    {"King", "KING", "4 kişi", "Yirmi el: cezalardan kaç, kozda el topla."},
+};
+
+// ---------------------------------------------------------------- small drawings (game cards)
+// A card suit (0 maça, 1 kupa, 2 karo, 3 sinek) centred at c, about `s` tall.
+void drawSuit(Vector2 c, float s, int suit, Color col) {
+    const float r = s * 0.27f;
+    switch (suit) {
+    case 1: // kupa (heart)
+        DrawCircleV({c.x - r * 0.95f, c.y - r * 0.55f}, r, col);
+        DrawCircleV({c.x + r * 0.95f, c.y - r * 0.55f}, r, col);
+        tri({c.x - r * 1.9f, c.y - r * 0.35f}, {c.x, c.y + s * 0.5f}, {c.x + r * 1.9f, c.y - r * 0.35f}, col);
+        break;
+    case 2: // karo (diamond)
+        tri({c.x, c.y - s * 0.5f}, {c.x - s * 0.36f, c.y}, {c.x + s * 0.36f, c.y}, col);
+        tri({c.x - s * 0.36f, c.y}, {c.x, c.y + s * 0.5f}, {c.x + s * 0.36f, c.y}, col);
+        break;
+    case 3: // sinek (club)
+        DrawCircleV({c.x, c.y - r * 1.05f}, r, col);
+        DrawCircleV({c.x - r * 1.05f, c.y + r * 0.3f}, r, col);
+        DrawCircleV({c.x + r * 1.05f, c.y + r * 0.3f}, r, col);
+        tri({c.x, c.y}, {c.x - r * 0.9f, c.y + s * 0.5f}, {c.x + r * 0.9f, c.y + s * 0.5f}, col);
+        break;
+    default: // maça (spade)
+        DrawCircleV({c.x - r * 0.95f, c.y + r * 0.35f}, r, col);
+        DrawCircleV({c.x + r * 0.95f, c.y + r * 0.35f}, r, col);
+        tri({c.x - r * 1.9f, c.y + r * 0.15f}, {c.x + r * 1.9f, c.y + r * 0.15f}, {c.x, c.y - s * 0.5f}, col);
+        tri({c.x, c.y + r * 0.2f}, {c.x - r * 0.9f, c.y + s * 0.5f}, {c.x + r * 0.9f, c.y + s * 0.5f}, col);
+        break;
+    }
+}
+
+// A playing card face (corner index + a big suit), tilted by `deg` around its centre.
+void drawMiniCard(Vector2 c, float w, float deg, const char* idx, int suit) {
+    const float h = w * 1.42f;
+    rlPushMatrix();
+    rlTranslatef(c.x, c.y, 0.f);
+    rlRotatef(deg, 0.f, 0.f, 1.f);
+    DrawRectangleRounded({-w * 0.5f + 2.f, -h * 0.5f + 4.f, w, h}, 0.14f, 6, rgba(0, 0, 0, 0.35f));
+    DrawRectangleRounded({-w * 0.5f, -h * 0.5f, w, h}, 0.14f, 6, Color{246, 240, 226, 255});
+    DrawRectangleRoundedLinesEx({-w * 0.5f, -h * 0.5f, w, h}, 0.14f, 6, 1.f, Color{150, 132, 110, 255});
+    const Color col = (suit == 1 || suit == 2) ? Color{186, 32, 36, 255} : Color{30, 28, 34, 255};
+    drawText(FontId::UiBold, idx, {-w * 0.5f + 5.f, -h * 0.5f + 3.f}, w * 0.3f, col);
+    drawSuit({-w * 0.5f + 5.f + w * 0.1f, -h * 0.5f + w * 0.42f}, w * 0.16f, suit, col);
+    drawSuit({0.f, h * 0.06f}, w * 0.5f, suit, col);
+    rlPopMatrix();
+}
+
+// A die showing `n` pips.
+void drawMiniDie(Vector2 c, float s, int n, float deg) {
+    rlPushMatrix();
+    rlTranslatef(c.x, c.y, 0.f);
+    rlRotatef(deg, 0.f, 0.f, 1.f);
+    DrawRectangleRounded({-s * 0.5f + 2.f, -s * 0.5f + 4.f, s, s}, 0.25f, 6, rgba(0, 0, 0, 0.35f));
+    DrawRectangleRounded({-s * 0.5f, -s * 0.5f, s, s}, 0.25f, 6, Color{244, 238, 222, 255});
+    DrawRectangleRoundedLinesEx({-s * 0.5f, -s * 0.5f, s, s}, 0.25f, 6, 1.f, Color{150, 132, 110, 255});
+    const float o = s * 0.26f, pr = s * 0.085f;
+    const Color pc{40, 30, 26, 255};
+    auto pip = [&](float x, float y) { DrawCircleV({x, y}, pr, pc); };
+    if (n % 2 == 1) pip(0, 0);
+    if (n >= 2) { pip(-o, -o); pip(o, o); }
+    if (n >= 4) { pip(o, -o); pip(-o, o); }
+    if (n == 6) { pip(-o, 0); pip(o, 0); }
+    rlPopMatrix();
+}
+
 // ---------------------------------------------------------------- clipping in virtual units
 void beginClip(Rectangle r) {
     const Viewport& vp = currentViewport();
@@ -758,8 +1109,9 @@ constexpr Rectangle SetPanel{330, 40, 940, 820};
 constexpr float SetLabelX = 385.f;
 constexpr float SetCtrlX = 720.f;
 // name, hands, level, anim, hints, katlamalı, yandan ceza | sfx, ambient, music
-constexpr float SetRowY[10] = {206, 258, 310, 362, 414, 466, 518, 612, 662, 712};
-constexpr float SetSoundY = 564.f;  // the SES section heading
+constexpr float SetRowH = 50.f;     // rows of the settings list; section headings take SetHeadH
+constexpr float SetHeadH = 40.f;
+constexpr float SetTopY = 150.f;    // the first section heading
 constexpr Rectangle SetName{720, 183, 340, 46};
 constexpr Rectangle SetDefaults{385, 778, 230, 54};
 constexpr Rectangle SetBack{985, 776, 230, 58};
@@ -781,6 +1133,10 @@ constexpr Rectangle ConfirmNo{805, 478, 220, 58};
 constexpr Rectangle Sheet{170, 16, 1260, 866};
 // match over
 constexpr Rectangle MatchCard{450, 402, 700, 300};
+// game list: four cards on the first row, three on the second
+constexpr float SelCardW = 300.f, SelCardH = 268.f, SelGap = 28.f;
+constexpr float SelRowY[2] = {178.f, 476.f};
+constexpr Rectangle SelBack{690, 790, 220, 58};
 constexpr Rectangle MatchNew{530, 736, 250, 64};
 constexpr Rectangle MatchMenu{820, 736, 250, 64};
 } // namespace L
@@ -790,18 +1146,13 @@ enum ClickId {
     C_Play, C_WatchAi, C_TitleRules, C_TitleSettings, C_Quit,
     C_Back, C_Defaults, C_Hands, C_Level, C_Anim, C_Sfx, C_Ambient, C_Music, C_Hints, C_Katlamali, C_YandanCeza, C_Name,
     C_Resume, C_PauseAi, C_PauseRules, C_PauseSettings, C_PauseMenu, C_ConfirmYes, C_ConfirmNo,
-    C_Next, C_NewGame, C_MatchMenu, C_RulesTab,
+    C_Next, C_NewGame, C_MatchMenu, C_RulesTab, C_GameCard, C_SelBack, C_OkeyStart, C_TavlaPoints,
+    C_BatakEsli, C_BatakTarget, C_PistiTarget, C_PistiMode,
 };
 
-// Rules section tabs: label and the heading they jump to.
-const char* const kRuleTabs[][2] = {
-    {"Taşlar", "Taşlar"},          {"Okey", "Gösterge ve okey"}, {"Tur", "Sıra ve tur"},
-    {"Perler", "Perler: seri, grup, çift"}, {"El açmak", "Elini açmak"}, {"Cezalar", "Cezalar"},
-    {"Puanlama", "Puanlama"},      {"Kontroller", "Kontroller"},
-};
-constexpr int kRuleTabCount = 8;
 
-constexpr int kScreenCount = 7;
+
+constexpr int kScreenCount = 8;
 
 } // namespace
 
@@ -833,14 +1184,16 @@ struct Screens::Impl {
     bool nameEditing = false;
     std::string nameBuf;
     std::string nameBefore; // name when editing started (ESC restores it)
-    float toggleAnim[6] = {1, 1, 1, 1, 0, 1}; // sfx, ambient, music, hints, katlamalı, yandan ceza
+    float toggleAnim[7] = {1, 1, 1, 1, 0, 1, 0}; // sfx, ambient, music, hints, katlamalı, yandan ceza, eşli batak
 
     // rules
     std::vector<RuleBlock> rules;
     bool rulesLaidOut = false;
     float rulesContentH = 0.f;
     float scroll = 0.f, scrollTarget = 0.f;
-    float tabY[kRuleTabCount] = {};   // content y of each tab's heading
+    int rulesGame = -1;               // the game the page was built for
+    std::vector<RuleTab> tabs;
+    std::vector<float> tabY;          // content y of each tab's heading
     bool draggingThumb = false;
     float dragOffset = 0.f;
 
@@ -861,6 +1214,7 @@ struct Screens::Impl {
     // null game) while the screen is still fading out, so the fading layer is drawn from this copy.
     std::optional<okey::Game> frozen;
     bool freezePending = false;
+    std::optional<SheetModel> sheet; // the other games' sheet (set by App), drawn instead of the okey game's
 
     FadeShader fadeShader;
 
@@ -917,6 +1271,7 @@ struct Screens::Impl {
             toggleAnim[3] = settings.hints ? 1.f : 0.f;
             toggleAnim[4] = settings.katlamali ? 1.f : 0.f;
             toggleAnim[5] = settings.yandanCeza ? 1.f : 0.f;
+            toggleAnim[6] = settings.batakEsli ? 1.f : 0.f;
             break;
         case ScreenId::Rules:
             scroll = scrollTarget = 0.f;
@@ -953,13 +1308,24 @@ struct Screens::Impl {
 
     // Seats sharing the lowest match total. Game::leaderSeat() alone settles a tie by seat order, which would
     // crown one of them silently; the sheet and the final standings show a shared first place instead.
+    // Klasik okey: the highest total leads; eşli 101: both seats of the team with the lower combined total.
+    static int standing(const okey::Game& g, int s) {
+        if (g.classic()) return -g.player(s).totalScore;
+        if (g.teams()) return g.teamTotal(s);
+        return g.player(s).totalScore;
+    }
     static std::vector<int> coLeaders(const okey::Game& g) {
-        int best = g.player(0).totalScore;
-        for (int s = 1; s < okey::NUM_PLAYERS; ++s) best = std::min(best, g.player(s).totalScore);
+        int best = standing(g, 0);
+        for (int s = 1; s < okey::NUM_PLAYERS; ++s) best = std::min(best, standing(g, s));
         std::vector<int> v;
         for (int s = 0; s < okey::NUM_PLAYERS; ++s)
-            if (g.player(s).totalScore == best) v.push_back(s);
+            if (standing(g, s) == best) v.push_back(s);
         return v;
+    }
+    // "Sen ve Kel Mahmut" for a team (eşli 101)
+    std::string teamName(const okey::Game& g, int s) const {
+        const int a = std::min(s, okey::Game::partnerOf(s)), b = std::max(s, okey::Game::partnerOf(s));
+        return seatName(g, a) + " ve " + seatName(g, b);
     }
     // A seat's name on the sheet and the final standings: the human's seat says who played it in the Yapay Zeka
     // mode ("Yapay Zeka (Sen)").
@@ -992,6 +1358,7 @@ struct Screens::Impl {
 
     static bool isLastHand(const okey::Game* g) {
         if (!g) return false;
+        if (g->classic()) return g->handState() == okey::HandState::MatchOver;
         return g->handState() == okey::HandState::MatchOver ||
                (int)g->player(0).handScores.size() >= g->numHands();
     }
@@ -1045,8 +1412,38 @@ struct Screens::Impl {
         sfx(Sfx::Button);
         switch (c.id) {
         case C_Play:
+            show(ScreenId::GameSelect);
+            return ScreenAction::None;
+        case C_GameCard:
+            if (c.value < 0 || c.value >= (int)GameKind::Count || !gameAvailable((GameKind)c.value)) return ScreenAction::None;
+            if (settings.game != c.value) {
+                settings.game = c.value;
+                rulesLaidOut = false; // the rules page follows the game
+                settingsDirty = true; // remembered (reported as SettingsChanged by the next update)
+            }
             show(ScreenId::None);
             return ScreenAction::StartMatch;
+        case C_SelBack:
+            show(ScreenId::Title);
+            return ScreenAction::None;
+        case C_OkeyStart:
+            settings.okeyStart = kOkeyStartChoices[std::clamp(c.value, 0, 2)];
+            return ScreenAction::SettingsChanged;
+        case C_TavlaPoints:
+            settings.tavlaPoints = kTavlaChoices[std::clamp(c.value, 0, 2)];
+            return ScreenAction::SettingsChanged;
+        case C_BatakEsli:
+            settings.batakEsli = !settings.batakEsli;
+            return ScreenAction::SettingsChanged;
+        case C_BatakTarget:
+            settings.batakTarget = kBatakTargets[std::clamp(c.value, 0, 2)];
+            return ScreenAction::SettingsChanged;
+        case C_PistiTarget:
+            settings.pistiTarget = kPistiTargets[std::clamp(c.value, 0, 1)];
+            return ScreenAction::SettingsChanged;
+        case C_PistiMode:
+            settings.pistiMode = std::clamp(c.value, 0, 2);
+            return ScreenAction::SettingsChanged;
         case C_WatchAi:
             show(ScreenId::None);
             return ScreenAction::StartAiMatch;
@@ -1069,7 +1466,8 @@ struct Screens::Impl {
             return changed ? ScreenAction::SettingsChanged : ScreenAction::None;
         }
         case C_Defaults: {
-            const Settings d;
+            Settings d;
+            d.game = settings.game; // "Varsayılanlar" resets the options, not the game being played
             settings = d;
             nameEditing = false;
             nameBuf = settings.playerName;
@@ -1120,7 +1518,7 @@ struct Screens::Impl {
             confirmQuit = false;
             return ScreenAction::None;
         case C_Next:
-            if (isLastHand(g)) {
+            if (sheet ? sheet->last : isLastHand(g)) {
                 show(ScreenId::MatchOver);
                 return ScreenAction::ShowMatchResult;
             }
@@ -1133,7 +1531,7 @@ struct Screens::Impl {
             show(ScreenId::Title);
             return ScreenAction::ToTitle;
         case C_RulesTab:
-            if (rulesLaidOut && c.value >= 0 && c.value < kRuleTabCount)
+            if (rulesLaidOut && c.value >= 0 && c.value < (int)tabY.size())
                 scrollTarget = std::clamp(tabY[c.value] - 6.f, 0.f, maxScroll());
             return ScreenAction::None;
         default:
@@ -1199,6 +1597,10 @@ struct Screens::Impl {
         case ScreenId::MatchOver:
             if (!clicked && settled && enter) merge(handleClick({cur, C_NewGame, 0}, g));
             break;
+        case ScreenId::GameSelect:
+            if (!clicked && IsKeyPressed(KEY_ESCAPE)) show(ScreenId::Title);
+            else if (!clicked && settled && enter) merge(handleClick({cur, C_GameCard, settings.game}, g));
+            break;
         }
 
         // 3. animations
@@ -1208,9 +1610,9 @@ struct Screens::Impl {
     }
 
     ScreenAction updateSettings(float dt, Vector2 m, bool clicked) {
-        const bool on[6] = {settings.sfx,   settings.ambient,   settings.music,
-                            settings.hints, settings.katlamali, settings.yandanCeza};
-        for (int i = 0; i < 6; ++i) toggleAnim[i] = approach(toggleAnim[i], on[i] ? 1.f : 0.f, 16.f, dt);
+        const bool on[7] = {settings.sfx,   settings.ambient,   settings.music,    settings.hints,
+                            settings.katlamali, settings.yandanCeza, settings.batakEsli};
+        for (int i = 0; i < 7; ++i) toggleAnim[i] = approach(toggleAnim[i], on[i] ? 1.f : 0.f, 16.f, dt);
 
         ScreenAction act = ScreenAction::None;
         if (nameEditing) {
@@ -1244,8 +1646,12 @@ struct Screens::Impl {
 
     // ------------------------------------------------------------ rules layout & scrolling
     void ensureRulesLayout() {
-        if (rulesLaidOut) return;
-        if (rules.empty()) rules = buildRules();
+        const int game = std::clamp(settings.game, 0, (int)GameKind::Count - 1);
+        if (rulesLaidOut && rulesGame == game) return;
+        rulesGame = game;
+        rules = buildRules((GameKind)game);
+        tabs = ruleTabsFor((GameKind)game);
+        tabY.assign(tabs.size(), 0.f);
         const float width = L::RulesView.width;
         const float size = 21.f, lineH = 29.f;
         float y = 6.f;
@@ -1256,8 +1662,8 @@ struct Screens::Impl {
                 if (i > 0) y += 22.f;
                 b.y = y;
                 b.h = 42.f;
-                for (int t = 0; t < kRuleTabCount; ++t)
-                    if (b.text == kRuleTabs[t][1]) tabY[t] = y;
+                for (size_t t = 0; t < tabs.size(); ++t)
+                    if (b.text == tabs[t].heading) tabY[t] = y;
                 y += b.h + 6.f;
                 break;
             case RuleBlock::Para:
@@ -1430,6 +1836,7 @@ struct Screens::Impl {
         case ScreenId::Paused: drawPaused(m, g); break;
         case ScreenId::HandSummary: drawHandSummary(m, g); break;
         case ScreenId::MatchOver: drawMatchOver(m, g); break;
+        case ScreenId::GameSelect: drawGameSelect(m); break;
         case ScreenId::None: break;
         }
     }
@@ -1542,7 +1949,13 @@ struct Screens::Impl {
         DrawLineEx({-360.f, 150.f}, {-120.f, 150.f}, 2.f, alphaMul(kGold, 0.7f));
         DrawLineEx({120.f, 150.f}, {360.f, 150.f}, 2.f, alphaMul(kGold, 0.7f));
         // --- "101" neon
-        drawNeonText("101", {0.f, 198.f}, 100.f, 12.f, neonFlicker(time));
+        {
+            const std::string neon = gameInfo((GameKind)std::clamp(settings.game, 0, (int)GameKind::Count - 1)).neon;
+            float ns = 100.f;
+            const float nw = measureText(FontId::Sign, neon, ns, 12.f).x;
+            if (nw > 640.f) ns *= 640.f / nw;
+            drawNeonText(neon, {0.f, 198.f}, ns, 12.f, neonFlicker(time));
+        }
 
         // --- enamel plaque "Kıraathane" hanging below
         const float py = H + 26.f;
@@ -1571,9 +1984,111 @@ struct Screens::Impl {
         beginClip({c.x - ms.x * 0.5f - 20.f, c.y - ms.y * 0.36f - 10.f, ms.x + 40.f, ms.y * 0.36f + 10.f});
     }
 
+    // ------------------------------------------------------------ game list
+    Rectangle gameCardRect(int k) const {
+        const int row = k < 4 ? 0 : 1;
+        const int n = row == 0 ? 4 : 3;
+        const int i = row == 0 ? k : k - 4;
+        const float total = (float)n * L::SelCardW + (float)(n - 1) * L::SelGap;
+        return {800.f - total * 0.5f + (float)i * (L::SelCardW + L::SelGap), L::SelRowY[row], L::SelCardW, L::SelCardH};
+    }
+
+    // The little picture on top of a game's card.
+    void drawGameEmblem(GameKind k, Vector2 c) {
+        enum { Y = 0, M = 1, K = 2, R = 3 };
+        auto tiles = [&](std::vector<MiniTile> ts, float y) {
+            const float w = kMiniW * 1.05f, h = kMiniH * 1.05f;
+            const float tw = (float)ts.size() * w + (float)(ts.size() - 1) * kMiniGap;
+            float x = c.x - tw * 0.5f;
+            for (const MiniTile& t : ts) {
+                drawMiniTile({x, y - h * 0.5f, w, h}, t);
+                x += w + kMiniGap;
+            }
+        };
+        switch (k) {
+        case GameKind::Yuzbir: tiles({T(R, 10), T(R, 11), T(R, 12), T(R, 13)}, c.y); break;
+        case GameKind::YuzbirEsli: tiles({T(M, 8), T(Y, 8), T(K, 8), T(R, 8)}, c.y); break;
+        case GameKind::Okey: tiles({T(K, 5), TOkey(), T(K, 7), TFake()}, c.y); break;
+        case GameKind::Tavla:
+            DrawCircleV({c.x - 70.f, c.y + 14.f}, 22.f, Color{232, 222, 198, 255});
+            DrawRing({c.x - 70.f, c.y + 14.f}, 14.f, 16.f, 0, 360, 24, Color{180, 160, 130, 255});
+            DrawCircleV({c.x + 70.f, c.y + 14.f}, 22.f, Color{70, 28, 22, 255});
+            DrawRing({c.x + 70.f, c.y + 14.f}, 14.f, 16.f, 0, 360, 24, Color{120, 60, 44, 255});
+            drawMiniDie({c.x - 24.f, c.y - 4.f}, 46.f, 6, -12.f);
+            drawMiniDie({c.x + 28.f, c.y + 2.f}, 46.f, 5, 9.f);
+            break;
+        case GameKind::Pisti:
+            drawMiniCard({c.x - 34.f, c.y + 4.f}, 52.f, -14.f, "V", 3);
+            drawMiniCard({c.x + 34.f, c.y + 4.f}, 52.f, 12.f, "V", 2);
+            break;
+        case GameKind::Batak:
+            drawMiniCard({c.x - 46.f, c.y + 8.f}, 50.f, -16.f, "A", 0);
+            drawMiniCard({c.x, c.y}, 50.f, 0.f, "P", 0);
+            drawMiniCard({c.x + 46.f, c.y + 8.f}, 50.f, 16.f, "K", 0);
+            break;
+        case GameKind::King:
+            drawMiniCard({c.x - 30.f, c.y + 6.f}, 52.f, -10.f, "K", 1);
+            drawMiniCard({c.x + 30.f, c.y + 6.f}, 52.f, 10.f, "P", 1);
+            break;
+        default: break;
+        }
+    }
+
+    void drawGameSelect(Vector2 m) {
+        const float age = ageOf(ScreenId::GameSelect);
+        drawDim(0.6f);
+        drawHeader("Ne oynayalım?", {800.f, 84.f}, 58.f, kGold);
+        drawTextCentered(FontId::Ui, "Masaya otur, oyunu seç. Kurallar her oyunun kendi sayfasında.", {800.f, 134.f}, 20.f,
+                         alphaMul(pal::TextLight, 0.7f));
+        const int sel = std::clamp(settings.game, 0, (int)GameKind::Count - 1);
+        for (int k = 0; k < (int)GameKind::Count; ++k) {
+            const GameKind gk = (GameKind)k;
+            const GameInfo& info = gameInfo(gk);
+            const bool avail = gameAvailable(gk);
+            const float a = clamp01((age - 0.05f * (float)k) / 0.3f);
+            Rectangle r = gameCardRect(k);
+            r.y += (1.f - easeOutCubic(a)) * 30.f;
+            const bool hover = avail && pointInRect(m, r) && a > 0.9f;
+            if (hover) {
+                r.y -= 4.f;
+                requestHandCursor();
+            }
+            // the board: dark walnut with a brass edge; the last game played glows
+            if (k == sel && avail)
+                DrawRectangleRounded({r.x - 7.f, r.y - 7.f, r.width + 14.f, r.height + 14.f}, 0.1f, 10,
+                                     alphaMul(pal::Highlight, (0.16f + 0.06f * std::sin(time * 2.2f)) * a));
+            DrawRectangleRounded({r.x + 5.f, r.y + 9.f, r.width, r.height}, 0.08f, 10, rgba(0, 0, 0, 0.45f * a));
+            DrawRectangleRounded(r, 0.08f, 10, alphaMul(Color{58, 32, 18, 255}, a));
+            const Rectangle in{r.x + 8.f, r.y + 8.f, r.width - 16.f, r.height - 16.f};
+            DrawRectangleRounded(in, 0.07f, 10, alphaMul(hover ? Color{104, 58, 30, 255} : Color{86, 46, 24, 255}, a));
+            DrawRectangleRoundedLinesEx(in, 0.07f, 10, hover ? 2.5f : 1.5f, alphaMul(kGold, (hover ? 0.95f : 0.55f) * a));
+            drawGameEmblem(gk, {r.x + r.width * 0.5f, r.y + 66.f});
+            drawTextCentered(FontId::Sign, info.name, {r.x + r.width * 0.5f + 2.f, r.y + 140.f}, 40.f, rgba(0, 0, 0, 0.5f * a));
+            drawTextCentered(FontId::Sign, info.name, {r.x + r.width * 0.5f, r.y + 137.f}, 40.f, alphaMul(kGold, a));
+            drawTextCentered(FontId::UiBold, info.players, {r.x + r.width * 0.5f, r.y + 172.f}, 17.f,
+                             alphaMul(pal::Brass, 0.9f * a), 2.f);
+            drawTextWrapped(FontId::Ui, info.blurb, {r.x + 24.f, r.y + 192.f, r.width - 48.f, 64.f}, 17.f,
+                            alphaMul(pal::TextLight, 0.78f * a), 2.f);
+            if (!avail) {
+                DrawRectangleRounded(in, 0.07f, 10, rgba(20, 10, 6, 0.55f * a));
+                const Rectangle stamp{r.x + r.width * 0.5f - 74.f, r.y + 46.f, 148.f, 40.f};
+                rlPushMatrix();
+                rlTranslatef(stamp.x + stamp.width * 0.5f, stamp.y + stamp.height * 0.5f, 0.f);
+                rlRotatef(-8.f, 0.f, 0.f, 1.f);
+                DrawRectangleRoundedLinesEx({-stamp.width * 0.5f, -stamp.height * 0.5f, stamp.width, stamp.height}, 0.3f, 8,
+                                            2.5f, alphaMul(kMarginRed, 0.9f * a));
+                drawTextCentered(FontId::UiBold, "YAKINDA", {0.f, -2.f}, 24.f, alphaMul(kMarginRed, 0.95f * a), 3.f);
+                rlPopMatrix();
+            }
+            if (avail && hit(r, C_GameCard + 1000 + k, m)) click(C_GameCard, k);
+        }
+        if (drawButton(L::SelBack, "Geri", m, true, ButtonStyle::Wood, 28.f)) click(C_SelBack);
+        drawText(FontId::Ui, "Kurallar için ana menüdeki Kurallar düğmesi", {L::SelBack.x + L::SelBack.width + 40.f, 806.f},
+                 17.f, alphaMul(pal::TextLight, 0.5f));
+    }
+
     // ------------------------------------------------------------ settings
-    void settingRow(int row, const char* label, const std::string& hint) {
-        const float cy = L::SetRowY[row];
+    void settingRow(float cy, const char* label, const std::string& hint) {
         if (hint.empty()) {
             drawTextShadow(FontId::UiBold, label, {L::SetLabelX, cy - 15.f}, 27.f, pal::TextLight);
         } else {
@@ -1623,24 +2138,40 @@ struct Screens::Impl {
         if (hit(area, id, m)) click(id);
     }
 
+    int selectedOkeyStart() const {
+        int best = 0;
+        for (int i = 0; i < 3; ++i)
+            if (std::abs(kOkeyStartChoices[i] - settings.okeyStart) < std::abs(kOkeyStartChoices[best] - settings.okeyStart))
+                best = i;
+        return best;
+    }
+
     void drawSettings(Vector2 m) {
         drawDim(0.55f);
         drawPanel(L::SetPanel, PanelStyle::Wood);
         drawHeader("Ayarlar", {800.f, 94.f}, 54.f, kGold);
         brassRule(L::SetPanel.x + 50.f, L::SetPanel.x + L::SetPanel.width - 50.f, 136.f);
 
-        auto section = [&](const char* s, float y) {
+        // a running list: section headings and rows, the game's own rules in the middle
+        float y = L::SetTopY;
+        auto section = [&](const std::string& s) {
             drawText(FontId::UiBold, s, {L::SetLabelX, y}, 17.f, alphaMul(pal::Brass, 0.9f), 4.f);
             const float w = measureText(FontId::UiBold, s, 17.f, 4.f).x;
             DrawLineEx({L::SetLabelX + w + 14.f, y + 10.f}, {L::SetPanel.x + L::SetPanel.width - 55.f, y + 10.f}, 1.f,
                        alphaMul(pal::Brass, 0.3f));
+            y += L::SetHeadH;
         };
-        section("OYUN", 156.f);
-        section("SES", L::SetSoundY);
+        auto row = [&]() {
+            const float cy = y + 16.f;
+            y += L::SetRowH;
+            return cy;
+        };
+        section("OYUN");
 
         // player name
-        settingRow(0, "Oyuncu adı", "En fazla 12 harf");
         {
+            const float cy = row();
+            settingRow(cy, "Oyuncu adı", "En fazla 12 harf");
             const Rectangle f = L::SetName;
             const bool hover = pointInRect(m, f);
             DrawRectangleRounded({f.x, f.y + 2.f, f.width, f.height}, 0.2f, 8, rgba(0, 0, 0, 0.35f));
@@ -1663,32 +2194,81 @@ struct Screens::Impl {
             if (hit(f, C_Name, m)) click(C_Name);
         }
 
-        settingRow(1, "El sayısı", "Maç kaç el sürsün?");
-        chipRow(C_Hands, {"1", "3", "5", "7", "9", "11"}, selectedHands(), L::SetRowY[1], 66.f, 12.f, m, 25.f);
-
         const int lvl = std::clamp(settings.difficulty, 0, 2);
-        settingRow(2, "Rakip seviyesi", kLevelHints[lvl]);
-        chipRow(C_Level, {kLevelNames[0], kLevelNames[1], kLevelNames[2]}, lvl, L::SetRowY[2], 146.f, 12.f, m, 24.f);
+        float cy = row();
+        settingRow(cy, "Rakip seviyesi", kLevelHints[lvl]);
+        chipRow(C_Level, {kLevelNames[0], kLevelNames[1], kLevelNames[2]}, lvl, cy, 146.f, 12.f, m, 24.f);
 
-        settingRow(3, "Animasyon hızı", "Taşların ve rakiplerin hızı");
-        chipRow(C_Anim, {"Yavaş", "Normal", "Hızlı"}, selectedAnim(), L::SetRowY[3], 146.f, 12.f, m, 24.f);
+        cy = row();
+        settingRow(cy, "Animasyon hızı", "Taşların ve rakiplerin hızı");
+        chipRow(C_Anim, {"Yavaş", "Normal", "Hızlı"}, selectedAnim(), cy, 146.f, 12.f, m, 24.f);
 
-        settingRow(4, "İpuçları", "Geçerli perler, açma sayacı ve işlek taşlar");
-        toggle(C_Hints, 3, settings.hints, L::SetRowY[4], m);
-        settingRow(5, "Katlamalı oyun", "Her açan, öncekinden en az 1 fazlasıyla açar");
-        toggle(C_Katlamali, 4, settings.katlamali, L::SetRowY[5], m);
-        settingRow(6, "Yandan açma cezası", "Atana taşın sayısı \xC3\x97" "10, çiftte \xC3\x97" "20");
-        toggle(C_YandanCeza, 5, settings.yandanCeza, L::SetRowY[6], m);
+        cy = row();
+        settingRow(cy, "İpuçları", "Oynanabilir hamleler ve sayaçlar");
+        toggle(C_Hints, 3, settings.hints, cy, m);
 
-        settingRow(7, "Efekt sesleri", "Taş, çay kaşığı ve düğme sesleri");
-        toggle(C_Sfx, 0, settings.sfx, L::SetRowY[7], m);
-        settingRow(8, "Ortam sesi", "Kalabalık, vantilatör, televizyon");
-        toggle(C_Ambient, 1, settings.ambient, L::SetRowY[8], m);
-        settingRow(9, "Radyo", "Türküler ve eski plaklar");
-        toggle(C_Music, 2, settings.music, L::SetRowY[9], m);
+        // the selected game's own rules
+        const GameKind game = (GameKind)std::clamp(settings.game, 0, (int)GameKind::Count - 1);
+        std::string upper = gameInfo(game).neon;
+        section(upper + " KURALLARI");
+        switch (game) {
+        case GameKind::Yuzbir:
+        case GameKind::YuzbirEsli:
+            cy = row();
+            settingRow(cy, "El sayısı", "Maç kaç el sürsün?");
+            chipRow(C_Hands, {"1", "3", "5", "7", "9", "11"}, selectedHands(), cy, 66.f, 12.f, m, 25.f);
+            cy = row();
+            settingRow(cy, "Katlamalı oyun", "Her açan, öncekinden en az 1 fazlasıyla açar");
+            toggle(C_Katlamali, 4, settings.katlamali, cy, m);
+            cy = row();
+            settingRow(cy, "Yandan açma cezası", "Atana taşın sayısı \xC3\x97" "10, çiftte \xC3\x97" "20");
+            toggle(C_YandanCeza, 5, settings.yandanCeza, cy, m);
+            break;
+        case GameKind::Okey:
+            cy = row();
+            settingRow(cy, "Başlangıç puanı", "Herkes bununla başlar, sıfıra inen oyunu bitirir");
+            chipRow(C_OkeyStart, {"6", "12", "20"}, selectedOkeyStart(), cy, 66.f, 12.f, m, 25.f);
+            break;
+        case GameKind::Tavla:
+            cy = row();
+            settingRow(cy, "Maç", "Kaç sayıya oynansın? (mars iki sayı)");
+            chipRow(C_TavlaPoints, {"3", "5", "7"}, closest(kTavlaChoices, settings.tavlaPoints), cy, 66.f, 12.f, m, 25.f);
+            break;
+        case GameKind::Batak:
+            cy = row();
+            settingRow(cy, "Eşli batak", "Karşındaki ortağın, puanlar takıma");
+            toggle(C_BatakEsli, 6, settings.batakEsli, cy, m);
+            cy = row();
+            settingRow(cy, "Oyun sonu", "Bu puana ilk ulaşan kazanır");
+            chipRow(C_BatakTarget, {"31", "51", "71"}, closest(kBatakTargets, settings.batakTarget), cy, 66.f, 12.f, m, 25.f);
+            break;
+        case GameKind::Pisti:
+            cy = row();
+            settingRow(cy, "Masa", "Dört kişi tek tek, eşli ya da sen ve Kel Mahmut");
+            chipRow(C_PistiMode, {"4 kişi", "Eşli", "2 kişi"}, std::clamp(settings.pistiMode, 0, 2), cy, 108.f, 12.f, m, 22.f);
+            cy = row();
+            settingRow(cy, "Oyun sonu", "Bu puana ilk ulaşan kazanır");
+            chipRow(C_PistiTarget, {"101", "151"}, closest(kPistiTargets, settings.pistiTarget), cy, 78.f, 12.f, m, 25.f);
+            break;
+        default:
+            cy = row();
+            settingRow(cy, "Bu oyunun ayarı yok", "Kurallar her kahvede aynı: 20 el, 2 koz 3 ceza");
+            break;
+        }
+
+        section("SES");
+        cy = row();
+        settingRow(cy, "Efekt sesleri", "Taş, çay kaşığı ve düğme sesleri");
+        toggle(C_Sfx, 0, settings.sfx, cy, m);
+        cy = row();
+        settingRow(cy, "Ortam sesi", "Kalabalık, vantilatör, televizyon");
+        toggle(C_Ambient, 1, settings.ambient, cy, m);
+        cy = row();
+        settingRow(cy, "Radyo", "Türküler ve eski plaklar");
+        toggle(C_Music, 2, settings.music, cy, m);
 
         if (backSettings != ScreenId::Title) {
-            drawTextWrapped(FontId::Ui, "El sayısı ve oyun kuralları yeni maçta geçerli olur.", {640.f, 778.f, 330.f, 60.f},
+            drawTextWrapped(FontId::Ui, "Oyunun kuralları yeni maçta geçerli olur.", {640.f, 778.f, 330.f, 60.f},
                             17.f, alphaMul(pal::TextLight, 0.6f), 2.f);
         }
         if (drawButton(L::SetDefaults, "Varsayılanlar", m, true, ButtonStyle::Wood, 22.f)) click(C_Defaults);
@@ -1700,7 +2280,9 @@ struct Screens::Impl {
         ensureRulesLayout();
         drawDim(0.6f);
         drawPanel(L::RulesPanel, PanelStyle::Wood);
-        drawHeader("Nasıl Oynanır?", {800.f, 56.f}, 46.f, kGold);
+        drawHeader(std::string(gameInfo((GameKind)std::clamp(settings.game, 0, (int)GameKind::Count - 1)).name) +
+                       " Nasıl Oynanır?",
+                   {800.f, 56.f}, 46.f, kGold);
         drawRuleTabs(m);
         const Rectangle S = L::RulesSheet;
         drawPanel(S, PanelStyle::Paper);
@@ -1734,31 +2316,31 @@ struct Screens::Impl {
     }
 
     int activeRuleTab() const {
-        if (maxScroll() > 0.f && scroll >= maxScroll() - 1.f) return kRuleTabCount - 1;
+        if (maxScroll() > 0.f && scroll >= maxScroll() - 1.f) return (int)tabs.size() - 1;
         int a = 0;
-        for (int t = 0; t < kRuleTabCount; ++t)
-            if (tabY[t] <= scroll + 60.f) a = t;
+        for (int t = 0; t < (int)tabs.size(); ++t)
+            if (tabY[(size_t)t] <= scroll + 60.f) a = t;
         return a;
     }
 
     void drawRuleTabs(Vector2 m) {
         const float fs = 19.f, h = 32.f, gap = 8.f, pad = 28.f;
         float total = 0.f;
-        float w[kRuleTabCount];
-        for (int t = 0; t < kRuleTabCount; ++t) {
-            w[t] = measureText(FontId::Chalk, kRuleTabs[t][0], fs).x + pad;
+        std::vector<float> w(tabs.size());
+        for (size_t t = 0; t < tabs.size(); ++t) {
+            w[t] = measureText(FontId::Chalk, tabs[t].label, fs).x + pad;
             total += w[t] + (t ? gap : 0.f);
         }
         float x = 800.f - total * 0.5f;
         const int active = activeRuleTab();
-        for (int t = 0; t < kRuleTabCount; ++t) {
+        for (int t = 0; t < (int)tabs.size(); ++t) {
             const Rectangle r{x, L::RulesTabsY - h * 0.5f, w[t], h};
             if (t == active) {
                 DrawRectangleRounded({r.x - 2.f, r.y - 2.f, r.width + 4.f, r.height + 4.f}, 0.35f, 8,
                                      alphaMul(pal::Highlight, 0.85f));
             }
-            if (drawButton(r, kRuleTabs[t][0], m, true, ButtonStyle::Chalk, fs)) click(C_RulesTab, t);
-            x += w[t] + gap;
+            if (drawButton(r, tabs[(size_t)t].label, m, true, ButtonStyle::Chalk, fs)) click(C_RulesTab, t);
+            x += w[(size_t)t] + gap;
         }
     }
 
@@ -1817,8 +2399,9 @@ struct Screens::Impl {
         drawTeaGlass({800.f, P.y + 104.f}, 0.62f, time, 70.f);
         drawHeader("Çay Molası", {800.f, P.y + 148.f}, 46.f, kGold);
         if (g && g->handState() != okey::HandState::NotStarted) {
-            const std::string s = "El " + std::to_string(std::min(g->handIndex() + 1, g->numHands())) + " / " +
-                                  std::to_string(g->numHands());
+            const std::string s = g->classic() ? "Okey \xC2\xB7 " + std::to_string(g->handIndex() + 1) + ". el"
+                                               : "El " + std::to_string(std::min(g->handIndex() + 1, g->numHands())) +
+                                                     " / " + std::to_string(g->numHands());
             drawTextCentered(FontId::Ui, s, {800.f, P.y + 191.f}, 20.f, alphaMul(pal::TextLight, 0.7f));
         }
         const Vector2 bm = confirmQuit ? kNoMouse : m;
@@ -1872,6 +2455,10 @@ struct Screens::Impl {
     };
 
     void drawHandSummary(Vector2 m, const okey::Game* g) {
+        if (sheet) {
+            drawSheetSummary(m, *sheet);
+            return;
+        }
         const float age = ageOf(ScreenId::HandSummary);
         drawDim(0.5f);
         const float slide = (1.f - easeOutCubic(age / 0.45f)) * 46.f;
@@ -1904,8 +2491,10 @@ struct Screens::Impl {
             const float w = handMeasure(title, 62.f).x;
             pencilLine({800.f - w * 0.5f - 18.f, S.y + 86.f}, {800.f - w * 0.5f - 18.f + (w + 36.f) * a, S.y + 84.f},
                        2.2f, alphaMul(kInk, 0.8f * a), 3u);
-            handText("maç: " + std::to_string(handsDone) + " / " + std::to_string(g->numHands()) + " el",
-                     {labelX, S.y + 34.f}, 30.f, alphaMul(kRedPencil, 0.85f * a));
+            const std::string sub = g->classic() ? "okey: " + std::to_string(g->rules().okeyStartPoints) + "'den geriye"
+                                    : std::string(g->teams() ? "eşli maç: " : "maç: ") + std::to_string(handsDone) + " / " +
+                                          std::to_string(g->numHands()) + " el";
+            handText(sub, {labelX, S.y + 34.f}, 30.f, alphaMul(kRedPencil, 0.85f * a));
         }
         // --- who finished + multipliers
         {
@@ -1916,11 +2505,11 @@ struct Screens::Impl {
                        : aiMode                    ? std::string("Eli yapay zeka bitirdi!")
                                                    : std::string("Eli sen bitirdin!");
             } else {
-                line = "Taşlar bitti, eli bitiren olmadı.";
+                line = g->classic() ? "Taşlar bitti, el berabere." : "Taşlar bitti, eli bitiren olmadı.";
             }
             handTextCentered(line, {800.f, S.y + 118.f}, 42.f, alphaMul(kInk, a));
             std::vector<std::string> tags;
-            if (r.finishedWithJoker) tags.push_back("okeyle bitiş \xC3\x97" "2");
+            if (r.finishedWithJoker) tags.push_back(g->classic() ? "okey atarak \xC3\x97" "2" : "okeyle bitiş \xC3\x97" "2");
             if (r.finishedWithPairs) tags.push_back("çiftten bitiş \xC3\x97" "2");
             if (r.finishedInOneGo) tags.push_back("elden bitiş \xC3\x97" "2");
             std::string tagLine;
@@ -1931,7 +2520,8 @@ struct Screens::Impl {
             } else {
                 for (size_t i = 0; i < tags.size(); ++i) tagLine += (i ? "  \xC2\xB7  " : "") + tags[i];
                 if (tags.size() > 1) tagLine += "  =  \xC3\x97" + std::to_string(r.multiplier);
-                tagLine += "   (cezalar hariç tüm puanlar)";
+                tagLine += g->classic() ? "   (herkesten " + std::to_string(2 * r.multiplier) + " düşülür)"
+                                        : std::string("   (cezalar hariç tüm puanlar)");
             }
             handTextCentered(tagLine, {800.f, S.y + 158.f}, 32.f, alphaMul(tagCol, ink(0.42f)));
         }
@@ -1950,6 +2540,8 @@ struct Screens::Impl {
         };
         const float headY = S.y + 210.f;
         const float rowY0 = headY + 48.f, rowH = 35.f;
+        const bool classic = g->classic();
+        const int nRows = classic ? 3 : 4;
         {
             const float a = ink(0.5f);
             for (int s = 0; s < okey::NUM_PLAYERS; ++s) {
@@ -1963,8 +2555,8 @@ struct Screens::Impl {
             pencilLine({labelX - 8.f, headY + 25.f}, {gridR, headY + 25.f}, 2.f, alphaMul(kGraphite, 0.8f * a), 11u);
             for (int s = 0; s <= okey::NUM_PLAYERS; ++s) {
                 const float x = colX0 + colW * (float)s;
-                pencilLine({x, headY - 26.f}, {x, rowY0 + rowH * 3.f + 18.f}, 1.2f, alphaMul(kGraphite, 0.35f * a),
-                           20u + (uint32_t)s, 0.8f);
+                pencilLine({x, headY - 26.f}, {x, rowY0 + rowH * (float)(nRows - 1) + 18.f}, 1.2f,
+                           alphaMul(kGraphite, 0.35f * a), 20u + (uint32_t)s, 0.8f);
             }
         }
         // this hand, per player. "Hesap" spells out the score before penalties, so Hesap + Ceza = Bu el can be
@@ -1974,7 +2566,12 @@ struct Screens::Impl {
         const std::string multTail = r.multiplier > 1 ? times + std::to_string(r.multiplier) : std::string();
         const okey::RulesConfig& rc = g->rules();
         const char* rowLabels[4] = {"Durum", "Hesap", "Ceza", "Bu el"};
-        for (int row = 0; row < 4; ++row) {
+        if (classic) {
+            rowLabels[1] = "Gösterge";
+            rowLabels[2] = "Bu el";
+        }
+        const int partnerOfWinner = (g->teams() && r.winner >= 0) ? okey::Game::partnerOf(r.winner) : -1;
+        for (int row = 0; row < nRows; ++row) {
             const float cy = rowY0 + rowH * (float)row;
             const float a = ink(0.62f + 0.1f * (float)row);
             handText(rowLabels[row], {labelX, cy - 17.f}, 30.f, alphaMul(kGraphite, a));
@@ -1983,6 +2580,21 @@ struct Screens::Impl {
                 const size_t si = (size_t)s;
                 Cell c;
                 const bool won = s == r.winner;
+                if (classic) {
+                    if (row == 0) c = won ? Cell{"Bitirdi", kRedPencil, 31.f} : Cell{kDash, alphaMul(kGraphite, 0.6f), 30.f};
+                    else if (row == 1)
+                        c = r.indicatorShownBy == s ? Cell{"Gösterdi", kGraphite, 30.f}
+                            : r.indicatorShownBy >= 0 ? Cell{scoreText(-r.penalties[si]), kRedPencil, 31.f}
+                                                      : Cell{kDash, alphaMul(kGraphite, 0.6f), 30.f};
+                    else c = {r.score[si] == 0 ? std::string("0") : scoreText(r.score[si]), s == human ? kBluePen : kInk, 36.f};
+                    cellText(c.text, s, cy, c.size, alphaMul(c.color, a));
+                    continue;
+                }
+                if (s == partnerOfWinner && row < 2) { // eşli: the finisher's partner's hand is wiped
+                    c = row == 0 ? Cell{"Ortağı bitirdi", kRedPencil, 28.f} : Cell{"silindi", kGraphite, 30.f};
+                    cellText(c.text, s, cy, c.size, alphaMul(c.color, a));
+                    continue;
+                }
                 switch (row) {
                 case 0:
                     if (won) c = {"Bitirdi", kRedPencil, 31.f};
@@ -2008,7 +2620,7 @@ struct Screens::Impl {
                 cellText(c.text, s, cy, c.size, alphaMul(c.color, a));
             }
         }
-        const float sepY = rowY0 + rowH * 3.f + 24.f;
+        const float sepY = rowY0 + rowH * (float)(nRows - 1) + 24.f;
         {
             const float a = ink(1.0f);
             pencilLine({labelX - 8.f, sepY}, {gridR, sepY}, 1.8f, alphaMul(kGraphite, 0.8f * a), 31u);
@@ -2061,8 +2673,22 @@ struct Screens::Impl {
                               (uint32_t)(handsDone * 7 + s));
             }
         }
+        if (g->teams()) { // the two teams' totals, under the sheet
+            const float a = ink(tTot + 0.4f);
+            const std::string t = teamName(*g, 0) + ": " + scoreText(g->teamTotal(0)) + "      " + teamName(*g, 1) + ": " +
+                                  scoreText(g->teamTotal(1));
+            handTextCentered(t, {800.f, totY + 58.f}, 30.f, alphaMul(kInk, a));
+        }
         const float aNote = ink(tTot + 0.6f);
-        if (aNote > 0.f) {
+        if (aNote > 0.f && g->teams()) {
+            const bool you = humanAmong(*g, leaders);
+            std::string note;
+            if (leaders.size() == 4) note = last ? "Maç berabere bitti" : "Takımlar başa baş";
+            else if (you) note = last ? "Maçı takımınız kazandı!" : "Takımınız önde!";
+            else note = last ? "Maçı " + teamName(*g, leaders[0]) + " kazandı" : teamName(*g, leaders[0]) + " önde";
+            if (!last) note += "  (düşük puan iyidir)";
+            handText(note, {labelX, btn.y + 10.f}, 30.f, alphaMul(kRedPencil, 0.9f * aNote));
+        } else if (aNote > 0.f) {
             const bool you = humanAmong(*g, leaders);
             std::string note;
             if (leaders.size() == 1) {
@@ -2083,7 +2709,7 @@ struct Screens::Impl {
                 const std::string all = joinNames(*g, leaders, false);
                 note = last ? "Birinciliği " + all + " paylaştı" : all + " başa baş önde";
             }
-            if (!last) note += "  (düşük puan iyidir)";
+            if (!last) note += classic ? "  (yüksek puan iyidir)" : "  (düşük puan iyidir)";
             handText(note, {labelX, btn.y + 10.f}, 30.f, alphaMul(kRedPencil, 0.9f * aNote));
         }
 
@@ -2092,8 +2718,225 @@ struct Screens::Impl {
         if (drawButton(btn, blabel, m, true, ButtonStyle::Paper, bfs)) click(C_Next);
     }
 
+    // ------------------------------------------------------------ the other games' sheet
+    void drawSheetSummary(Vector2 m, const SheetModel& sm) {
+        const float age = ageOf(ScreenId::HandSummary);
+        drawDim(0.5f);
+        const float slide = (1.f - easeOutCubic(age / 0.45f)) * 46.f;
+        Rectangle S = L::Sheet;
+        S.y += slide;
+        drawGridPaper(S);
+        drawPencil({S.x + 700.f, S.y + S.height - 40.f}, -4.f);
+        const Rectangle btn{S.x + S.width - 252.f, S.y + S.height - 68.f, 216.f, 54.f};
+        if (age < 0.46f) m = kNoMouse;
+        auto ink = [&](float t0) { return clamp01((age - t0) / 0.28f); };
+        const float labelX = S.x + 108.f;
+        const int nc = std::max(1, (int)sm.columns.size());
+
+        {
+            const float a = ink(0.12f);
+            handTextCentered(sm.title, {800.f, S.y + 52.f}, 62.f, alphaMul(kInk, a));
+            const float w = handMeasure(sm.title, 62.f).x;
+            pencilLine({800.f - w * 0.5f - 18.f, S.y + 86.f}, {800.f - w * 0.5f - 18.f + (w + 36.f) * a, S.y + 84.f}, 2.2f,
+                       alphaMul(kInk, 0.8f * a), 3u);
+            if (!sm.corner.empty()) handText(sm.corner, {labelX, S.y + 34.f}, 30.f, alphaMul(kRedPencil, 0.85f * a));
+        }
+        {
+            float hs = 42.f;
+            while (hs > 26.f && handMeasure(sm.headline, hs).x > S.width - 160.f) hs -= 1.f;
+            handTextCentered(sm.headline, {800.f, S.y + 118.f}, hs, alphaMul(kInk, ink(0.3f)));
+            if (!sm.tagline.empty())
+                handTextCentered(sm.tagline, {800.f, S.y + 158.f}, 32.f,
+                                 alphaMul(sm.taglineRed ? kRedPencil : kGraphite, ink(0.42f)));
+        }
+        // columns (2..4) over the same 888-unit grid as the okey sheet
+        const float gridL = S.x + 300.f, gridW = 222.f * 4.f;
+        const float colW = gridW / (float)nc;
+        const float colX0 = gridL;
+        const float gridR = colX0 + colW * (float)nc;
+        auto colC = [&](int c) { return colX0 + colW * ((float)c + 0.5f); };
+        auto fitSize = [&](const std::string& t, float size) {
+            const float maxW = colW - 18.f;
+            const float w = handMeasure(t, size).x;
+            return w > maxW ? size * maxW / w : size;
+        };
+        auto cellText = [&](const std::string& t, int c, float cy, float size, Color col) {
+            handTextCentered(t, {colC(c), cy}, fitSize(t, size), col);
+        };
+        const float headY = S.y + 210.f;
+        const float rowY0 = headY + 48.f, rowH = 35.f;
+        const int nRows = (int)sm.rowLabels.size();
+        {
+            const float a = ink(0.5f);
+            for (int c = 0; c < nc; ++c) {
+                const std::string& name = sm.columns[(size_t)c];
+                cellText(name, c, headY, 36.f, alphaMul(c == sm.humanCol ? kBluePen : kInk, a));
+                if (c == sm.starCol) {
+                    const float w = handMeasure(name, fitSize(name, 36.f)).x;
+                    drawStar({colC(c) - w * 0.5f - 16.f, headY - 1.f}, 10.f, alphaMul(kRedPencil, a));
+                }
+            }
+            pencilLine({labelX - 8.f, headY + 25.f}, {gridR, headY + 25.f}, 2.f, alphaMul(kGraphite, 0.8f * a), 11u);
+            for (int c = 0; c <= nc; ++c) {
+                const float x = colX0 + colW * (float)c;
+                pencilLine({x, headY - 26.f}, {x, rowY0 + rowH * (float)std::max(0, nRows - 1) + 18.f}, 1.2f,
+                           alphaMul(kGraphite, 0.35f * a), 20u + (uint32_t)c, 0.8f);
+            }
+        }
+        for (int row = 0; row < nRows; ++row) {
+            const float cy = rowY0 + rowH * (float)row;
+            const float a = ink(0.62f + 0.1f * (float)row);
+            const bool lastRow = row == nRows - 1;
+            handText(sm.rowLabels[(size_t)row], {labelX, cy - 17.f}, 30.f, alphaMul(kGraphite, a));
+            for (int c = 0; c < nc; ++c) {
+                if (row >= (int)sm.cells.size() || c >= (int)sm.cells[(size_t)row].size()) continue;
+                const std::string& t = sm.cells[(size_t)row][(size_t)c];
+                const bool red = row < (int)sm.red.size() && c < (int)sm.red[(size_t)row].size() && sm.red[(size_t)row][(size_t)c];
+                const Color col = red ? kRedPencil : lastRow ? (c == sm.humanCol ? kBluePen : kInk) : kGraphite;
+                cellText(t.empty() ? std::string(kDash) : t, c, cy, lastRow ? 36.f : 30.f,
+                         alphaMul(t.empty() ? alphaMul(kGraphite, 0.6f) : col, a));
+            }
+        }
+        const float sepY = rowY0 + rowH * (float)std::max(0, nRows - 1) + 24.f;
+        {
+            const float a = ink(1.0f);
+            pencilLine({labelX - 8.f, sepY}, {gridR, sepY}, 1.8f, alphaMul(kGraphite, 0.8f * a), 31u);
+            pencilLine({labelX - 8.f, sepY + 5.f}, {gridR, sepY + 5.f}, 1.8f, alphaMul(kGraphite, 0.8f * a), 37u);
+        }
+        const int n = std::max(1, (int)sm.history.size());
+        const float histTop = sepY + 12.f;
+        const float totYMax = btn.y - 40.f;
+        const float hRow = std::min(36.f, (totYMax - 32.f - histTop) / (float)n);
+        const float hFont = std::min(32.f, hRow * 1.02f + 2.f);
+        const float t0 = 1.05f;
+        for (int h = 0; h < (int)sm.history.size(); ++h) {
+            const float cy = histTop + hRow * ((float)h + 0.5f);
+            const float a = ink(t0 + 0.05f * (float)std::min(h, 12));
+            if (h == (int)sm.history.size() - 1)
+                DrawRectangleRounded({labelX - 12.f, cy - hRow * 0.42f, (gridR - labelX + 20.f) * a, hRow * 0.84f}, 0.4f, 6,
+                                     rgba(255, 226, 70, 0.33f));
+            const std::string lbl = h < (int)sm.historyLabels.size() ? sm.historyLabels[(size_t)h] : std::to_string(h + 1) + ". el";
+            float ls = hFont;
+            while (ls > 12.f && handMeasure(lbl, ls).x > colX0 - labelX - 10.f) ls -= 1.f;
+            handText(lbl, {labelX, cy - ls * 0.55f}, ls, alphaMul(kGraphite, a));
+            for (int c = 0; c < nc && c < (int)sm.history[(size_t)h].size(); ++c)
+                cellText(sm.history[(size_t)h][(size_t)c], c, cy, hFont, alphaMul(c == sm.humanCol ? kBluePen : kGraphite, a));
+        }
+        const float sumY = histTop + hRow * (float)n + 4.f;
+        const float totY = sumY + 28.f;
+        for (int c = 0; c <= nc; ++c) {
+            const float x = colX0 + colW * (float)c;
+            pencilLine({x, histTop}, {x, totY + 26.f}, 1.2f, alphaMul(kGraphite, 0.35f * ink(t0)), 50u + (uint32_t)c, 0.8f);
+        }
+        const float tTot = t0 + 0.05f * (float)std::min(n, 12) + 0.12f;
+        pencilLine({colX0 + 10.f, sumY}, {gridR - 10.f, sumY}, 2.f, alphaMul(kInk, 0.85f * ink(tTot)), 61u);
+        handText(sm.totalLabel, {labelX, totY - 20.f}, 36.f, alphaMul(kInk, ink(tTot)));
+        for (int c = 0; c < nc && c < (int)sm.totals.size(); ++c) {
+            const std::string& t = sm.totals[(size_t)c];
+            const float a = ink(tTot + 0.06f * (float)c);
+            cellText(t, c, totY, 40.f, alphaMul(c == sm.humanCol ? kBluePen : kInk, a));
+            const float w = handMeasure(t, fitSize(t, 40.f)).x;
+            pencilLine({colC(c) - w * 0.5f - 6.f, totY + 20.f}, {colC(c) + w * 0.5f + 6.f, totY + 20.f}, 1.8f,
+                       alphaMul(kInk, 0.8f * a), 70u + (uint32_t)c);
+            pencilLine({colC(c) - w * 0.5f - 6.f, totY + 25.f}, {colC(c) + w * 0.5f + 6.f, totY + 25.f}, 1.8f,
+                       alphaMul(kInk, 0.8f * a), 80u + (uint32_t)c);
+            if (std::find(sm.leaders.begin(), sm.leaders.end(), c) != sm.leaders.end()) {
+                const float cp = clamp01((age - tTot - 0.35f) / 0.55f);
+                pencilEllipse({colC(c), totY + 2.f}, w * 0.5f + 30.f, 28.f, cp, 2.6f, alphaMul(kRedPencil, 0.9f),
+                              (uint32_t)(n * 7 + c));
+            }
+        }
+        const float aNote = ink(tTot + 0.6f);
+        if (aNote > 0.f && !sm.note.empty()) handText(sm.note, {labelX, btn.y + 10.f}, 30.f, alphaMul(kRedPencil, 0.9f * aNote));
+        float bfs = 36.f;
+        const std::string blabel = autoLabel(sm.last ? "Sonuçlar" : "Sonraki El", FontId::Hand, btn.width - 22.f, bfs);
+        if (drawButton(btn, blabel, m, true, ButtonStyle::Paper, bfs)) click(C_Next);
+    }
+
+    void drawSheetMatchOver(Vector2 m, const SheetModel& sm) {
+        const float age = ageOf(ScreenId::MatchOver);
+        drawDim(0.62f);
+        rlPushMatrix();
+        rlTranslatef(800.f, 200.f, 0.f);
+        rlScalef(1.6f, 1.f, 1.f);
+        DrawCircleGradient({0, 0}, 260.f, rgba(8, 5, 3, 0.7f), rgba(8, 5, 3, 0.f));
+        rlPopMatrix();
+        const float pulse = 0.85f + 0.15f * std::sin(time * 1.4f);
+        DrawCircleGradient({800.f, 250.f}, 520.f, rgba(255, 170, 80, 0.26f * pulse), rgba(255, 170, 80, 0.f));
+        DrawCircleGradient({800.f, 250.f}, 230.f, rgba(255, 210, 140, 0.22f * pulse), rgba(255, 210, 140, 0.f));
+        for (int i = 0; i < 12; ++i) {
+            const float a = (float)i * kPi / 6.f + time * 0.05f;
+            const Vector2 c{800.f, 230.f};
+            tri(c, {c.x + std::cos(a - 0.07f) * 420.f, c.y + std::sin(a - 0.07f) * 420.f},
+                {c.x + std::cos(a + 0.07f) * 420.f, c.y + std::sin(a + 0.07f) * 420.f}, rgba(255, 200, 120, 0.045f * pulse));
+        }
+        drawHeader(sm.matchHeader, {800.f, 56.f}, 60.f, kGold);
+        if (!sm.playedLine.empty())
+            drawTextCentered(FontId::Ui, sm.playedLine, {800.f, 98.f}, 20.f, alphaMul(pal::TextLight, 0.7f));
+        const float pop = easeOutBack(clamp01((age - 0.15f) / 0.5f));
+        rlPushMatrix();
+        rlTranslatef(800.f, 270.f, 0.f);
+        rlScalef(pop, pop, 1.f);
+        drawTeaGlass({0.f, 0.f}, 1.25f, time, 42.f);
+        rlPopMatrix();
+        const float a1 = clamp01((age - 0.35f) / 0.4f);
+        drawHeader(sm.resultTitle, {800.f, 324.f}, sm.humanWon ? 50.f : 46.f,
+                   alphaMul(sm.humanWon ? pal::Highlight : pal::TextLight, a1));
+        drawTextCentered(FontId::Ui, sm.resultSub, {800.f, 368.f}, 22.f, alphaMul(pal::TextLight, 0.85f * a1));
+
+        const int rows = (int)sm.ranking.size();
+        Rectangle card = L::MatchCard;
+        card.height = 32.f + 68.f * (float)rows - 6.f;
+        drawPanel(card, PanelStyle::Dark);
+        static const Color medal[4] = {Color{232, 184, 64, 255}, Color{196, 198, 206, 255}, Color{190, 118, 64, 255},
+                                       Color{118, 88, 62, 255}};
+        for (int i = 0; i < rows; ++i) {
+            const int c = sm.ranking[(size_t)i];
+            const int rank = i < (int)sm.rank.size() ? sm.rank[(size_t)i] : i + 1;
+            const float ra = clamp01((age - 0.55f - 0.12f * (float)i) / 0.3f);
+            const float slideX = (1.f - easeOutCubic(ra)) * 40.f;
+            const Rectangle row{card.x + 18.f + slideX, card.y + 16.f + 68.f * (float)i, card.width - 36.f, 62.f};
+            if (rank == 1) {
+                DrawRectangleRounded(row, 0.3f, 8, rgba(255, 200, 110, 0.16f * ra));
+                DrawRectangleRoundedLinesEx(row, 0.3f, 8, 1.5f, alphaMul(pal::Highlight, 0.7f * ra));
+            } else {
+                DrawRectangleRounded(row, 0.3f, 8, rgba(255, 255, 255, 0.04f * ra));
+            }
+            const Vector2 mc{row.x + 36.f, row.y + row.height * 0.5f};
+            DrawCircleV({mc.x + 1.f, mc.y + 2.f}, 22.f, rgba(0, 0, 0, 0.4f * ra));
+            DrawCircleV(mc, 22.f, alphaMul(medal[std::clamp(rank, 1, 4) - 1], ra));
+            const std::string digit = std::to_string(rank);
+            const float dw = measureText(FontId::UiBold, digit, 25.f).x;
+            drawTextCentered(FontId::UiBold, digit, {mc.x, mc.y - 1.f}, 25.f, alphaMul(pal::TextDark, ra));
+            drawText(FontId::UiBold, ".", {mc.x + dw * 0.5f, mc.y - 15.f}, 25.f, alphaMul(pal::TextDark, ra));
+            const Color nameCol = c == sm.humanCol ? pal::Highlight : pal::TextLight;
+            const std::string name = c < (int)sm.columns.size() ? sm.columns[(size_t)c] : std::string();
+            drawText(FontId::UiBold, name, {row.x + 76.f, row.y + 7.f}, 28.f, alphaMul(nameCol, ra));
+            if (c < (int)sm.rankSub.size()) {
+                float fs = 15.f;
+                const float maxW = row.width - 76.f - 150.f;
+                const float w = measureText(FontId::Ui, sm.rankSub[(size_t)c], fs).x;
+                if (w > maxW) fs *= maxW / w;
+                drawText(FontId::Ui, sm.rankSub[(size_t)c], {row.x + 77.f, row.y + 40.f}, fs, alphaMul(pal::TextLight, 0.55f * ra));
+            }
+            const std::string tot = c < (int)sm.totals.size() ? sm.totals[(size_t)c] : std::string();
+            const float tw = measureText(FontId::UiBold, tot, 34.f).x;
+            drawText(FontId::UiBold, tot, {row.x + row.width - 22.f - tw, row.y + 13.f}, 34.f,
+                     alphaMul(rank == 1 ? pal::Highlight : pal::TextLight, ra));
+        }
+        float nfs = 30.f;
+        const std::string nlabel = autoLabel("Yeni Oyun", FontId::UiBold, L::MatchNew.width - 24.f, nfs);
+        if (drawButton(L::MatchNew, nlabel, m, true, ButtonStyle::Wood, nfs)) click(C_NewGame);
+        if (drawButton(L::MatchMenu, "Ana Menü", m, true, ButtonStyle::Wood, 30.f)) click(C_MatchMenu);
+        drawConfetti();
+    }
+
     // ------------------------------------------------------------ match over
     void drawMatchOver(Vector2 m, const okey::Game* g) {
+        if (sheet) {
+            drawSheetMatchOver(m, *sheet);
+            return;
+        }
         const float age = ageOf(ScreenId::MatchOver);
         drawDim(0.62f);
         rlPushMatrix();
@@ -2113,7 +2956,7 @@ struct Screens::Impl {
             tri(c, p1, p2, rgba(255, 200, 120, 0.045f * pulse));
         }
 
-        drawHeader("Maç Bitti", {800.f, 56.f}, 60.f, kGold);
+        drawHeader(g && g->classic() ? "Oyun Bitti" : "Maç Bitti", {800.f, 56.f}, 60.f, kGold);
         if (!g || g->player(0).handScores.empty()) {
             drawTextCentered(FontId::Ui, "Sonuç yok.", {800.f, 400.f}, 24.f, pal::TextLight);
         } else {
@@ -2129,10 +2972,23 @@ struct Screens::Impl {
 
             const std::vector<int> leaders = coLeaders(*g);
             const int leader = leaders[0];
-            const std::string best = scoreText(g->player(leader).totalScore);
+            const bool teams = g->teams();
+            const std::string best = scoreText(teams ? g->teamTotal(leader) : g->player(leader).totalScore);
             const bool humanFirst = humanAmong(*g, leaders);
             const float a1 = clamp01((age - 0.35f) / 0.4f);
-            if (humanFirst && leaders.size() == 1) {
+            if (teams && humanFirst && leaders.size() == 2) {
+                drawHeader(aiMode ? "Yapay zekanın takımı kazandı!" : "Kazandınız! Çaylar onlardan!", {800.f, 324.f}, 50.f,
+                           alphaMul(pal::Highlight, a1));
+                drawTextCentered(FontId::Ui, teamName(*g, leader) + ", toplam " + best + " puanla masanın kurtları.",
+                                 {800.f, 368.f}, 22.f, alphaMul(pal::TextLight, 0.85f * a1));
+            } else if (teams) {
+                drawHeader(leaders.size() == 4 ? "Berabere!" : "Bu sefer olmadı, bir maç daha?", {800.f, 324.f}, 46.f,
+                           alphaMul(pal::TextLight, a1));
+                drawTextCentered(FontId::Ui,
+                                 leaders.size() == 4 ? "İki takım da " + best + " puanda kaldı."
+                                                     : "Kazananlar: " + teamName(*g, leader) + " (" + best + ")",
+                                 {800.f, 368.f}, 22.f, alphaMul(pal::TextLight, 0.85f * a1));
+            } else if (humanFirst && leaders.size() == 1) {
                 drawHeader(aiMode ? "Yapay zeka kazandı! Çaylar onlardan!" : "Kazandın! Çaylar onlardan!", {800.f, 324.f},
                            50.f, alphaMul(pal::Highlight, a1));
                 drawTextCentered(FontId::Ui, "Toplam " + best + (aiMode ? " puanla masanın kurdu oldu." : " puanla masanın kurdu oldun."),
@@ -2163,8 +3019,9 @@ struct Screens::Impl {
             drawPanel(L::MatchCard, PanelStyle::Dark);
             std::vector<int> order = {0, 1, 2, 3};
             std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
-                if (g->player(a).totalScore != g->player(b).totalScore)
-                    return g->player(a).totalScore < g->player(b).totalScore;
+                if (standing(*g, a) != standing(*g, b)) return standing(*g, a) < standing(*g, b);
+                if (teams && std::min(a, okey::Game::partnerOf(a)) != std::min(b, okey::Game::partnerOf(b)))
+                    return std::min(a, okey::Game::partnerOf(a)) < std::min(b, okey::Game::partnerOf(b));
                 return a < b;
             });
             static const Color medal[4] = {Color{232, 184, 64, 255}, Color{196, 198, 206, 255},
@@ -2173,7 +3030,7 @@ struct Screens::Impl {
             for (int i = 0; i < 4; ++i) {
                 const int s = order[(size_t)i];
                 const okey::PlayerInfo& p = g->player(s);
-                if (i > 0 && p.totalScore != g->player(order[(size_t)i - 1]).totalScore) rank = i + 1;
+                if (i > 0 && standing(*g, s) != standing(*g, order[(size_t)i - 1])) rank = teams ? 2 : i + 1;
                 const float ra = clamp01((age - 0.55f - 0.12f * (float)i) / 0.3f);
                 const float slideX = (1.f - easeOutCubic(ra)) * 40.f;
                 const Rectangle row{L::MatchCard.x + 18.f + slideX, L::MatchCard.y + 16.f + 68.f * (float)i,
@@ -2202,7 +3059,8 @@ struct Screens::Impl {
                 const float w = measureText(FontId::Ui, sub, fs).x;
                 if (w > maxW) fs *= maxW / w;
                 drawText(FontId::Ui, sub, {row.x + 77.f, row.y + 40.f}, fs, alphaMul(pal::TextLight, 0.55f * ra));
-                const std::string tot = scoreText(p.totalScore);
+                std::string tot = scoreText(p.totalScore);
+                if (teams && (i % 2 == 1)) tot = "= " + scoreText(g->teamTotal(s)); // the team total on its second row
                 const float tw = measureText(FontId::UiBold, tot, 34.f).x;
                 drawText(FontId::UiBold, tot, {row.x + row.width - 22.f - tw, row.y + 13.f}, 34.f,
                          alphaMul(rank == 1 ? pal::Highlight : pal::TextLight, ra));
@@ -2219,6 +3077,10 @@ struct Screens::Impl {
 
 // ============================================================================ Screens (public API)
 
+const GameInfo& gameInfo(GameKind k) { return kGames[std::clamp((int)k, 0, (int)GameKind::Count - 1)]; }
+
+bool gameAvailable(GameKind k) { return k >= GameKind::Yuzbir && k < GameKind::Count; }
+
 Screens::Screens() : impl_(new Impl) { impl_->owner = this; }
 
 Screens::~Screens() {
@@ -2231,7 +3093,6 @@ void Screens::init() {
     Impl& I = *impl_;
     I.owner = this;
     I.fadeShader.load();
-    I.rules = buildRules();
     I.rulesLaidOut = false;
     I.nameBuf = I.settings.playerName;
     I.cur = I.prev = ScreenId::Title;
@@ -2262,5 +3123,9 @@ Settings& Screens::settings() { return impl_->settings; }
 void Screens::setAiMode(bool on) { impl_->aiMode = on; }
 
 void Screens::setAutoAdvance(float secondsLeft) { impl_->autoLeft = secondsLeft; }
+
+void Screens::setSheet(const SheetModel& m) { impl_->sheet = m; }
+
+void Screens::clearSheet() { impl_->sheet.reset(); }
 
 } // namespace ui

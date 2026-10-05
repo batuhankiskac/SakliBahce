@@ -252,7 +252,7 @@ void TableState::drawRackHints(const Renderer& r) {
         DrawRectangleRec({c.x - 1.1f, c.y - rr * 0.55f, 2.2f, rr * 1.1f}, rgba(240, 255, 240));
     }
     // series values under valid groups
-    for (size_t i = 0; i < groups.size(); ++i) {
+    for (size_t i = 0; i < groups.size() && !classic(); ++i) { // (klasik okey melds have no value to show)
         if (groupKind[i] != 1) continue;
         const RackGroup& g = groups[i];
         bool moving = false;
@@ -299,6 +299,10 @@ std::string TableState::statusText(Color& c) const {
         if (!game->rules().penaltyReturnLeft) return "Yandan aldığın taşı kullan ya da Geri Ver";
         return "Yandan aldığın taşı kullan ya da Geri Ver (" + std::to_string(game->rules().penalty) + " ceza)";
     }
+    if (classic()) {
+        if (game->indicatorTwin(human) >= 0) return "Göstergenin eşi sende: Göster'e bas ya da bir taş at";
+        return finishTile >= 0 ? "Elin hazır: Bitir!" : "Bir taş at";
+    }
     if (game->openedThisTurn(human) && game->rules().waitTurnAfterOpening) return "Bir taş at (açtığın turda işlenmez)";
     return "Bir taş at";
 }
@@ -307,7 +311,12 @@ void TableState::drawStatus() {
     Color sc;
     const std::string st = statusText(sc);
     std::vector<std::pair<std::string, Color>> parts;
-    if (hints && playing() && !dealing()) {
+    if (hints && playing() && !dealing() && classic()) {
+        const Color dim = rgba(226, 216, 196);
+        parts.push_back({"Per " + std::to_string(classicCoverNow) + "/14", classicCoverNow >= 14 ? rgba(140, 240, 140) : dim});
+        parts.push_back({"  ·  ", fadeC(dim, 0.45f)});
+        parts.push_back({"Çift " + std::to_string(classicPairsNow) + "/7", classicPairsNow >= 7 ? rgba(140, 200, 255) : dim});
+    } else if (hints && playing() && !dealing()) {
         const okey::PlayerInfo& me = game->player(human);
         const int needSeries = game->seriesOpenNeed(), needPairs = game->pairsOpenNeed();  // (katlamalı: rises)
         const Color dim = rgba(226, 216, 196);
@@ -385,16 +394,18 @@ void TableState::drawButtons() {
     const Vector2 m = confirm.active ? Vector2{-10000, -10000} : in.mouse;
     const okey::PlayerInfo& me = game->player(human);
     const bool canPlay = canAct() && game->stage() == okey::TurnStage::Play;
-    const bool openOk = canPlay && (!me.opened || game->canWorkTable(human)) && (!seriesGroups.empty() || !pairGroups.empty());
-    const bool ready = hints && openOk && (seriesCheck.valid || pairCheck.valid);
+    const bool openOk = classic() ? canPlay && finishTile >= 0
+                                  : canPlay && (!me.opened || game->canWorkTable(human)) && (!seriesGroups.empty() || !pairGroups.empty());
+    const bool ready = hints && openOk && (classic() || seriesCheck.valid || pairCheck.valid);
     if (ready) {
         const Rectangle r = rc[0];
         const float a = 0.55f + 0.35f * std::sin(now * 4.f);
         ui::tilegfx::drawSoftBox({r.x + r.width / 2, r.y + r.height / 2}, r.width + 16, r.height + 22, 0.f, fadeC(pal::Good, a));
     }
-    if (ui::drawButton(rc[0], me.opened ? "Per Aç" : "El Aç", m, openOk, ui::ButtonStyle::Wood, 21)) queue(Btn::Open);
-    const bool giveOk = canAct() && game->pendingLeftTile() >= 0;
-    if (ui::drawButton(rc[1], "Geri Ver", m, giveOk, ui::ButtonStyle::Wood, 20)) queue(Btn::GiveBack);
+    const char* openLabel = classic() ? "Bitir" : me.opened ? "Per Aç" : "El Aç";
+    if (ui::drawButton(rc[0], openLabel, m, openOk, ui::ButtonStyle::Wood, 21)) queue(Btn::Open);
+    const bool giveOk = canAct() && (classic() ? game->indicatorTwin(human) >= 0 : game->pendingLeftTile() >= 0);
+    if (ui::drawButton(rc[1], classic() ? "Göster" : "Geri Ver", m, giveOk, ui::ButtonStyle::Wood, 20)) queue(Btn::GiveBack);
     const bool arrOk = rackInteractive() && !me.hand.empty();
     if (ui::drawButton(rc[2], "Seri Diz", m, arrOk, ui::ButtonStyle::Wood, 20)) queue(Btn::Series);
     if (ui::drawButton(rc[3], "Çift Diz", m, arrOk, ui::ButtonStyle::Wood, 20)) queue(Btn::Pairs);
