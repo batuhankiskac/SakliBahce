@@ -137,6 +137,7 @@ bool Cards3D::init(Renderer& r) {
         halo_ = mb.build();
         haloTex_ = buildHalo();
         haloMat_ = r.makeMat(Color{255, 210, 120, 255}, haloTex_, 0.f, 4.f, 1.f);
+        hintMat_ = r.makeMat(Color{110, 255, 130, 255}, haloTex_, 0.f, 4.f, 1.f);
     }
     hideAll();
     ready_ = true;
@@ -151,6 +152,7 @@ void Cards3D::shutdown(Renderer& r) {
     }
     UnloadMesh(halo_);
     r.unloadMat(haloMat_);
+    r.unloadMat(hintMat_);
     if (haloTex_.id) UnloadTexture(haloTex_);
     ui::cardgfx::shutdown();
     ready_ = false;
@@ -202,9 +204,13 @@ void Cards3D::setLift(int card, float metres) {
 void Cards3D::setGlow(int card, float amount) {
     if (card >= 0 && card < CARD_COUNT) cards_[card].glow = amount;
 }
+void Cards3D::setHintGlow(int card, bool on) {
+    if (card >= 0 && card < CARD_COUNT) cards_[card].hint = on;
+}
 void Cards3D::setSpeed(float s) { speed_ = std::clamp(s, 0.25f, 4.f); }
 
 void Cards3D::update(float dt) {
+    ui::cardgfx::refresh(); // (the four-colour deck switched on / off)
     for (Card& c : cards_) {
         if (!c.visible) continue;
         c.liftCur += (c.lift - c.liftCur) * std::min(1.f, dt * 14.f);
@@ -247,6 +253,17 @@ void Cards3D::submit(Renderer& r) {
             hm.material.maps[MATERIAL_MAP_DIFFUSE].color =
                 Color{255, 214, 130, (unsigned char)std::clamp(c.glowCur * 200.f, 0.f, 255.f)};
             r.submit(&halo_, &hm, MatrixMultiply(s, cardMatrix(h)), Transparent | Additive | DoubleSided | NoFog);
+        }
+        if (c.hint) {
+            // the İpucu card: a larger green halo (its own material: the renderer keeps the pointer until render())
+            const Matrix s = MatrixScale(CARD_W * 1.9f, 1.f, CARD_H * 1.6f);
+            CardPose h = p;
+            const Vector3 n = Vector3RotateByQuaternion({0, 1, 0}, p.rot);
+            h.pos = Vector3Subtract(h.pos, Vector3Scale(n, CARD_T * 1.5f));
+            // (colour-blind mode: sky blue, never confused with the warm gold of the legal / hovered cards)
+            hintMat_.material.maps[MATERIAL_MAP_DIFFUSE].color =
+                ui::colorBlind() ? Color{90, 190, 255, 245} : Color{110, 255, 130, 235};
+            r.submit(&halo_, &hintMat_, MatrixMultiply(s, cardMatrix(h)), Transparent | Additive | DoubleSided | NoFog);
         }
     }
 }

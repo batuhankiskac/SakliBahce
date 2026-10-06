@@ -86,8 +86,16 @@ Vector2 add2(Vector2 a, Vector2 b) { return {a.x + b.x, a.y + b.y}; }
 // End of a bone of length l hanging from `from`, rotated `deg` from straight down (positive = forward, +x).
 Vector2 bone(Vector2 from, float l, float deg) { return add2(from, rot2({0.f, -l}, deg)); }
 
-void drawFigure(const FigSpec& f, int frame, Pen pen) {
+// `day`: painted in colour (coats, faces) instead of the night's silhouette against the lit street.
+void drawFigure(const FigSpec& f, int type, int frame, Pen pen, bool day) {
     const Color sil{17, 19, 27, 255}, silFar{12, 13, 19, 255}, rimC{58, 64, 84, 255};
+    static const Color kCoat[WALK_TYPES] = {{74, 70, 66, 255}, {98, 76, 54, 255}, {124, 44, 52, 255}, {84, 84, 90, 255},
+                                            {72, 62, 52, 255}, {58, 74, 100, 255}, {64, 68, 60, 255}};
+    const Color coat = day ? kCoat[type] : sil, coatFar = day ? scaleRgb(kCoat[type], 0.75f) : silFar;
+    const Color legNear = day ? Color{58, 58, 64, 255} : sil, legFar = day ? Color{46, 46, 52, 255} : silFar;
+    const Color skin = day ? Color{186, 140, 108, 255} : sil;
+    const Color hat = day ? (f.head == Head::Scarf ? Color{150, 60, 70, 255} : Color{52, 48, 46, 255}) : sil;
+    const Color stick = day ? Color{40, 36, 34, 255} : sil;
     const bool run = f.stride > 1.2f;
     // walk cycle: thigh angle (forward +) and knee bend for the near (A) and far (B) leg; frames 2/3 swap them
     struct LegPose {
@@ -121,7 +129,7 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
         pen.limb(knee, ankle, 0.11f, 0.08f, c);
         pen.limb({ankle.x - 0.03f, ankle.y - 0.015f}, {ankle.x + 0.1f, ankle.y - 0.02f}, 0.06f, 0.05f, c);  // shoe
     };
-    leg(B, silFar, -0.02f);
+    leg(B, legFar, -0.02f);
     // the body leans about the hips
     const float lean = f.lean + (run ? 6.f : 0.f);
     auto L = [&](Vector2 p) { return add2(hip, rot2({p.x, p.y - hipY}, -lean)); };
@@ -132,10 +140,10 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
     if (run) swing *= 1.8f;
     if (f.arms == Arms::Swing || f.arms == Arms::Cane) {
         Vector2 e = bone(shoulder, 0.3f, -swing);
-        pen.limb(shoulder, e, 0.1f, 0.085f, silFar);
-        pen.limb(e, bone(e, 0.27f, -swing + 22.f), 0.085f, 0.07f, silFar);
+        pen.limb(shoulder, e, 0.1f, 0.085f, coatFar);
+        pen.limb(e, bone(e, 0.27f, -swing + 22.f), 0.085f, 0.07f, coatFar);
     }
-    leg(A, sil, 0.02f);
+    leg(A, legNear, 0.02f);
     // coat: shoulders to hem, flaring a little, split at the back when walking
     {
         const float hem = f.hem + bob * 0.5f;
@@ -143,24 +151,26 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
                                   L({-0.17f - 0.05f * (hem < 0.7f), hem - 0.02f}), L({-0.17f, 1.1f + bob}), L({-0.12f, shY - 0.03f}),
                                   L({-0.02f, shY + 0.02f})};
         Vector2 c = L({0.f, (shY + hem) * 0.5f});
-        for (size_t i = 0; i < poly.size(); ++i) tri(pen.P(c.x, c.y), pen.P(poly[i].x, poly[i].y), pen.P(poly[(i + 1) % poly.size()].x, poly[(i + 1) % poly.size()].y), sil);
+        for (size_t i = 0; i < poly.size(); ++i) tri(pen.P(c.x, c.y), pen.P(poly[i].x, poly[i].y), pen.P(poly[(i + 1) % poly.size()].x, poly[(i + 1) % poly.size()].y), coat);
         // collar turned up
         Vector2 c0 = L({0.06f, shY + 0.01f}), c1 = L({-0.05f, shY + 0.05f});
-        pen.limb(c0, c1, 0.06f, 0.05f, sil);
+        pen.limb(c0, c1, 0.06f, 0.05f, coat);
     }
     // head
     const Vector2 head = L({0.035f, neckY + 0.1f});
-    pen.limb(L({0.0f, neckY - 0.04f}), L({0.02f, neckY + 0.04f}), 0.09f, 0.08f, sil);
-    pen.blob(head.x, head.y, 0.093f, 0.112f, sil);
-    pen.blob(head.x + 0.085f, head.y - 0.005f, 0.026f, 0.03f, sil, 10);  // nose
+    pen.limb(L({0.0f, neckY - 0.04f}), L({0.02f, neckY + 0.04f}), 0.09f, 0.08f, skin);
+    pen.blob(head.x, head.y, 0.093f, 0.112f, skin);
+    pen.blob(head.x + 0.085f, head.y - 0.005f, 0.026f, 0.03f, skin, 10);  // nose
+    if (day && f.head == Head::Bare) pen.blob(head.x - 0.025f, head.y + 0.05f, 0.08f, 0.07f, Color{60, 50, 44, 255});  // hair
     switch (f.head) {
     case Head::Cap:
-        pen.blob(head.x - 0.005f, head.y + 0.075f, 0.108f, 0.05f, sil);
-        pen.limb({head.x + 0.05f, head.y + 0.06f}, {head.x + 0.15f, head.y + 0.045f}, 0.03f, 0.018f, sil);
+        pen.blob(head.x - 0.005f, head.y + 0.075f, 0.108f, 0.05f, hat);
+        pen.limb({head.x + 0.05f, head.y + 0.06f}, {head.x + 0.15f, head.y + 0.045f}, 0.03f, 0.018f, hat);
         break;
     case Head::Scarf:
-        pen.blob(head.x - 0.01f, head.y + 0.015f, 0.108f, 0.128f, sil);
-        pen.limb({head.x - 0.07f, head.y - 0.05f}, L({-0.12f, shY - 0.1f}), 0.07f, 0.05f, sil);  // scarf tail
+        pen.blob(head.x - 0.01f, head.y + 0.015f, 0.108f, 0.128f, hat);
+        if (day) pen.blob(head.x + 0.02f, head.y - 0.005f, 0.07f, 0.085f, skin);  // the face inside the headscarf
+        pen.limb({head.x - 0.07f, head.y - 0.05f}, L({-0.12f, shY - 0.1f}), 0.07f, 0.05f, hat);  // scarf tail
         break;
     default: break;
     }
@@ -169,11 +179,11 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
     if (f.arms == Arms::Umbrella) {
         Vector2 e = bone(shoulder, 0.27f, 28.f);
         Vector2 hand = add2(e, rot2({0.f, 0.24f}, -40.f));
-        pen.limb(shoulder, e, 0.1f, 0.085f, sil);
-        pen.limb(e, hand, 0.085f, 0.07f, sil);
+        pen.limb(shoulder, e, 0.1f, 0.085f, coat);
+        pen.limb(e, hand, 0.085f, 0.07f, coat);
         const Vector2 top = L({0.09f, 2.1f + bob * 0.6f});
-        pen.limb(hand, top, 0.018f, 0.018f, sil);  // the stick
-        pen.limb({hand.x - 0.01f, hand.y}, {hand.x - 0.03f, hand.y - 0.06f}, 0.022f, 0.02f, sil);  // crook handle
+        pen.limb(hand, top, 0.018f, 0.018f, stick);  // the stick
+        pen.limb({hand.x - 0.01f, hand.y}, {hand.x - 0.03f, hand.y - 0.06f}, 0.022f, 0.02f, stick);  // crook handle
         // canopy: a dome with scalloped edges between the ribs
         const float cy = top.y - 0.17f, rx = 0.46f, ry = 0.19f;
         std::vector<Vector2> pts;
@@ -206,8 +216,8 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
         // both hands hold a newspaper over the head
         Vector2 e = bone(shoulder, 0.26f, 150.f);
         Vector2 hand = bone(e, 0.24f, 175.f);
-        pen.limb(shoulder, e, 0.1f, 0.085f, sil);
-        pen.limb(e, hand, 0.085f, 0.07f, sil);
+        pen.limb(shoulder, e, 0.1f, 0.085f, coat);
+        pen.limb(e, hand, 0.085f, 0.07f, coat);
         Vector2 a = {head.x - 0.3f, head.y + 0.2f}, b = {head.x + 0.26f, head.y + 0.24f};
         Color paper{132, 134, 136, 255};
         quad2(pen.P(a.x, a.y), pen.P(b.x, b.y), pen.P(b.x, b.y - 0.02f), pen.P(a.x, a.y - 0.06f), paper);
@@ -215,23 +225,23 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
         DrawLineEx(pen.P(a.x + 0.05f, a.y + 0.004f), pen.P(b.x - 0.04f, b.y - 0.002f), 1.2f, Color{90, 92, 96, 255});
     } else if (f.arms == Arms::Pockets) {
         Vector2 e = bone(shoulder, 0.28f, -6.f);
-        pen.limb(shoulder, e, 0.1f, 0.085f, sil);
-        pen.limb(e, add2(e, {0.1f, 0.02f}), 0.085f, 0.075f, sil);
+        pen.limb(shoulder, e, 0.1f, 0.085f, coat);
+        pen.limb(e, add2(e, {0.1f, 0.02f}), 0.085f, 0.075f, coat);
     } else if (f.arms == Arms::Cane) {
         Vector2 e = bone(shoulder, 0.28f, 16.f);
         Vector2 hand = bone(e, 0.25f, 38.f);
-        pen.limb(shoulder, e, 0.1f, 0.085f, sil);
-        pen.limb(e, hand, 0.085f, 0.07f, sil);
+        pen.limb(shoulder, e, 0.1f, 0.085f, coat);
+        pen.limb(e, hand, 0.085f, 0.07f, coat);
         float tipX = hand.x + (frame % 2 ? 0.02f : 0.12f);
         pen.limb(hand, {tipX, 0.02f}, 0.022f, 0.018f, Color{30, 26, 24, 255});
         pen.limb({hand.x - 0.05f, hand.y + 0.02f}, {hand.x + 0.02f, hand.y + 0.03f}, 0.025f, 0.02f, Color{30, 26, 24, 255});
     } else {
         Vector2 e = bone(shoulder, 0.3f, swing);
-        pen.limb(shoulder, e, 0.1f, 0.085f, sil);
-        pen.limb(e, bone(e, 0.27f, swing + 22.f), 0.085f, 0.07f, sil);
+        pen.limb(shoulder, e, 0.1f, 0.085f, coat);
+        pen.limb(e, bone(e, 0.27f, swing + 22.f), 0.085f, 0.07f, coat);
     }
     // a faint rim of street light on the head and shoulders (the umbrella keeps the heads under it dark)
-    if (f.arms != Arms::Umbrella && f.arms != Arms::Paper) {
+    if (!day && f.arms != Arms::Umbrella && f.arms != Arms::Paper) {
         for (int i = 0; i < 7; ++i) {
             float a0 = PI * (0.2f + 0.08f * i), a1 = PI * (0.2f + 0.08f * (i + 1));
             float ry = f.head == Head::Cap ? 0.05f : 0.112f, cyh = f.head == Head::Cap ? head.y + 0.075f : head.y;
@@ -240,7 +250,8 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
                        1.6f, alpha(rimC, 0.8f));
         }
     }
-    DrawLineEx(pen.P(L({-0.1f, shY}).x, L({-0.1f, shY}).y), pen.P(L({0.1f, shY - 0.01f}).x, L({0.1f, shY - 0.01f}).y), 1.4f, alpha(rimC, 0.6f));
+    if (!day)
+        DrawLineEx(pen.P(L({-0.1f, shY}).x, L({-0.1f, shY}).y), pen.P(L({0.1f, shY - 0.01f}).x, L({0.1f, shY - 0.01f}).y), 1.4f, alpha(rimC, 0.6f));
     if (f.smoking) {  // a cigarette glowing at the lips
         Vector2 m = {head.x + 0.1f, head.y - 0.05f};
         ellipseGrad(pen.P(m.x + 0.03f, m.y), 7.f, 7.f, Color{255, 120, 40, 110}, Color{255, 90, 30, 0}, 16);
@@ -249,12 +260,12 @@ void drawFigure(const FigSpec& f, int frame, Pen pen) {
     }
 }
 
-void drawWalkerAtlas(RenderTexture2D& rt) {
+void drawWalkerAtlas(RenderTexture2D& rt, bool day) {
     beginRoomCanvas(rt);
     for (int t = 0; t < WALK_TYPES; ++t)
         for (int f = 0; f < WALK_FRAMES; ++f) {
             Rectangle c = walkCell(t, f);
-            drawFigure(kFigs[t], f, Pen{c.x + c.width * 0.43f, c.y + c.height - 2.f});
+            drawFigure(kFigs[t], t, f, Pen{c.x + c.width * 0.43f, c.y + c.height - 2.f}, day);
         }
     endRoomCanvas(rt);
 }
@@ -330,15 +341,21 @@ Texture2D genDropSprite() {
 // ============================================================================ init / free
 void Room::Impl::initWeather() {
     okey::Rng wr(seed * 7919u + 0x5eedu);
-    rainBase = wr.chance(0.55f) ? wr.uniform(0.5f, 1.f) : 0.f;
+    // whether it rains depends on the season and the hour too (Room::Impl::evalLook): the seed decides how wet a
+    // day this is and how hard it rains
+    rainSeedU = wr.uniform(0.f, 1.f);
+    rainSeedI = wr.uniform(0.5f, 1.f);
+    evalLook(true);
+    rainBase = rainTarget;
     rain = rainBase;
     walkerT = wr.uniform(2.f, 9.f);
 
     // passers-by (every night)
     cvWalkers = makeCanvas(WALK_W, WALK_H);
-    drawWalkerAtlas(cvWalkers);
+    walkersDay = phase <= 1;
+    drawWalkerAtlas(cvWalkers, walkersDay);
 
-    if (rainBase <= 0.f) return;
+    // the rain's resources exist even on a dry night: the weather turns with the hour and the season
     texStreak = genStreakTexture(seed + 1234);
     texDropSprite = genDropSprite();
     cvDrops[0] = makeCanvas(DROPS_W, DROPS_H);
@@ -389,6 +406,13 @@ void Room::Impl::initWeather() {
     // rain outside: the left street (seen through both windows and the door) and the back street
     streaks.resize(170);
     for (Streak& s : streaks) placeStreak(s, wr, true);
+}
+
+void Room::Impl::refreshWalkers() {
+    const bool day = phase <= 1;
+    if (day == walkersDay || !cvWalkers.id) return;
+    walkersDay = day;
+    drawWalkerAtlas(cvWalkers, day);
 }
 
 void Room::Impl::freeWeather(Renderer& r) {
@@ -537,9 +561,11 @@ void Room::Impl::drawDrops() {
 
 // ============================================================================ per frame
 void Room::Impl::updateWeather(float dt) {
-    // tonight's rain eases off and picks up again over minutes
+    // tonight's rain eases off and picks up again over minutes (and comes and goes with the hour and the season)
+    rainBase += (rainTarget - rainBase) * std::min(1.f, dt * 0.35f);
+    if (rainBase < 0.005f && rainTarget <= 0.f) rainBase = 0.f;
+    rain = rainBase * (0.55f + 0.45f * noise1(time / 75.f, seed + 311u));
     if (rainBase > 0.f) {
-        rain = rainBase * (0.55f + 0.45f * noise1(time / 75.f, seed + 311u));
         for (DropSlot& s : dropSlots) simDrops(s, dt);
         dropRedraw -= dt;
         // 12 Hz is plenty for drops that creep down the glass; every render-to-texture pass makes the driver wait
@@ -556,10 +582,11 @@ void Room::Impl::updateWeather(float dt) {
     // passers-by
     walkerT -= dt;
     if (walkerT <= 0.f) {
-        walkerT = rainBase > 0.f ? rng.uniform(9.f, 30.f) : rng.uniform(7.f, 24.f);
-        if (walkers.size() < 2) {
+        // the street is busier by day
+        walkerT = (rainBase > 0.3f ? rng.uniform(9.f, 30.f) : rng.uniform(7.f, 24.f)) * (1.f - 0.6f * dayK);
+        if (walkers.size() < (dayK > 0.5f ? 3u : 2u)) {
             Walker w;
-            const int* pool = rainBase > 0.f ? kRainyFigs : kDryFigs;
+            const int* pool = (rainBase > 0.3f || snow > 0.6f) ? kRainyFigs : kDryFigs;
             w.type = pool[rng.range(0, 6)];
             const FigSpec& f = kFigs[w.type];
             w.speed = f.stride > 1.2f ? rng.uniform(2.6f, 3.1f) : (f.arms == Arms::Cane ? rng.uniform(0.75f, 0.9f) : rng.uniform(1.15f, 1.45f));
@@ -602,7 +629,7 @@ void Room::Impl::submitWeather(Renderer& r) {
         float bounce = 0.008f * std::sin(w.dist / step * 2.f * PI);
         r.submitBillboard(cvWalkers.texture, src, {w.p.x, WALK_BOARD_H * 0.5f + bounce, w.p.z}, {WALK_BOARD_W, WALK_BOARD_H}, WHITE, false);
     }
-    if (rainBase <= 0.f) return;
+    if (rainBase <= 0.01f) return;
     for (const Pane& p : dropPanes) r.submit(&p.mesh, p.mat, MatrixTranslate(p.at.x, p.at.y, p.at.z), Transparent | DoubleSided);
     const float tw = (float)texStreak.width;
     for (const Streak& s : streaks) {

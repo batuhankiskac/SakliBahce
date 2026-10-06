@@ -5,6 +5,7 @@
 #include "core/Game.h"
 #include "ui/Audio.h"
 #include "ui/Common.h"
+#include "ui/Stats.h"
 #include <functional>
 #include <string>
 
@@ -30,7 +31,11 @@ enum class ScreenId {
     Paused,       // in-game menu: devam, kurallar, ayarlar, ana menü
     HandSummary,  // after each hand: this hand's result + the running score sheet
     MatchOver,    // final standings, winner celebration, "Yeni Oyun" / "Ana Menü"
-    GameSelect    // Title "Oyna": which game (101, Eşli 101, Okey, Tavla, ...)
+    GameSelect,   // Title "Oyna": which game (101, Eşli 101, Okey, Tavla, ...)
+    Stats,        // Title "İstatistik": the player's record and rank (kahvehane defteri)
+    Guide,        // a game's short guide card at its first match (setGuide), "Anladım" -> None
+    Replays,      // İstatistik "Tekrarlar": the last finished matches, to watch again
+    Analysis      // "Hatalarım": the player's most expensive mistakes of a match (setAnalysis)
 };
 
 struct Settings {
@@ -42,15 +47,45 @@ struct Settings {
     bool music = true;
     float animSpeed = 1.f;     // 0.5 .. 2
     bool hints = true;
+    bool guide = true;         // a game's guide card at its first match (switching it on shows them all again)
+    int guideSeen = 0;         // bit per GameKind: its guide was shown
     bool katlamali = false;    // Katlamalı oyun (okey::RulesConfig::katlamali), from the next match
     bool yandanCeza = true;    // yandan alıp açma cezası (okey::RulesConfig::leftOpenPenalty), next match
     int okeyStart = 20;        // klasik okey: starting points (6, 12, 20), counted down
+    bool okeyRenkli = false;   // klasik okey: renkli okey (a red / black gösterge doubles the hand)
+    bool batakKozKirilmadan = true; // batak: no koz lead before a koz has been played
+    bool king12 = false;       // king: the short game, 12 hands (each chooses 1 koz and 2 cezas)
+    bool tavlaKatmerli = false; // tavla: katmerli mars counts 3
     bool batakEsli = false;    // batak: partners across (eşli ihaleli batak)
     int batakTarget = 51;      // batak: the match is won at this score (31, 51, 71)
     int tavlaPoints = 5;       // tavla: the match goes to this many points (3, 5, 7)
+    bool tavlaDoubling = false; // tavla: katlama zarı (doubling cube) in play
     int pistiTarget = 101;     // pişti: the match is won at this score (101, 151)
     int pistiMode = 0;         // pişti: 0 four players, 1 eşli, 2 two players (you and Kel Mahmut)
+    // ---- atmosphere / accessibility
+    int dayTime = 0;           // 0 otomatik (the computer's clock), 1 sabah, 2 öğle, 3 akşam, 4 gece
+    int season = 0;            // 0 otomatik (the date), 1 ilkbahar, 2 yaz, 3 sonbahar, 4 kış
+    bool voices = true;        // the regulars murmur when they speak (Audio)
+    bool colorBlind = false;   // tiles / cards / checkers with shapes and colour-blind friendly colours
+    bool bigText = false;      // larger HUD and speech text
     std::string playerName = "Sen";
+};
+
+// One finished match kept for watching again (Replays screen).
+struct ReplayEntry {
+    std::string game;    // "Batak"
+    std::string date;    // "06.10.2026 21:40"
+    std::string result;  // "Kazandın", "Kel Mahmut kazandı"
+    int actions = 0;
+};
+
+// One mistake of the player as the analysis found it (Analysis screen).
+struct MistakeView {
+    std::string when;    // "3. el, 14. tur"
+    std::string played;  // "Kırmızı 12'yi attın"
+    std::string better;  // "Kurt Sarı 3'ü atardı"
+    std::string why;     // "Hacı Rıza onu alıp açtı" (may be empty)
+    std::string cost;    // "-38 puan"
 };
 
 // The score sheet and the final standings of the games that are not okey (tavla, the card games): the game fills
@@ -96,7 +131,10 @@ enum class ScreenAction {
     Quit,             // Title: "Çıkış"
     SettingsChanged,  // any setting changed (App re-applies audio/anim settings)
     StartAiMatch,     // Title: "Yapay Zekayı İzle" — a new match with the Yapay Zeka mode on
-    ToggleAiMode      // Paused: "Yapay Zeka Oynasın" / "Kontrolü Geri Al" (the menu closes, the game resumes)
+    ToggleAiMode,     // Paused: "Yapay Zeka Oynasın" / "Kontrolü Geri Al" (the menu closes, the game resumes)
+    ResumeSaved,      // Title: "Devam Et" — the match left unfinished last time
+    WatchReplay,      // Replays: watch chosenReplay()
+    AnalyzeReplay     // Replays: "Analiz" of chosenReplay() (App computes, then setAnalysis)
 };
 
 class Screens {
@@ -127,6 +165,18 @@ public:
     // whenever a sheet is shown; clearSheet() for the okey games).
     void setSheet(const SheetModel& m);
     void clearSheet();
+    // The record shown by the İstatistik screen (App owns it; null: an empty book).
+    void setStats(const StatsBook* stats);
+    // A match left unfinished can be resumed: the title shows "Devam Et" with `label` (e.g. "Batak · 3. el").
+    void setResumable(bool on, const std::string& label = {});
+    // The guide card's text (show(ScreenId::Guide) after it): a title and a few short lines.
+    void setGuide(const std::string& title, const std::vector<std::string>& lines);
+    // The finished matches to list on the Replays screen (newest first) and the one picked for WatchReplay.
+    void setReplays(const std::vector<ReplayEntry>& rows);
+    int chosenReplay() const;
+    // "Hatalarım": the MatchOver screen offers it while `available`; the Analysis screen shows `rows` once `ready`
+    // (until then "Kurt maçı inceliyor…"). `title` e.g. "Batak · 06.10.2026".
+    void setAnalysis(bool available, bool ready, const std::string& title, const std::vector<MistakeView>& rows);
     std::function<void(Sfx)> playSfx; // set by App
 
 private:

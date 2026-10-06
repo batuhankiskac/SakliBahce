@@ -930,6 +930,45 @@ void testBotOpensPairs() {
     }
 }
 
+// Personalities: exactly five pairs and a 99 series (no opening). Usta opens with the pairs only when the pile
+// is short; a bold Usta's window is wider (pile <= 20), a cautious one's narrower (pile <= 8). At 18 tiles only the
+// bold one opens, at 12 the neutral and the bold one. The neutral style is the default play.
+void testBotStyles() {
+    CHECK(BotStyle::forSeat(0).neutral());
+    CHECK(BotStyle::forSeat(1).neutral());
+    CHECK(BotStyle::forSeat(2).boldness > 0.f);
+    CHECK(BotStyle::forSeat(3).boldness < 0.f);
+    const BotStyle styles[3] = {BotStyle{}, BotStyle::bold(), BotStyle::cautious()};
+    const char* names[3] = {"neutral", "bold", "cautious"};
+    const int piles[2] = {18, 12};
+    const bool want[2][3] = {{false, true, false}, {true, true, false}};
+    for (int pi = 0; pi < 2; ++pi) {
+        for (int k = 0; k < 3; ++k) {
+            Game g;
+            Setup s;
+            s.seat = 0;
+            s.stage = TurnStage::Play;
+            s.hands[0] = {T(Y, 3, 0), T(Y, 3, 1), T(B, 8, 0), T(B, 8, 1), T(R, 12, 0), T(R, 12, 1), T(K, 1, 0),
+                          T(K, 1, 1), T(Y, 10, 0), T(Y, 10, 1), T(B, 11), T(B, 12), T(B, 13), T(K, 11), T(K, 12),
+                          T(K, 13), T(Y, 8), T(Y, 9), T(R, 2), T(R, 6), T(Y, 5)};
+            applySetup(g, s);
+            V& pile = g.debugPile();
+            std::vector<int> spill(pile.begin(), pile.end() - piles[pi]);
+            pile.erase(pile.begin(), pile.end() - piles[pi]);
+            g.debugPlayer(1).hand.insert(g.debugPlayer(1).hand.end(), spill.begin(), spill.end());
+            CHECK_EQ(solvePairs(s.hands[0], g.okey()).value, g.pairsOpenNeed());
+            CHECK_EQ(solveSeries(s.hands[0], g.okey()).value, 99);
+            Bot bot(BotLevel::Normal, 9);
+            if (k) bot.setStyle(styles[k]);
+            const TurnLog t = playTurn(g, bot);
+            CHECK_EQ(t.rejected, 0);
+            CHECK_MSG(g.player(0).opened == want[pi][k],
+                      std::string("Usta ") + names[k] + " at pile " + std::to_string(piles[pi]) +
+                          (want[pi][k] ? " should open with pairs" : " should wait"));
+        }
+    }
+}
+
 // next() repeats its action when the state did not change (the caller did not apply it yet).
 void testBotRepeatsUnappliedAction() {
     Game g;
@@ -1028,6 +1067,7 @@ void runBotTests() {
     testBotFinishes();
     testBotSwapsJoker();
     testBotOpensPairs();
+    testBotStyles();
     testBotRepeatsUnappliedAction();
     testBotMatches();
 }

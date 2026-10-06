@@ -35,6 +35,8 @@ SolveResult solveSeriesObjective(const std::vector<int>& tiles, const OkeyInfo& 
 uint64_t solverWork();
 // tests/sim --team-ab: seats (bit per seat) whose bots play eşli 101 as a team (default: all).
 unsigned teamAwareMask = 0xF;
+// tests/sim --style-knobs: which personality knobs (STYLE_* bits below) a styled bot uses (default: all).
+unsigned styleKnobs = ~0u;
 } // namespace detail
 
 namespace {
@@ -62,11 +64,29 @@ constexpr double FEED_ROLL = 2.0;
 // next draw is looked at by Kurt only: worth about 0.27 points a hand in duplicate deals, which is what sets Kurt
 // apart from Usta; a second draw of look-ahead and other weights measured no better).
 constexpr double CLASSIC_WIN = 30.0;
+constexpr int CLASSIC_SAMPLES = 96; // hata analizi: sampled futures per klasik okey discard
 // Eşli 101: what the partner's hand is expected to cost the team when the opponents end the hand (pile out or an
 // opponent finishes): an unopened partner a share of the unopened score (they may still open), an opened one
 // about this much per tile left.
 constexpr double PARTNER_UNOPENED_SHARE = 0.4;
 constexpr double PARTNER_TILE_POINTS = 3.5;
+// Personality (BotStyle::boldness b in -1..1, 0 = the tuned play above). A bold bot fears feeding the right
+// neighbour less (x (1 - STYLE_FEED * b) on every feed / danger term), opens with pairs sooner (Kurt: the open-now
+// line gets STYLE_PAIR_BIAS points of credit over waiting for a series; Usta/Acemi: wider pile windows), takes the
+// left tile / opens into a penalty discard a few tiles earlier at the end of the pile, and values building the hand
+// over shedding points; a cautious one does the opposite. Klasik okey: a bold bot leans to the seven-pairs line.
+enum : unsigned {
+    STYLE_K_FEED = 1,         // feed / danger weights (101)
+    STYLE_K_PAIR_WINDOW = 2,  // Acemi / Usta / Kurt-without-wait pair-opening thresholds
+    STYLE_K_PAIR_BIAS = 4,    // Kurt open-with-pairs-now credit
+    STYLE_K_LATE_OPEN = 8,    // end-of-pile window for opening into a penalty discard
+    STYLE_K_POTENTIAL = 16,   // build the hand vs shed points
+    STYLE_K_EASY_TAKE = 32,   // Acemi's chance to take a usable left tile
+    STYLE_K_CLASSIC_PAIRS = 64,  // klasik okey: seven-pairs lean (and take-left for pairs)
+    STYLE_K_CLASSIC_DANGER = 128 // klasik okey: classicDanger weight
+};
+constexpr double STYLE_FEED = 0.4;
+constexpr double STYLE_PAIR_BIAS = 12.0;
 
 
 using Groups = std::vector<std::vector<int>>;
@@ -179,6 +199,15 @@ struct Opening {
 struct Bot::Impl {
     BotLevel level = BotLevel::Normal;
     uint64_t seed = 1;
+    BotStyle style;
+
+    double bold() const { return std::clamp((double)style.boldness, -1.0, 1.0); }
+    // boldness as seen by one knob (0 when the knob is switched off by sim --style-knobs)
+    double bk(unsigned knob) const { return (detail::styleKnobs & knob) ? bold() : 0.0; }
+    // multiplier of every "don't feed the neighbour" / danger weight
+    double feedMul() const { return 1.0 - STYLE_FEED * bk(STYLE_K_FEED); }
+    // pile count up to which the end-of-pile shortcuts apply (open into a penalty discard, take to open)
+    int lateOpenPile() const { return 4 + (int)std::lround(3.0 * bk(STYLE_K_LATE_OPEN)); }
 
     struct Step {
         BotAction act;
@@ -576,19 +605,22 @@ struct Bot::Impl {
         std::vector<int> rest = pr.leftovers;
         const int restPts = handPts(rest);
         const int pc = pr.value;
+        const double pb = bk(STYLE_K_PAIR_WINDOW);
         // Late in the hand anything that beats the unopened score is worth it.
         if (pile <= 3) return 2 * restPts < rc.unopenedScore + 40;
         switch (level) {
-        case BotLevel::Easy: return pc >= g->pairsOpenNeed() + 1 || pile <= 10;
-        case BotLevel::Normal: return pc >= g->pairsOpenNeed() + 1 || seriesValue < g->seriesOpenNeed() - 30 || pile <= 14;
+        case BotLevel::Easy: return pc >= g->pairsOpenNeed() + 1 || pile <= 10 + (int)std::lround(4 * pb);
+        case BotLevel::Normal:
+            return pc >= g->pairsOpenNeed() + 1 || seriesValue < g->seriesOpenNeed() - 30 + (int)std::lround(12 * pb) ||
+                   pile <= 14 + (int)std::lround(6 * pb);
         case BotLevel::Hard: {
             // With the wait-a-turn rule Kurt rolls both futures out in makePlan (open now or keep the hand).
             if (g->rules().waitTurnAfterOpening) return true;
             if (pc >= g->pairsOpenNeed() + 1) return true;
             // Doubled points of what stays in hand against the chance of a series opening soon.
-            const bool seriesClose = seriesValue >= g->seriesOpenNeed() - 22 && pile >= 14;
+            const bool seriesClose = seriesValue >= g->seriesOpenNeed() - 22 + (int)std::lround(8 * pb) && pile >= 14;
             if (seriesClose) return false;
-            return 2 * restPts < rc.unopenedScore + 20 || pile <= 16;
+            return 2 * restPts < rc.unopenedScore + 20 + (int)std::lround(20 * pb) || pile <= 16 + (int)std::lround(4 * pb);
         }
         }
         return false;
@@ -1628,6 +1660,7 @@ struct Bot::Impl {
         if (pile <= 8) potW = 0.45;
         if (pile <= 4) potW = 0.2;
         if (m.opened && know.minOpenedOppHand <= 3) potW *= 0.5;
+        potW *= 1.0 + 0.15 * bk(STYLE_K_POTENTIAL); // bold: build the hand; cautious: shed points
 
         // Runs laid out in the series partition (for extension potential).
         struct RunEnds {
@@ -1744,9 +1777,9 @@ struct Bot::Impl {
                 if (!know.rOpened && pile <= 10) feed *= 1.5;
                 // dead tiles (both other copies gone) are safe to let go
                 if (know.live(c, n) == 0) feed -= 1.5;
-                danger += feed;
+                danger += feed * feedMul();
             }
-            danger += (easy() ? FEED_WEIGHT_EASY : FEED_WEIGHT) * feedCost(x); // yandan açma cezası
+            danger += (easy() ? FEED_WEIGHT_EASY : FEED_WEIGHT) * feedMul() * feedCost(x); // yandan açma cezası
             if (easy()) danger += rng.uniform(0.0f, 6.0f);
             scored.push_back({keep + danger, x});
         }
@@ -1797,7 +1830,7 @@ struct Bot::Impl {
         double best = 1e18;
         for (size_t i = 0; i < top.size(); ++i) {
             const double score =
-                ev[i] + DANGER_WEIGHT * (top[i].first - top.front().first) + FEED_ROLL * feedCost(top[i].second);
+                ev[i] + DANGER_WEIGHT * (top[i].first - top.front().first) + FEED_ROLL * feedMul() * feedCost(top[i].second);
             if (score < best) {
                 best = score;
                 bestId = top[i].second;
@@ -1885,7 +1918,7 @@ struct Bot::Impl {
         if (!m.opened) {
             // Taking a tile only to open straight into a penalty discard is not worth it.
             const Opening op = chooseOpening(m, true);
-            usable = op.valid && (easy() || game.pileCount() <= 4 || openingLeavesSafeDiscard(m, op));
+            usable = op.valid && (easy() || game.pileCount() <= lateOpenPile() || openingLeavesSafeDiscard(m, op));
         } else {
             Model probe = m;
             usable = usePending(probe, [](const BotAction&) {});
@@ -1893,7 +1926,7 @@ struct Bot::Impl {
         if (!usable) return a;
         if (easy()) {
             Rng r = turnRng(game, seat, 0x51);
-            if (!r.chance(0.55f)) return a;
+            if (!r.chance(0.55f + 0.1f * (float)bk(STYLE_K_EASY_TAKE))) return a;
         }
         return act(BotAction::Kind::TakeLeft);
     }
@@ -1957,7 +1990,8 @@ struct Bot::Impl {
     double classicValue(const std::vector<int>& h14, const std::vector<Draw>& draws, bool lookahead) const {
         const int cover = classicCoverFast(h14, *ok);
         const int pairs = classicPairCount(h14, *ok);
-        if (!lookahead) return std::max<double>(cover, pairs >= 4 ? pairs * 2.0 : 0.0);
+        const double pairW = 2.0 * (1.0 + 0.15 * bk(STYLE_K_CLASSIC_PAIRS)); // bold leans to the seven-pairs line
+        if (!lookahead) return std::max<double>(cover, pairs >= 4 ? pairs * pairW : 0.0);
         double wsum = 0, win = 0, gain = 0, pairWin = 0;
         std::vector<int> t = h14;
         t.push_back(-1);
@@ -1972,7 +2006,7 @@ struct Bot::Impl {
         }
         if (wsum <= 0) return cover;
         const double series = cover + 0.8 * gain / wsum + CLASSIC_WIN * win / wsum;
-        const double pairLine = pairs >= 4 ? pairs * 2.0 + CLASSIC_WIN * pairWin / wsum : 0.0;
+        const double pairLine = pairs >= 4 ? pairs * pairW + CLASSIC_WIN * pairWin / wsum : 0.0;
         return std::max(series, pairLine);
     }
 
@@ -2012,7 +2046,9 @@ struct Bot::Impl {
             const int before = classicCoverFast(hand, *ok), after = classicCoverFast(with, *ok);
             const int pb = classicPairCount(hand, *ok), pa = classicPairCount(with, *ok);
             bool take = after > before;
-            if (!take && pb >= 5 && pa > pb) take = true; // going for pairs
+            // going for pairs (a bold bot from three pairs on, a cautious one only from six)
+            const double cp = bk(STYLE_K_CLASSIC_PAIRS);
+            if (!take && pb >= (cp > 0.5 ? 3 : cp < -0.5 ? 6 : 5) && pa > pb) take = true;
             if (easy() && take && !rng.chance(0.6f)) take = false;
             return act(take ? BotAction::Kind::TakeLeft : BotAction::Kind::DrawPile);
         }
@@ -2046,7 +2082,7 @@ struct Bot::Impl {
             faces.push_back(fc);
             const std::vector<int> rest = without(hand, x);
             double v = classicValue(rest, draws, hard());
-            v -= (hard() ? 1.0 : 0.6) * classicDanger(x);
+            v -= (hard() ? 1.0 : 0.6) * (1.0 - STYLE_FEED * bk(STYLE_K_CLASSIC_DANGER)) * classicDanger(x);
             if (easy()) v += rng.uniform(0.f, 1.2f);
             v -= 0.002 * ok->faceNumber(x); // ties: let the lower tile go
             if (v > best) {
@@ -2057,6 +2093,230 @@ struct Bot::Impl {
         BotAction d = act(BotAction::Kind::Discard);
         d.tile = bestId >= 0 ? bestId : hand.front();
         return d;
+    }
+
+    // ---- hata analizi (Bot::evaluate*) ----
+    void prepareAnalysis(const Game& game, int seat) {
+        g = &game;
+        ok = &game.okey();
+        seatNow = seat;
+        buildKnowledge(game, seat);
+        workStart = detail::solverWork();
+    }
+
+    // One tile per face of the hand (okeys as one face), the pending left tile excluded.
+    std::vector<int> faceReps(const std::vector<int>& hand, int pending) const {
+        std::vector<int> reps;
+        for (int id : hand) {
+            if (id == pending) continue;
+            bool dup = false;
+            for (int r : reps) {
+                if (ok->isJoker(r) && ok->isJoker(id)) dup = true;
+                else if (!ok->isJoker(r) && !ok->isJoker(id) && ok->faceColor(r) == ok->faceColor(id) &&
+                         ok->faceNumber(r) == ok->faceNumber(id))
+                    dup = true;
+                if (dup) break;
+            }
+            if (!dup) reps.push_back(id);
+        }
+        return reps;
+    }
+    int repIndex(const std::vector<int>& reps, int id) const {
+        for (size_t i = 0; i < reps.size(); ++i) {
+            const int r = reps[i];
+            if (r == id || (ok->isJoker(r) && ok->isJoker(id)) ||
+                (!ok->isJoker(r) && !ok->isJoker(id) && ok->faceColor(r) == ok->faceColor(id) &&
+                 ok->faceNumber(r) == ok->faceNumber(id)))
+                return (int)i;
+        }
+        return -1;
+    }
+
+    // Expected final score of the hand after discarding each candidate now: the rollouts of the level's look-ahead
+    // over every candidate (no pre-selection), plus the penalties the discard writes at once (okey, işlek tile) and
+    // the expected yandan açma cezası.
+    std::vector<double> analysisValues(const Model& m, const std::vector<int>& cands, uint64_t budget) const {
+        const RulesConfig& rc = g->rules();
+        const int D = ownDraws();
+        std::vector<std::vector<int>> pileD, leftD;
+        if (D >= 1) {
+            Rng mc = turnRng(*g, m.seat, m.opened ? 0xA5A1 : 0xA5A2);
+            const auto both = sampleDraws(m.opened ? OPENED_SAMPLES : UNOPENED_SAMPLES, 2 * D, mc);
+            bool full = true;
+            for (const auto& smp : both) {
+                if ((int)smp.size() < 2 * D) full = false;
+                pileD.emplace_back(smp.begin(), smp.begin() + std::min<size_t>(D, smp.size()));
+                leftD.emplace_back(smp.begin() + std::min<size_t>(D, smp.size()), smp.end());
+            }
+            if (!full) {
+                pileD.clear();
+                leftD.clear();
+            }
+        }
+        std::vector<double> ev = m.opened ? openedRollouts(m, cands, pileD, leftD, budget)
+                                          : unopenedRollouts(m, cands, pileD, leftD, budget);
+        for (size_t i = 0; i < cands.size(); ++i) {
+            const int x = cands[i];
+            if (ok->isJoker(x)) {
+                if (rc.penaltyJokerDiscard) ev[i] += rc.penalty;
+            } else {
+                if (rc.penaltyPlayableDiscard && fitsAnyMeld(m.table, x, *ok)) ev[i] += rc.penalty;
+                ev[i] += feedCost(x);
+            }
+        }
+        return ev;
+    }
+
+    // Score of finishing right after an opening that leaves one tile (elden when nobody else has opened).
+    double finishScore(const Model& m, bool pairs) const {
+        int mult = pairs ? 2 : 1;
+        if (!m.hand.empty() && ok->isJoker(m.hand[0])) mult *= 2;
+        if (!know.anyOpened) mult *= 2;
+        return (double)g->rules().winnerScore * mult;
+    }
+
+    // The best line after a draw (no pending tile): the best discard, or Kurt's opening now and the best discard.
+    double bestAfterDraw(const Model& m, uint64_t budget) const {
+        double best = 1e18;
+        if (m.hand.size() > 1) {
+            const std::vector<double> v = analysisValues(m, faceReps(m.hand, -1), budget);
+            for (double x : v) best = std::min(best, x);
+        }
+        if (!m.opened) {
+            const Opening op = chooseOpening(m, false);
+            if (op.valid) {
+                Model mo = m;
+                BotAction a = act(BotAction::Kind::Open);
+                a.melds = op.melds;
+                if (applyToModel(mo, a)) {
+                    if (mo.hand.size() <= 1) {
+                        best = std::min(best, finishScore(mo, op.pairs));
+                    } else {
+                        const std::vector<double> v = analysisValues(mo, faceReps(mo.hand, -1), budget);
+                        for (double x : v) best = std::min(best, x);
+                    }
+                }
+            }
+        }
+        return best == 1e18 ? (double)g->rules().unopenedScore : best;
+    }
+
+    bool evaluateDrawImpl(const Game& game, int seat, double& take, double& pile) {
+        const int L = game.topDiscard(Game::leftOf(seat));
+        if (L < 0 || !game.canTakeFromLeft(seat) || game.player(seat).opened || game.stage() != TurnStage::NeedDraw)
+            return false;
+        const RulesConfig& rc = game.rules();
+        Model base = modelOf(game, seat);
+        base.stage = TurnStage::Play;
+        base.canWork = false;
+        // the pile: a few sampled unseen tiles
+        constexpr int PILE_SAMPLES = 6;
+        Rng r = turnRng(game, seat, 0xD4A3);
+        double sum = 0.0;
+        int n = 0;
+        for (int k = 0; k < PILE_SAMPLES && !know.unseen.empty(); ++k) {
+            Model m = base;
+            m.hand.push_back(know.unseen[(size_t)r.range((int)know.unseen.size())]);
+            sum += bestAfterDraw(m, LOOKAHEAD_BUDGET / 2);
+            ++n;
+        }
+        pile = n > 0 ? sum / n : (double)rc.unopenedScore;
+        // the left tile: it must go into the opening (else it is given back)
+        Model m = base;
+        m.hand.push_back(L);
+        m.pending = L;
+        const Opening op = chooseOpening(m, true);
+        take = pile + (rc.penaltyReturnLeft ? rc.penalty : 0);
+        if (op.valid) {
+            BotAction a = act(BotAction::Kind::Open);
+            a.melds = op.melds;
+            if (applyToModel(m, a) && m.pending < 0) {
+                if (m.hand.size() <= 1) {
+                    take = finishScore(m, op.pairs);
+                } else {
+                    take = 1e18;
+                    for (double x : analysisValues(m, faceReps(m.hand, -1), LOOKAHEAD_BUDGET)) take = std::min(take, x);
+                }
+            }
+        }
+        return true;
+    }
+
+    // Klasik okey: chance to finish with the draws left, after discarding each candidate (the most promising faces by
+    // the bot's own hand value, plus `must`). Each sampled future draws the seat's tiles from the unseen ones; the
+    // hand keeps the best tiles (cover / pairs) after every draw.
+    std::vector<std::pair<int, double>> classicChances(const Game& game, int seat, int must) const {
+        const std::vector<int>& hand = game.player(seat).hand;
+        const std::vector<Draw> draws = classicDraws(hand);
+        std::vector<std::pair<double, int>> ranked;
+        for (int x : faceReps(hand, -1)) {
+            if (ok->isJoker(x)) continue;
+            const double v = classicValue(without(hand, x), draws, true) - classicDanger(x);
+            ranked.push_back({-v, x});
+        }
+        std::sort(ranked.begin(), ranked.end());
+        std::vector<int> cands;
+        for (size_t i = 0; i < ranked.size() && cands.size() < 4; ++i) cands.push_back(ranked[i].second);
+        if (must >= 0 && has(hand, must)) {
+            bool in = false;
+            for (int c : cands) in = in || repIndex({c}, must) == 0;
+            if (!in) cands.push_back(must);
+        }
+        const int pile = game.pileCount();
+        const int H = pile <= 0 ? 0 : std::max(1, std::min(6, pile / 4));
+        std::vector<std::pair<int, double>> out;
+        if (H == 0 || know.unseen.empty()) {
+            for (int c : cands) out.push_back({c, 0.0});
+            return out;
+        }
+        constexpr int S = CLASSIC_SAMPLES;
+        Rng r = turnRng(game, seat, 0xC1A55);
+        std::vector<std::vector<int>> futures;
+        {
+            std::vector<int> pool = know.unseen;
+            const int D = std::min<int>(H, (int)pool.size());
+            for (int k = 0; k < S; ++k) {
+                std::vector<int> s;
+                for (int i = 0; i < D; ++i) {
+                    const int j = i + r.range((int)pool.size() - i);
+                    std::swap(pool[i], pool[j]);
+                    s.push_back(pool[i]);
+                }
+                futures.push_back(std::move(s));
+            }
+        }
+        auto canFinish = [&](const std::vector<int>& h15) {
+            return classicCoverFast(h15, *ok) >= 14 || classicPairCount(h15, *ok) >= 7;
+        };
+        for (int c : cands) {
+            int wins = 0;
+            for (const std::vector<int>& fut : futures) {
+                std::vector<int> h = without(hand, c);
+                for (int t : fut) {
+                    if (!relevant(t, h)) continue; // a tile that changes nothing goes straight back
+                    h.push_back(t);
+                    if (canFinish(h)) {
+                        ++wins;
+                        break;
+                    }
+                    double best = -1e18;
+                    int drop = -1;
+                    for (int y : faceReps(h, -1)) {
+                        if (ok->isJoker(y)) continue;
+                        const std::vector<int> rest = without(h, y);
+                        const double v = classicValue(rest, draws, false) - 0.002 * ok->faceNumber(y);
+                        if (v > best) {
+                            best = v;
+                            drop = y;
+                        }
+                    }
+                    if (drop < 0) drop = h.front();
+                    removeOne(h, drop);
+                }
+            }
+            out.push_back({c, (double)wins / (double)futures.size()});
+        }
+        return out;
     }
 
     // ---- turn planning ----
@@ -2085,7 +2345,7 @@ struct Bot::Impl {
 
         if (!m.opened) {
             const Opening op = chooseOpening(m, false);
-            if (op.valid && !easy() && m.pending < 0 && game.pileCount() > 4 && !openingLeavesSafeDiscard(m, op)) {
+            if (op.valid && !easy() && m.pending < 0 && game.pileCount() > lateOpenPile() && !openingLeavesSafeDiscard(m, op)) {
                 const int t = deferralDiscard(m, op);
                 if (t >= 0) {
                     BotAction d = act(BotAction::Kind::Discard);
@@ -2108,7 +2368,7 @@ struct Bot::Impl {
                         rolloutDiscard(mo, scoreDiscards(mo, rng), budgetLeft() / 2, true, idOpen, evOpen);
                     const bool haveWait =
                         haveOpen && rolloutDiscard(m, scoreDiscards(m, rng), budgetLeft(), true, idWait, evWait);
-                    if (haveWait && evWait < evOpen) {
+                    if (haveWait && evWait + STYLE_PAIR_BIAS * bk(STYLE_K_PAIR_BIAS) < evOpen) {
                         BotAction d = act(BotAction::Kind::Discard);
                         d.tile = idWait;
                         push(d);
@@ -2287,6 +2547,15 @@ void Bot::setLevel(BotLevel level) {
 
 BotLevel Bot::level() const { return impl_->level; }
 
+void Bot::setStyle(BotStyle style) {
+    impl_->style = style;
+    impl_->plan.clear();
+    impl_->planPos = 0;
+    impl_->haveLast = false;
+}
+
+BotStyle Bot::style() const { return impl_->style; }
+
 void Bot::resetForHand() {
     impl_->plan.clear();
     impl_->planPos = 0;
@@ -2346,6 +2615,72 @@ BotAction Bot::next(const Game& g, int seat) {
     im.lastSig = sig;
     im.lastAct = a;
     return a;
+}
+
+} // namespace okey
+
+// ---------------------------------------------------------------------------------------------------------
+// Hata analizi
+
+namespace okey {
+
+std::vector<Bot::TileValue> Bot::evaluateDiscards(const Game& g, int seat) {
+    std::vector<TileValue> out;
+    if (g.classic() || g.handState() != HandState::Playing || g.current() != seat || g.stage() != TurnStage::Play ||
+        g.pendingLeftTile() >= 0 || g.player(seat).hand.size() <= 1)
+        return out;
+    Impl& im = *impl_;
+    im.prepareAnalysis(g, seat);
+    const Model m = im.modelOf(g, seat);
+    const std::vector<int> reps = im.faceReps(m.hand, -1);
+    const std::vector<double> v = im.analysisValues(m, reps, 3 * LOOKAHEAD_BUDGET);
+    for (int id : m.hand) {
+        const int i = im.repIndex(reps, id);
+        out.push_back({id, i >= 0 ? v[(size_t)i] : 0.0});
+    }
+    return out;
+}
+
+bool Bot::openingNow(const Game& g, int seat, std::vector<std::vector<int>>& melds) {
+    melds.clear();
+    if (g.classic() || g.handState() != HandState::Playing || g.current() != seat || g.stage() != TurnStage::Play ||
+        g.player(seat).opened)
+        return false;
+    Impl& im = *impl_;
+    im.prepareAnalysis(g, seat);
+    const Model m = im.modelOf(g, seat);
+    const Opening op = im.chooseOpening(m, m.pending >= 0);
+    if (!op.valid || !g.checkOpen(seat, op.melds).valid) return false;
+    melds = op.melds;
+    return true;
+}
+
+bool Bot::evaluateDraw(const Game& g, int seat, double& takeLeft, double& drawPile) {
+    if (g.classic() || g.handState() != HandState::Playing || g.current() != seat) return false;
+    Impl& im = *impl_;
+    im.prepareAnalysis(g, seat);
+    return im.evaluateDrawImpl(g, seat, takeLeft, drawPile);
+}
+
+std::vector<Bot::TileValue> Bot::evaluateClassicDiscards(const Game& g, int seat, int mustInclude) {
+    std::vector<TileValue> out;
+    if (!g.classic() || g.handState() != HandState::Playing || g.current() != seat || g.stage() != TurnStage::Play)
+        return out;
+    Impl& im = *impl_;
+    im.prepareAnalysis(g, seat);
+    for (const auto& cv : im.classicChances(g, seat, mustInclude))
+        out.push_back({cv.first, cv.second, std::sqrt(cv.second * (1.0 - cv.second) / CLASSIC_SAMPLES)});
+    return out;
+}
+
+double Bot::classicKeepValue(const Game& g, int seat, int tile) {
+    if (!g.classic() || g.handState() != HandState::Playing) return 0.0;
+    Impl& im = *impl_;
+    im.prepareAnalysis(g, seat);
+    const std::vector<int>& hand = g.player(seat).hand;
+    if (!has(hand, tile)) return 0.0;
+    const double danger = (1.0 - STYLE_FEED * im.bk(STYLE_K_CLASSIC_DANGER)) * im.classicDanger(tile);
+    return im.classicValue(without(hand, tile), im.classicDraws(hand), true) - danger;
 }
 
 } // namespace okey

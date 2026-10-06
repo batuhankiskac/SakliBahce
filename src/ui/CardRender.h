@@ -17,6 +17,11 @@ constexpr int NUM_KEYS = 54;  // 0..51 = kart::Cards ids (suit * 13 + rank - 2)
 void init();
 void shutdown();
 bool ready();
+// Four-colour deck (Ayarlar "Renk körü modu"): maça black, kupa red, karo blue, sinek green. Safe to call any time:
+// the atlas is repainted in place (same texture) by the next refresh() — Cards3D::update calls it — or init().
+void setFourColour(bool on);
+bool fourColour();
+void refresh(); // outside BeginDrawing/BeginTextureMode: repaints the atlas if the mode changed
 
 Texture2D atlas();          // mip-mapped, anisotropic, clamped
 Rectangle uv(int key);      // normalised UV rect (x, y, w, h; y down) of a cell's card area

@@ -1,6 +1,6 @@
 # Tavla Nasıl Oynanır?
 
-Tavla iki kişiyle oynanır. Tahtada 24 hane var, her oyuncunun 15 pulu var. Pullar karşılıklı, ters yönde yürür. Amaç pullarının hepsini evine getirip rakipten önce toplamak. Biz kahvede "klasik" tavla oynarız: küp yok, katlama yok, zar ne gösterirse o.
+Tavla iki kişiyle oynanır. Tahtada 24 hane var, her oyuncunun 15 pulu var. Pullar karşılıklı, ters yönde yürür. Amaç pullarının hepsini evine getirip rakipten önce toplamak. Biz kahvede "klasik" tavla oynarız: zar ne gösterirse o. İsteyen ayarlardan **katlama zarını** açabilir (aşağıda).
 
 ## Diziliş ve yön
 
@@ -30,8 +30,22 @@ Her zar ayrı bir hamledir. 6-4 attıysan bir pulu 6, bir pulu 4 hane oynarsın.
 
 - Pullarını önce toplayan oyunu alır: **1 sayı**.
 - Rakip daha hiç pul toplamamışken bitirirsen **mars** olur: **2 sayı**.
-- Türk usulünde katmerli mars da (rakibin pulu hâlâ barda ya da senin evindeyken) 2 sayı yazılır. Bazı masalar onu 3 sayı sayar; bizde 2.
+- Türk usulünde katmerli mars da (rakibin pulu hâlâ barda ya da senin evindeyken) 2 sayı yazılır. Bazı masalar onu 3 sayı sayar; ayarlardan seçilir.
 - Maç 3, 5 ya da 7 sayıya oynanır (varsayılan 5). Sayıya ilk ulaşan maçı alır.
+
+## Katlama zarı
+
+Ayarlardan açılırsa masada üstünde 2, 4, 8, 16, 32, 64 yazan büyük bir zar durur. Oyun başta 1 katına oynanır, zar ortadadır.
+
+- Sırası gelen oyuncu, **zarı atmadan önce** "Katla" diyebilir. Zar ortadaysa ikisi de katlayabilir; bir kere katlandıktan sonra yalnızca zarı elinde tutan yeniden katlayabilir.
+- Rakip ya **kabul eder**: oyun artık iki katına oynanır ve katlama zarı ona geçer; ya da **pes eder**: oyun biter, katlayan o anki değeri yazar (mars sayılmaz).
+- Oyunun sonunda yazılan sayı = oyun (1), mars (2) ya da katmerli mars (3) × katlama zarı. Kabul edilmiş 4'lük bir oyunda mars 8 sayıdır.
+- Oyunun ilk hamlesinden önce katlanmaz.
+- **Crawford kuralı**: bir oyuncu maçı bitirmeye bir sayı kalınca, ondan sonraki ilk oyun katlamasız oynanır. Sonraki oyunlarda katlama yine serbesttir.
+
+## Hamleler ve ipucu
+
+"Hamleler" düğmesi oyunun hamlelerini sol tarafta listeler: zarlar ve her pulun gittiği yer, kendi hane numaralarınla ("24/18 18/13*": yıldız pul kırdığın yerdir, "bar/22" kırık pulun girdiği, "6/çıktı" toplanan pul). "İpucu" (ya da H tuşu) ustanın yerinde ne oynayacağını gösterir.
 
 ## Zarların adları
 

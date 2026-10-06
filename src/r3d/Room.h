@@ -38,6 +38,17 @@ public:
     float rainAmount() const;
     // True once after the cat meowed; `where` = about its head (people at the tables glance over).
     bool consumeCatMeow(Vector3& where);
+
+    // Time of day and season (ui::Settings::dayTime / season: 0 otomatik = the computer's clock / date, re-checked
+    // every 20 s; dayTime 1 sabah, 2 öğle, 3 akşam, 4 gece; season 1 ilkbahar, 2 yaz, 3 sonbahar, 4 kış). Cheap:
+    // call every frame or on change. Daylight through the windows (sun shafts in the morning, golden light in the
+    // evening, the lamps over empty tables off by day), the street outside by day or night, rain (mostly autumn /
+    // winter nights; snow in winter, rainAmount() stays 0 for snow), the lit soba in winter, the fan in summer.
+    void setTimeOfDay(int mode);
+    void setSeason(int mode);
+    int dayPhase() const;  // resolved: w3d::DayPhase (0 sabah, 1 öğle, 2 akşam, 3 gece), see r3d/Daytime.h
+    int season() const;    // resolved: w3d::Season (0 ilkbahar, 1 yaz, 2 sonbahar, 3 kış)
+    float snowAmount() const;  // 0..1 snowfall outside (winter)
     std::function<void(ui::Sfx)> playSfx;   // occasional room sounds (e.g. Chair, Dice, GlassSet)
 
 private:

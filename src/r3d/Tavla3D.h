@@ -1,7 +1,8 @@
 #pragma once
 // A tavla board in 3D on our table, between the player (seat 0, bottom) and Kel Mahmut (seat 2, across): a walnut
 // box with inlaid points (haneler), the middle bar, 30 checkers (pul) that slide / hop between points, two dice that
-// are thrown and tumble to their numbers, highlights for the playable points and ray picking of points.
+// are thrown and tumble to their numbers, the katlama zarı (doubling cube: 2..64, a bigger die), highlights for the
+// playable points and ray picking of points.
 // Board indices follow tavla::Game: 0..23 as seen by player 0 (the bottom row runs 0..11 from right to left, the top
 // row 12..23 from left to right), BAR = 24, OFF = 25.
 #include "r3d/Gfx.h"
@@ -32,11 +33,20 @@ public:
     // Dice: thrown by `player` (0 from the bottom, 1 from the top), landing showing d1 / d2 (d2 = 0: one die).
     // `opening`: the opening roll, one die each (d1 player 0's, d2 player 1's).
     void throwDice(int player, int d1, int d2, bool opening, float delay);
+    void placeDice(int player, int d1, int d2); // the dice already lying there (a resumed match)
     void setDiceUsed(const std::array<bool, 4>& used, int n, bool isDouble); // dims used dice
     void hideDice();
 
+    // Katlama zarı. `show`: in play at all. `value` faces the player (1 = the centred cube, showing 64). On the felt
+    // left of the box: in the middle while `owner` is -1, else on that player's side (0 near, 1 far). `offered` > 0:
+    // held up over the bar, turned to the offered value, while the other player decides. Changes hop and turn it there.
+    void setCube(bool show, int value, int owner, int offered);
+
     // Highlights: points the selected checker can go to, the points with playable checkers, the selected one.
     void setHighlights(const std::vector<int>& targets, const std::vector<int>& sources, int selected);
+    // The keyboard's chosen target (one of the highlighted ones) is lit brighter; -1 none. In the colour-blind mode
+    // (ui::colorBlind) the targets are sky blue with diagonal stripes instead of plain green.
+    void setKeyFocus(int point) { keyFocus_ = point; }
 
     void setSpeed(float s);
     void update(float dt);
@@ -66,20 +76,33 @@ private:
         float t = 1.f, dur = 0.8f, delay = 0.f;
         bool used = false;
     };
+    struct Cube {
+        bool visible = false;
+        int value = 1, owner = -1, offered = 0;
+        Vector3 from{}, to{}, cur{};
+        Quaternion qFrom{0, 0, 0, 1}, qTo{0, 0, 0, 1}, qCur{0, 0, 0, 1};
+        float t = 1.f, dur = 0.6f, hop = 0.f;
+    };
     Vector3 slotWorld(int where, int player, int slot) const;
     Quaternion faceUp(int value, float yawDeg) const;
+    Quaternion cubeFaceUp(int value) const; // the cube turned so the player reads `value` upright on the side facing him
+    Vector3 cubeWorld(int owner, int offered) const;
 
     std::array<Checker, CHECKERS> chk_{};
     std::array<Die, 2> dice_{};
+    Cube cube_;
     std::vector<int> targets_, sources_;
     int selected_ = -1;
+    int keyFocus_ = -1;
     float speed_ = 1.f, time_ = 0.f;
     bool ready_ = false;
 
-    Mesh boardMesh_{}, fieldMesh_{}, pointMesh_[2]{}, checkerMesh_{}, dieMesh_{}, glowMesh_{};
+    Mesh boardMesh_{}, fieldMesh_{}, pointMesh_[2]{}, checkerMesh_{}, dieMesh_{}, glowMesh_{}, cubeMesh_{};
     Mat matWood_{}, matField_{}, matPoint_[2]{}, matChecker_[2]{}, matCheckerHi_{}, matCheckerSel_{}, matDie_{}, matGlow_{},
         matGlowSel_{}, matGlowTarget_{};
-    Texture2D woodTex_{}, dieTex_{}, glowTex_{};
+    Mat matCube_{};
+    Mat matGlowTargetCB_{}, matGlowFocus_{};
+    Texture2D woodTex_{}, dieTex_{}, glowTex_{}, cubeTex_{}, stripeTex_{};
 };
 
 } // namespace r3d

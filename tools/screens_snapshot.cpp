@@ -393,12 +393,14 @@ std::string list(const std::vector<ui::ScreenAction>& v) {
 constexpr Rectangle kTitlePlay{640, 470, 320, 68};
 constexpr Rectangle kCard101{158, 178, 300, 268}; // the game list's first card (101)
 constexpr Rectangle kTitleWatchAi{660, 556, 280, 56};
-constexpr Rectangle kTitleRules{660, 626, 280, 56};
+constexpr Rectangle kTitleRules{660, 626, 136, 56}; // (shares its row with "İstatistik")
 constexpr Rectangle kTitleSettings{660, 696, 280, 56};
 constexpr Rectangle kSetName{720, 183, 340, 46};
-constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 446.f};
+constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 496.f};
 constexpr Vector2 kSetLevelKurt{720.f + 2 * 158.f + 73.f, 256.f};
-constexpr Vector2 kSetMusicToggle{760.f, 736.f};
+constexpr Vector2 kSetMusicToggle{720.f + 2 * 120.f + 54.f, 446.f}; // the "Radyo" chip (page 2)
+constexpr Vector2 kSetPageLooks{937.f + 108.f + 85.f, 92.f};          // the "Görünüm · Ses" tab
+constexpr Vector2 kSetPageGame{937.f + 50.f, 92.f};                   // the "Oyun" tab
 constexpr Rectangle kSetBack{985, 776, 230, 58};
 // Devam, Yapay Zeka Oynasın / Kontrolü Geri Al, Kurallar, Ayarlar, Ana Menü
 constexpr Rectangle kPauseBtn[5] = {{650, 328, 300, 58}, {650, 400, 300, 58}, {650, 472, 300, 58}, {650, 544, 300, 58},
@@ -494,9 +496,15 @@ int main() {
     H.clickAt(kSetLevelKurt);
     acts = H.take();
     check(H.screens.settings().difficulty == 2 && has(acts, ui::ScreenAction::SettingsChanged), "Bot seviyesi = Kurt");
+    H.clickAt(kSetPageLooks);
+    H.take();
+    H.run(0.2);
+    H.shot("settings_looks" + sfx);
     H.clickAt(kSetMusicToggle);
     acts = H.take();
     check(!H.screens.settings().music && has(acts, ui::ScreenAction::SettingsChanged), "Radyo toggled off");
+    H.clickAt(kSetPageGame);
+    H.take();
     H.click(kSetName);
     H.run(0.3);
     H.shot("settings_edit" + sfx);

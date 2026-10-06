@@ -320,6 +320,61 @@ double evalFrame(const Frame& f, const Weights& W) {
     return v;
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Katlama zarı: the chances of the side to roll ("me" of the frame).
+
+constexpr double kRollPips = 8.17;     // an average roll
+constexpr double kContactScale = 33.0; // logistic scale of evalFrame (pips) -> win probability in contact
+constexpr double kOnRoll = 4.0;        // ... and what being on roll is worth there (pips)
+// Kurt's cube: doubles from this win chance unless too good (cubeless equity per cube unit above kTooGood:
+// playing on for the mars is worth more than the opponent's drop); takes while the equity of taking (twice
+// the stake, plus the cube's own value to its owner) beats the drop.
+constexpr double kKurtDouble = 0.68, kKurtTooGood = 0.95, kKurtTake = -0.56;
+// Usta's cube on the pip race estimate.
+constexpr double kUstaDouble = 0.70, kUstaTooGood = 0.90, kUstaTake = 0.25;
+
+double normalCdf(double z) { return 0.5 * std::erfc(-z / std::sqrt(2.0)); }
+
+// Race with me to roll: a normal approximation over the rolls each side still needs (the spread grows with the
+// square root of the rolls to go); being on roll is worth half a roll. The spread and kContactScale / kOnRoll
+// were fitted on Usta self-play (predicted vs. realised win rates agree within ~2% from 15% to 85%).
+double raceWin(double myPips, double opPips) {
+    const double lead = (opPips - myPips) / kRollPips + 0.5;
+    const double sd = 0.36 * std::sqrt(std::max(1.0, (myPips + opPips) / kRollPips)) + 0.1;
+    return normalCdf(lead / sd);
+}
+
+struct Chances {
+    double win = 0.5;
+    double marsWin = 0.0, marsLoss = 0.0; // of all games
+    double equity() const { return win + marsWin - (1.0 - win) - marsLoss; } // cubeless, per cube unit
+};
+
+// Kurt: its evaluation turned into chances. In a race the wastage-adjusted counts go into raceWin; in contact
+// the evaluation of the position as the opponent sees it (he just moved, I roll) through a logistic.
+// Usta: the pip race alone; with contact it trusts the counts less (shrunk toward even).
+double ustaWin(const Position& pos, int p) {
+    const double w = raceWin(pipCount(pos, p), pipCount(pos, 1 - p));
+    return contact(makeFrame(pos, p)) ? 0.5 + (w - 0.5) * 0.6 : w;
+}
+
+Chances kurtChances(const Position& pos, int p) {
+    const Frame f = makeFrame(pos, p);
+    const Frame g = flip(f);
+    Chances c;
+    if (f.meOff == kCheckers || g.meOff == kCheckers) {
+        c.win = f.meOff == kCheckers ? 1.0 : 0.0;
+        return c;
+    }
+    if (!contact(f)) c.win = raceWin(keith(f) * 6.0 / 7.0, keith(g) * 6.0 / 7.0);
+    else c.win = 1.0 / (1.0 + std::exp((evalFrame(g, kTuned) - kOnRoll) / kContactScale));
+    c.win = std::min(0.995, std::max(0.005, c.win));
+    // mars: the side at risk needs its first checker off before the other finishes (marsTerm's 0..14 ramp)
+    c.marsWin = c.win * marsTerm(g, pipsMe(f) / kRollPips) / 14.0;
+    c.marsLoss = (1.0 - c.win) * marsTerm(f, pipsMe(g) / kRollPips) / 14.0;
+    return c;
+}
+
 inline uint64_t mix64(uint64_t z) {
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
@@ -340,6 +395,51 @@ uint64_t stateSig(const Position& pos, const std::vector<int>& left, int p, int 
 } // namespace
 
 double botEvaluate(const Position& pos, int p) { return evalFrame(makeFrame(pos, p), kTuned); }
+double botWinProbability(const Position& pos, int p) { return kurtChances(pos, p).win; }
+
+double botEquityToRoll(const Position& pos, int p, double* win) {
+    if (pos.off[0] == kCheckers || pos.off[1] == kCheckers) { // a finished game: 1 a game, 2 a mars
+        const bool won = pos.off[p] == kCheckers;
+        if (win) *win = won ? 1.0 : 0.0;
+        const int base = pos.off[won ? 1 - p : p] == 0 ? 2 : 1;
+        return won ? base : -base;
+    }
+    const Chances c = kurtChances(pos, p);
+    if (win) *win = c.win;
+    return c.equity();
+}
+
+double botEquityAfterMove(const Position& pos, int p, int depth, double* win) {
+    const int opp = 1 - p;
+    if (pos.off[p] == kCheckers || pos.off[opp] == kCheckers || depth <= 1) {
+        double w = 0.0;
+        const double e = -botEquityToRoll(pos, opp, &w);
+        if (win) *win = 1.0 - w;
+        return e;
+    }
+    std::vector<Position> replies;
+    double sum = 0.0, wsum = 0.0;
+    for (int a = 1; a <= 6; ++a) {
+        for (int b = a; b <= 6; ++b) {
+            const double weight = a == b ? 1.0 : 2.0;
+            generateResults(pos, opp, a, b, replies);
+            const Position* best = &pos;
+            double his = -1e18;
+            for (const Position& y : replies) {
+                const double v = evalFrame(makeFrame(y, opp), kTuned);
+                if (v > his) {
+                    his = v;
+                    best = &y;
+                }
+            }
+            double w = 0.0;
+            sum += weight * botEquityToRoll(*best, p, &w);
+            wsum += weight * w;
+        }
+    }
+    if (win) *win = wsum / 36.0;
+    return sum / 36.0;
+}
 
 
 ActionResult applyBotAction(Game& g, int p, const BotAction& a) {
@@ -348,6 +448,9 @@ ActionResult applyBotAction(Game& g, int p, const BotAction& a) {
     case BotAction::Kind::Roll: return g.roll(p);
     case BotAction::Kind::Step: return a.die ? g.applyStep(p, a.from, a.to, a.die) : g.applyStep(p, a.from, a.to);
     case BotAction::Kind::EndTurn: return g.endTurn(p);
+    case BotAction::Kind::Double: return g.offerDouble(p);
+    case BotAction::Kind::Take: return g.acceptDouble(p);
+    case BotAction::Kind::Drop: return g.declineDouble(p);
     case BotAction::Kind::None: break;
     }
     return ActionResult::fail("Yapılacak bir şey yok");
@@ -357,6 +460,10 @@ BotAction fallbackAction(const Game& g, int p) {
     BotAction a;
     if (g.stage() == Stage::OpeningRoll) {
         a.kind = BotAction::Kind::OpeningRoll;
+        return a;
+    }
+    if (g.responder() == p) {
+        a.kind = BotAction::Kind::Take;
         return a;
     }
     if (g.current() != p) return a;
@@ -480,17 +587,54 @@ struct Bot::Impl {
         }
     }
 
+    // ---- katlama zarı ----
+    // Should p (to roll, g.canDouble(p)) offer a double?
+    bool wantsDouble(const Game& g, int p) {
+        const int opp = 1 - p, mp = g.matchPoints(), cube = g.cubeValue();
+        if (level == BotLevel::Easy) { // a feeling for the pip lead, now and then
+            okey::Rng rng = turnRng(g, p, 0xC0BEull);
+            const int lead = g.pipCount(opp) - g.pipCount(p);
+            return lead > 16 + rng.range(0, 30) && rng.chance(0.5f);
+        }
+        if (g.score(p) + cube >= mp) return false; // the cube already wins the match: a dead double
+        if (level == BotLevel::Normal) {
+            const double w = ustaWin(g.position(), p);
+            return w >= kUstaDouble && w <= kUstaTooGood;
+        }
+        // Kurt: after the Crawford game the trailer doubles at once (the leader would always drop late)
+        if (g.score(opp) == mp - 1 && g.score(p) < mp - 1) return true;
+        const Chances c = kurtChances(g.position(), p);
+        return c.win >= kKurtDouble && c.equity() <= kKurtTooGood;
+    }
+    // p was offered a double: take it?
+    bool wantsTake(const Game& g, int p) {
+        const int opp = 1 - p, mp = g.matchPoints(), cube = g.cubeValue();
+        if (level == BotLevel::Easy) { // takes almost anything, drops some hopeless ones
+            okey::Rng rng = turnRng(g, p, 0x7A4Eull);
+            const int behind = g.pipCount(p) - g.pipCount(opp);
+            return behind < 40 + rng.range(0, 40) || rng.chance(0.3f);
+        }
+        if (g.score(opp) + cube >= mp) return true; // dropping loses the match: a free take
+        // (the opponent is to roll in these estimates: he offered before his roll)
+        if (level == BotLevel::Normal) return 1.0 - ustaWin(g.position(), opp) >= kUstaTake;
+        return -kurtChances(g.position(), opp).equity() >= kKurtTake;
+    }
+
     BotAction next(const Game& g, int p) {
         BotAction a;
         if (g.stage() == Stage::OpeningRoll) {
             a.kind = BotAction::Kind::OpeningRoll;
             return a;
         }
+        if (g.responder() == p) {
+            a.kind = wantsTake(g, p) ? BotAction::Kind::Take : BotAction::Kind::Drop;
+            return a;
+        }
         if (g.current() != p) return a;
         if (g.stage() == Stage::NeedRoll) {
             plan.clear();
             planPos = 0;
-            a.kind = BotAction::Kind::Roll;
+            a.kind = g.canDouble(p) && wantsDouble(g, p) ? BotAction::Kind::Double : BotAction::Kind::Roll;
             return a;
         }
         if (g.stage() != Stage::Moving) return a;

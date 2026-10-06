@@ -2,6 +2,7 @@
 #include "r3d/Tavla3D.h"
 
 #include "r3d/World.h"
+#include "ui/Common.h"
 
 #include <rlgl.h>
 
@@ -21,6 +22,8 @@ constexpr float PW = (HALF_OUT - HALF_IN) / 6.f; // point width
 constexpr float PL = 0.19f;                      // point length (base to tip)
 constexpr float CR = 0.021f, CH = 0.0082f;       // checker radius / height
 constexpr float DIE = 0.02f;
+constexpr float CUBE = 0.04f;                    // the katlama zarı: a bigger die
+constexpr float CUBE_X = -(FRAME_X + 0.045f), CUBE_Z = 0.17f; // on the felt left of the box: middle / owner's side
 
 float easeInOut(float t) { return t < 0.5f ? 4.f * t * t * t : 1.f - std::pow(-2.f * t + 2.f, 3.f) / 2.f; }
 
@@ -60,14 +63,78 @@ Texture2D makeDieTexture() {
     return t;
 }
 
-Texture2D makeGlowTexture() {
+// The katlama zarı's faces in the die texture's cell order: cell k (1..6) shows 2^k.
+Texture2D makeCubeTexture() {
+    const int cell = 128;
+    RenderTexture2D rt = LoadRenderTexture(cell * 6, cell);
+    BeginTextureMode(rt);
+    ClearBackground(Color{238, 230, 210, 255});
+    const Font& f = ui::font(ui::FontId::Tile);
+    for (int k = 1; k <= 6; ++k) {
+        const float x0 = (float)(k - 1) * cell;
+        DrawRectangleLinesEx({x0 + 2.f, 2.f, cell - 4.f, cell - 4.f}, 4.f, Color{150, 40, 32, 255});
+        DrawRectangleLinesEx({x0 + 10.f, 10.f, cell - 20.f, cell - 20.f}, 1.5f, Color{150, 40, 32, 160});
+        const std::string t = std::to_string(1 << k);
+        const float fs = t.size() > 1 ? 80.f : 100.f;
+        const Vector2 m = MeasureTextEx(f, t.c_str(), fs, 0.f);
+        DrawTextEx(f, t.c_str(), {x0 + (cell - m.x) * 0.5f, (cell - m.y) * 0.5f + 2.f}, fs, 0.f, Color{40, 26, 20, 255});
+    }
+    EndTextureMode();
+    Image img = LoadImageFromTexture(rt.texture);
+    ImageFlipVertical(&img);
+    UnloadRenderTexture(rt);
+    Texture2D t = LoadTextureFromImage(img);
+    UnloadImage(img);
+    GenTextureMipmaps(&t);
+    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+    return t;
+}
+
+// The katlama zarı's faces: normal, the direction the number's top points to, texture cell (2^cell is shown).
+// Four faces form a ring around X where every face's number continues onto the next one upright, so with 64, 2, 4
+// or 8 facing the player (the usual values) the number on top reads upright too; 16 and 32 sit on the two ends.
+struct CubeFace {
+    Vector3 n, up;
+    int cell;
+};
+const CubeFace kCubeFaces[6] = {{{0, 1, 0}, {0, 0, -1}, 6}, {{0, 0, 1}, {0, 1, 0}, 1},  {{0, -1, 0}, {0, 0, 1}, 2},
+                                {{0, 0, -1}, {0, -1, 0}, 3}, {{1, 0, 0}, {0, 1, 0}, 4}, {{-1, 0, 0}, {0, 1, 0}, 5}};
+
+Mesh makeCube() {
+    MeshBuilder mb;
+    const float h = CUBE * 0.5f;
+    for (const CubeFace& f : kCubeFaces) {
+        const Vector3 rt = Vector3CrossProduct(f.up, f.n); // the number's right: not mirrored seen from outside
+        const float u0 = (float)(f.cell - 1) / 6.f, u1 = (float)f.cell / 6.f;
+        auto P = [&](float a, float b) {
+            return Vector3Add(Vector3Scale(f.n, h), Vector3Add(Vector3Scale(rt, a * h), Vector3Scale(f.up, b * h)));
+        };
+        // v = 0 is the top row of the cell (the number's top)
+        const int a = mb.vertex(P(-1, -1), f.n, {u0, 1.f});
+        const int b = mb.vertex(P(1, -1), f.n, {u1, 1.f});
+        const int c = mb.vertex(P(1, 1), f.n, {u1, 0.f});
+        const int d = mb.vertex(P(-1, 1), f.n, {u0, 0.f});
+        const Vector3 cr = Vector3CrossProduct(Vector3Subtract(P(1, -1), P(-1, -1)), Vector3Subtract(P(-1, 1), P(-1, -1)));
+        if (Vector3DotProduct(cr, f.n) > 0.f) mb.quad(a, b, c, d);
+        else mb.quad(a, d, c, b);
+    }
+    return mb.build();
+}
+
+Texture2D makeGlowTexture(bool stripes = false) {
     const int n = 64;
     Image img = GenImageColor(n, n, BLANK);
     Color* px = (Color*)img.data;
     for (int y = 0; y < n; ++y)
         for (int x = 0; x < n; ++x) {
             const float u = ((float)x + 0.5f) / (float)n, v = ((float)y + 0.5f) / (float)n;
-            const float a = std::sin(u * PI) * (0.35f + 0.65f * v); // brighter toward the base
+            float a = std::sin(u * PI) * (0.35f + 0.65f * v); // brighter toward the base
+            if (stripes) { // diagonal bands: a target reads by its pattern, not only its colour
+                const float k = u * 3.f + v * 6.f;
+                a = std::max(a * (k - std::floor(k) < 0.5f ? 1.f : 0.3f), 0.f);
+                a = std::min(1.f, a * 1.25f);
+            }
             px[y * n + x] = Color{255, 255, 255, (unsigned char)std::clamp(a * 255.f, 0.f, 255.f)};
         }
     Texture2D t = LoadTextureFromImage(img);
@@ -164,6 +231,12 @@ bool Tavla3D::init(Renderer& r) {
     dieTex_ = makeDieTexture();
     dieMesh_ = makeDie();
     matDie_ = r.makeMat(WHITE, dieTex_, 0.4f, 50.f);
+    cubeTex_ = makeCubeTexture();
+    cubeMesh_ = makeCube();
+    matCube_ = r.makeMat(WHITE, cubeTex_, 0.35f, 40.f, 0.18f); // a little self-lit: the numbers read in the shade
+    cube_ = Cube();
+    cube_.cur = cube_.to = cube_.from = cubeWorld(-1, 0);
+    cube_.qCur = cube_.qTo = cube_.qFrom = cubeFaceUp(1);
     {
         MeshBuilder mb;
         // a unit point-shaped glow: base along x at z = 0, tip at z = -1 (scaled per point)
@@ -177,6 +250,9 @@ bool Tavla3D::init(Renderer& r) {
         matGlow_ = r.makeMat(Color{255, 196, 40, 120}, glowTex_, 0.f, 4.f, 1.f);
         matGlowSel_ = r.makeMat(Color{255, 186, 30, 225}, glowTex_, 0.f, 4.f, 1.f);
         matGlowTarget_ = r.makeMat(Color{40, 200, 80, 200}, glowTex_, 0.f, 4.f, 1.f);
+        stripeTex_ = makeGlowTexture(true);
+        matGlowTargetCB_ = r.makeMat(Color{40, 170, 255, 235}, stripeTex_, 0.f, 4.f, 1.f);
+        matGlowFocus_ = r.makeMat(Color{235, 250, 255, 240}, glowTex_, 0.f, 4.f, 1.f);
     }
     for (int i = 0; i < CHECKERS; ++i) {
         chk_[i].player = i < 15 ? 0 : 1;
@@ -190,11 +266,12 @@ bool Tavla3D::init(Renderer& r) {
 
 void Tavla3D::shutdown(Renderer& r) {
     if (!ready_) return;
-    for (Mesh* m : {&boardMesh_, &fieldMesh_, &pointMesh_[0], &pointMesh_[1], &checkerMesh_, &dieMesh_, &glowMesh_}) UnloadMesh(*m);
+    for (Mesh* m : {&boardMesh_, &fieldMesh_, &pointMesh_[0], &pointMesh_[1], &checkerMesh_, &dieMesh_, &glowMesh_, &cubeMesh_})
+        UnloadMesh(*m);
     for (Mat* m : {&matWood_, &matField_, &matPoint_[0], &matPoint_[1], &matChecker_[0], &matChecker_[1], &matCheckerHi_, &matCheckerSel_,
-                   &matDie_, &matGlow_, &matGlowSel_, &matGlowTarget_})
+                   &matDie_, &matGlow_, &matGlowSel_, &matGlowTarget_, &matCube_, &matGlowTargetCB_, &matGlowFocus_})
         r.unloadMat(*m);
-    for (Texture2D* t : {&woodTex_, &dieTex_, &glowTex_})
+    for (Texture2D* t : {&woodTex_, &dieTex_, &glowTex_, &cubeTex_, &stripeTex_})
         if (t->id) UnloadTexture(*t);
     ready_ = false;
 }
@@ -346,6 +423,15 @@ void Tavla3D::throwDice(int player, int d1, int d2, bool opening, float delay) {
     }
 }
 
+void Tavla3D::placeDice(int player, int d1, int d2) {
+    throwDice(player, d1, d2, false, 0.f);
+    for (Die& d : dice_) {
+        d.t = 1.f;
+        d.cur = d.to;
+        d.qCur = d.qTo;
+    }
+}
+
 void Tavla3D::setDiceUsed(const std::array<bool, 4>& used, int n, bool isDouble) {
     if (isDouble) {
         int u = 0;
@@ -356,6 +442,53 @@ void Tavla3D::setDiceUsed(const std::array<bool, 4>& used, int n, bool isDouble)
         dice_[0].used = used[0];
         dice_[1].used = used[1];
     }
+}
+
+Quaternion Tavla3D::cubeFaceUp(int value) const {
+    int cell = 6; // the centred cube shows 64
+    for (int v = 2, i = 1; i <= 6; v *= 2, ++i)
+        if (v == value) cell = i;
+    CubeFace f = kCubeFaces[0];
+    for (const CubeFace& c : kCubeFaces)
+        if (c.cell == cell) f = c;
+    // the face towards the player (+z), then a roll about z so the number stands upright: the cube lies turned
+    // to its owner, the side facing him is the one that counts (and reads far better from the seat than the top)
+    const Quaternion q1 = f.n.z < -0.99f ? QuaternionFromAxisAngle({0, 1, 0}, PI) : QuaternionFromVector3ToVector3(f.n, {0, 0, 1});
+    const Vector3 t = Vector3RotateByQuaternion(f.up, q1);
+    const float roll = PI * 0.5f - std::atan2(t.y, t.x);
+    return QuaternionMultiply(QuaternionFromAxisAngle({0, 0, 1}, roll), q1);
+}
+
+Vector3 Tavla3D::cubeWorld(int owner, int offered) const {
+    if (offered > 0) return {0.f, Y0 + FRAME_H + 0.06f, 0.f}; // held up over the bar
+    return {CUBE_X, Y0 + CUBE * 0.5f, owner < 0 ? 0.f : owner == 0 ? CUBE_Z : -CUBE_Z};
+}
+
+void Tavla3D::setCube(bool show, int value, int owner, int offered) {
+    Cube& c = cube_;
+    if (!show) {
+        c.visible = false;
+        return;
+    }
+    if (c.visible && c.value == value && c.owner == owner && c.offered == offered) return;
+    const bool appear = !c.visible;
+    c.visible = true;
+    c.value = value;
+    c.owner = owner;
+    c.offered = offered;
+    c.from = c.cur;
+    c.qFrom = c.qCur;
+    c.to = cubeWorld(owner, offered);
+    c.qTo = cubeFaceUp(offered > 0 ? offered : value);
+    if (appear) { // (a new match / game: simply there)
+        c.cur = c.from = c.to;
+        c.qCur = c.qFrom = c.qTo;
+        c.t = 1.f;
+        return;
+    }
+    c.t = 0.f;
+    c.hop = offered > 0 ? 0.02f : 0.045f;
+    c.dur = std::clamp(0.45f + Vector3Distance(c.from, c.to) * 1.2f, 0.5f, 0.9f);
 }
 
 void Tavla3D::hideDice() {
@@ -386,6 +519,14 @@ void Tavla3D::update(float dt) {
         const float e = easeInOut(c.t);
         c.cur = Vector3Lerp(c.from, c.to, e);
         c.cur.y += std::sin(c.t * PI) * c.hop;
+    }
+    if (cube_.visible && cube_.t < 1.f) {
+        Cube& c = cube_;
+        c.t = std::min(1.f, c.t + sdt / std::max(0.05f, c.dur));
+        const float e = easeInOut(c.t);
+        c.cur = Vector3Lerp(c.from, c.to, e);
+        c.cur.y += std::sin(c.t * PI) * c.hop;
+        c.qCur = QuaternionSlerp(c.qFrom, c.qTo, e);
     }
     for (Die& d : dice_) {
         if (!d.visible || d.t >= 1.f) {
@@ -420,7 +561,7 @@ bool Tavla3D::animating() const {
         if (c.t < 1.f) return true;
     for (const Die& d : dice_)
         if (d.visible && d.t < 1.f) return true;
-    return false;
+    return cube_.visible && cube_.t < 1.f;
 }
 
 void Tavla3D::submit(Renderer& r) {
@@ -454,6 +595,16 @@ void Tavla3D::submit(Renderer& r) {
         r.submit(&dieMesh_, &matDie_, MatrixMultiply(QuaternionToMatrix(d.qCur), MatrixTranslate(d.cur.x, d.cur.y, d.cur.z)),
                  CastShadow);
     }
+    if (cube_.visible) {
+        // an offer waits in the air, swaying a little
+        Quaternion q = cube_.qCur;
+        Vector3 p = cube_.cur;
+        if (cube_.offered > 0 && cube_.t >= 1.f) {
+            q = QuaternionMultiply(QuaternionFromAxisAngle({0, 1, 0}, 0.18f * std::sin(time_ * 2.2f)), q);
+            p.y += 0.004f * std::sin(time_ * 3.1f);
+        }
+        r.submit(&cubeMesh_, &matCube_, MatrixMultiply(QuaternionToMatrix(q), MatrixTranslate(p.x, p.y, p.z)), CastShadow);
+    }
     // highlights: playable sources (gold), the selected one (strong gold), where it can go (green)
     auto glowPoint = [&](int i, Mat& m) {
         Matrix mx;
@@ -473,7 +624,12 @@ void Tavla3D::submit(Renderer& r) {
     };
     for (int i : sources_)
         if (i == BAR || i == selected_) glowPoint(i, i == selected_ ? matGlowSel_ : matGlow_);
-    for (int i : targets_) glowPoint(i, matGlowTarget_);
+    const bool cb = ui::colorBlind();
+    for (int i : targets_) glowPoint(i, cb ? matGlowTargetCB_ : matGlowTarget_);
+    if (keyFocus_ >= 0 && std::find(targets_.begin(), targets_.end(), keyFocus_) != targets_.end()) {
+        glowPoint(keyFocus_, matGlowFocus_);
+        glowPoint(keyFocus_, cb ? matGlowTargetCB_ : matGlowTarget_);
+    }
 }
 
 int Tavla3D::pick(const Ray& ray) const {

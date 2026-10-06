@@ -1019,6 +1019,118 @@ void testEstimate() {
 
 } // namespace
 
+// Personalities: on the same opening bid (same seed, same hand) a bold bot bids whenever a neutral one does and a
+// cautious one only when a neutral one does; a bold bot sometimes jumps one above the minimum; the presets differ.
+void testStyles() {
+    CHECK(BotStyle::forSeat(0).neutral());
+    CHECK(BotStyle::forSeat(1).neutral());
+    CHECK(BotStyle::forSeat(2).boldness > 0.f);
+    CHECK(BotStyle::forSeat(3).boldness < 0.f);
+    const BotStyle styles[3] = {BotStyle{}, BotStyle::bold(), BotStyle::cautious()};
+    for (int lvl = 1; lvl < 3; ++lvl) {
+        int bids[3] = {0, 0, 0}, jumps = 0, monotone = 0;
+        const int deals = lvl == 1 ? 200 : 40;
+        for (int d = 0; d < deals; ++d) {
+            int val[3];
+            for (int k = 0; k < 3; ++k) {
+                Game g = makeGame();
+                g.startMatch(1);
+                g.debugRedeal(3, randomDeal(9000 + (uint64_t)d));
+                g.drainEvents();
+                const int seat = g.current();
+                Bot b((Level)lvl, 50 + (uint64_t)d);
+                b.setStyle(styles[k]);
+                const Action a = b.next(g, seat);
+                CHECK(applyAction(g, seat, a).ok);
+                val[k] = a.kind == Action::Kind::Bid ? a.value : 0;
+                bids[k] += val[k] > 0;
+            }
+            if (val[1] > Rules().minBid) ++jumps;
+            if (val[1] >= val[0] && val[0] >= val[2]) ++monotone;
+        }
+        CHECK_EQ(monotone, deals);
+        CHECK(bids[1] > bids[0]);
+        CHECK(bids[0] > bids[2]);
+        if (lvl == 1) CHECK(jumps > 0);
+        std::printf("  styles, %s: opening bids on %d deals: bold %d (%d jumps), neutral %d, cautious %d\n",
+                    levelNameTR((Level)lvl), deals, bids[1], jumps, bids[0], bids[2]);
+    }
+}
+
+// Save / resume: the action log, written as text lines and replayed on a freshly started game with the same seed,
+// reproduces the state (checked every few actions through whole matches: tekli, eşli, koz açık).
+void sameBatak(const Game& a, const Game& b) {
+    CHECK_EQ((int)a.stage(), (int)b.stage());
+    CHECK_EQ(a.handIndex(), b.handIndex());
+    CHECK_EQ(a.dealer(), b.dealer());
+    CHECK_EQ(a.current(), b.current());
+    CHECK_EQ(a.declarer(), b.declarer());
+    CHECK_EQ(a.contract(), b.contract());
+    CHECK_EQ(a.trump(), b.trump());
+    CHECK_EQ(a.trumpBroken(), b.trumpBroken());
+    CHECK_EQ(a.highBid(), b.highBid());
+    CHECK_EQ(a.bids().size(), b.bids().size());
+    CHECK_EQ(a.trick().size(), b.trick().size());
+    CHECK_EQ(a.tricks().size(), b.tricks().size());
+    CHECK_EQ(a.handResults().size(), b.handResults().size());
+    CHECK_EQ(a.actionLog().size(), b.actionLog().size());
+    for (int s = 0; s < 4; ++s) {
+        CHECK_EQ(a.hand(s), b.hand(s));
+        CHECK_EQ(a.tricksWon(s), b.tricksWon(s));
+        CHECK_EQ(a.total(s), b.total(s));
+    }
+}
+
+void testReplay() {
+    for (int variant = 0; variant < 3; ++variant) {
+        Rules r = variant == 1 ? Rules::esliBatak() : Rules::tekli();
+        if (variant == 2) r.trumpMustBeBroken = false;
+        const uint64_t seed = 70 + (uint64_t)variant;
+        Game g = makeGame(r, true);
+        g.startMatch(seed);
+        std::vector<Bot> bots;
+        for (int s = 0; s < 4; ++s) bots.emplace_back(Level::Usta, seed * 4 + (uint64_t)s);
+        int steps = 0, replays = 0;
+        while (g.stage() != Stage::MatchOver && steps < 5000) {
+            if (g.stage() == Stage::HandOver) {
+                g.startNextHand();
+            } else {
+                const int seat = g.current();
+                const Action a = bots[(size_t)g.controllerOf(seat)].next(g, seat);
+                if (!applyAction(g, seat, a).ok) CHECK(applyAction(g, seat, fallbackAction(g, seat)).ok);
+            }
+            ++steps;
+            if (steps % 29 == 0 || g.stage() == Stage::MatchOver || g.stage() == Stage::HandOver) {
+                std::vector<std::string> lines;
+                for (const LoggedAction& la : g.actionLog()) lines.push_back(la.encode());
+                Game h = makeGame(r, true);
+                h.startMatch(g.matchSeed());
+                bool ok = true;
+                for (const std::string& l : lines) {
+                    LoggedAction la;
+                    ok = ok && LoggedAction::decode(l, la) && h.replay(la);
+                }
+                CHECK(ok);
+                sameBatak(g, h);
+                ++replays;
+            }
+        }
+        CHECK_EQ((int)g.stage(), (int)Stage::MatchOver);
+        CHECK(replays > 10);
+    }
+    LoggedAction x;
+    CHECK(!LoggedAction::decode("", x));
+    CHECK(!LoggedAction::decode("1 2", x));
+    CHECK(!LoggedAction::decode("9 0 0", x));
+    CHECK(!LoggedAction::decode("0 1 x", x));
+    CHECK(LoggedAction::decode("0 1 7", x) && x.kind == LogKind::Bid && x.seat == 1 && x.value == 7);
+    Game h = makeGame();
+    h.startMatch(3);
+    CHECK(!h.replay({LogKind::NextHand, -1, -1})); // not between hands
+    CHECK(!h.replay({LogKind::Play, h.current(), h.hand(h.current())[0]})); // bidding, not play
+    CHECK(h.actionLog().empty());
+}
+
 int main(int argc, char** argv) {
     const int scale = argc > 1 ? std::max(1, std::atoi(argv[1])) : 1;
     testHelpers();
@@ -1037,6 +1149,8 @@ int main(int argc, char** argv) {
     testBotsLegal();
     testFairness();
     testBotTiming();
+    testStyles();
+    testReplay();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -31,8 +31,25 @@ const Color kBlue{34, 64, 140, 255};
 const Color kSkin{240, 210, 176, 255};
 const Color kBordeaux{118, 22, 32, 255};
 
+const Color kBlueSuit{20, 86, 196, 255};  // four-colour deck: karo
+const Color kGreenSuit{18, 128, 62, 255};  // four-colour deck: sinek
+
 Texture2D gAtlas{};
 bool gReady = false;
+bool gFour = false, gWantFour = false;
+
+// Ink of a suit: maça black, kupa red, karo red / blue, sinek black / green (four-colour deck).
+Color suitInk(int st) {
+    if (gFour) {
+        switch (st) {
+        case 1: return kRed;
+        case 2: return kBlueSuit;
+        case 3: return kGreenSuit;
+        default: return kBlack;
+        }
+    }
+    return (st == 1 || st == 2) ? kRed : kBlack;
+}
 
 Color mix(Color a, Color b, float t) {
     return Color{(unsigned char)(a.r + (b.r - a.r) * t), (unsigned char)(a.g + (b.g - a.g) * t),
@@ -107,7 +124,7 @@ struct Painter {
     void corners(int st, int rank) const {
         static const char* const idx[] = {"2", "3", "4", "5", "6", "7", "8", "9", "10", "V", "K", "P", "A"};
         const std::string s = idx[rank - 2];
-        const Color col = (st == 1 || st == 2) ? kRed : kBlack;
+        const Color col = suitInk(st);
         for (int k = 0; k < 2; ++k) {
             rlPushMatrix();
             if (k == 1) {
@@ -121,7 +138,7 @@ struct Painter {
     }
 
     void pips(int st, int n) const {
-        const Color col = (st == 1 || st == 2) ? kRed : kBlack;
+        const Color col = suitInk(st);
         const float L = 21.f, C = 31.5f, R = 42.f;
         auto p = [&](float x, float y) { suit(st, {x, y}, 10.f, col, y <= 44.5f); };
         const float top = 20.f, bot = 68.f;
@@ -140,7 +157,7 @@ struct Painter {
     }
 
     void ace(int st) const {
-        const Color col = (st == 1 || st == 2) ? kRed : kBlack;
+        const Color col = suitInk(st);
         if (st == 0) { // the Maça As wears an ornament
             for (int i = 0; i < 3; ++i)
                 DrawRing({W * 0.5f, H * 0.5f}, 15.f + 2.2f * (float)i, 15.6f + 2.2f * (float)i, 0.f, 360.f, 72,
@@ -154,7 +171,7 @@ struct Painter {
         const bool red = st == 1 || st == 2;
         const Color robe = red ? kRed : kBlue;
         const Color robe2 = red ? kBlue : kRed;
-        const Color ink = red ? kRed : kBlack;
+        const Color ink = suitInk(st);
         const float cx = 31.5f;
         // robe: shoulders down to the divider
         tri({cx - 15.f, 44.f}, {cx + 15.f, 44.f}, {cx - 11.f, 31.f}, robe);
@@ -226,7 +243,7 @@ struct Painter {
         rlPopMatrix();
         DrawLineEx({fr.x, 44.f}, {fr.x + fr.width, 44.f}, 0.5f, kGoldDark);
         DrawRectangleLinesEx(fr, 0.6f, kGoldDark);
-        DrawRectangleLinesEx({fr.x - 1.f, fr.y - 1.f, fr.width + 2.f, fr.height + 2.f}, 0.35f, red ? kRed : kBlack);
+        DrawRectangleLinesEx({fr.x - 1.f, fr.y - 1.f, fr.width + 2.f, fr.height + 2.f}, 0.35f, suitInk(st));
     }
 
     void back() const {
@@ -311,12 +328,9 @@ Rectangle cellRect(int key) {
     return {(float)(col * CELL_W), (float)(row * CELL_H), (float)CELL_W, (float)CELL_H};
 }
 
-} // namespace
-
-void init() {
-    if (gReady) return;
+Image paintAtlas() {
     RenderTexture2D rt = LoadRenderTexture(COLS * CELL_W, ROWS * CELL_H);
-    if (rt.id == 0) return;
+    if (rt.id == 0) return Image{};
     Painter p;
     p.font = loadCardFont();
     const bool ownFont = p.font.texture.id != 0;
@@ -341,6 +355,16 @@ void init() {
     Image img = LoadImageFromTexture(rt.texture);
     ImageFlipVertical(&img);
     UnloadRenderTexture(rt);
+    return img;
+}
+
+} // namespace
+
+void init() {
+    if (gReady) return;
+    gFour = gWantFour;
+    Image img = paintAtlas();
+    if (!img.data) return;
     gAtlas = LoadTextureFromImage(img);
     UnloadImage(img);
     GenTextureMipmaps(&gAtlas);
@@ -357,6 +381,19 @@ void shutdown() {
 }
 
 bool ready() { return gReady; }
+
+void setFourColour(bool on) { gWantFour = on; }
+bool fourColour() { return gWantFour; }
+
+void refresh() {
+    if (!gReady || gFour == gWantFour) return;
+    gFour = gWantFour;
+    Image img = paintAtlas();
+    if (!img.data) return;
+    UpdateTexture(gAtlas, img.data);
+    UnloadImage(img);
+    GenTextureMipmaps(&gAtlas);
+}
 
 Texture2D atlas() { return gAtlas; }
 

@@ -15,6 +15,14 @@
 
 namespace ui {
 
+class Memory;
+
+// Turkish case endings: vowel harmony, the buffer letters (y / n), d/t assimilation, final-consonant softening of
+// common nouns ("batak" -> "batağı") and the apostrophe for proper nouns and numbers ("Batuhan'ı", "101'de" — numbers
+// are read aloud: 101 = "yüz bir"). `word` is UTF-8; only its last word matters for the ending.
+enum class TrCase { Acc, Dat, Loc, Abl, Gen }; // -(y)ı, -(y)a, -da, -dan, -(n)ın
+std::string trSuffix(const std::string& word, TrCase c, bool proper);
+
 enum class BanterCue {
     None,
     TeaOrder,   // somebody called the tea boy
@@ -59,6 +67,16 @@ public:
     // cooldowns (big moments), casual ones may be dropped. True when queued.
     bool external(int seat, const std::string& text, bool important);
 
+    // ---- the regulars remember the player (Memory, owned by App; may be null)
+    void setMemory(const Memory* m) { memory_ = m; }
+    // A match of `game` (GameKind index) begins: at most one remark from the memory — the first meeting or "long
+    // time no see" (once per session), a rematch / teasing by the regular of the last match of this game, a mars or
+    // an okey finish remembered, the player's win streak in this game (`streak`, StatsBook), his favourite game.
+    // Important line (skips cooldowns), queued after the greeting. `day`: Memory::today() (-1: today). True if queued.
+    bool matchStart(int game, int streak, int day = -1);
+    // The player rose to a new rank (StatsBook rank name, e.g. "Müdavim"): a regular (maybe the çaycı too) remarks.
+    bool rankUp(const std::string& rankName);
+
     // exposed for tests / tools
     static int lineCount();            // total number of distinct lines (tables + exchanges)
 
@@ -86,11 +104,18 @@ private:
     int lastOpenSeat_ = -1;               // who opened this turn (a Penalty on their left = yandan açma cezası)
     int lastWinner_ = -2;                 // winner of the previous hand (-1 pile out, -2 none yet)
     float teaOrderCool_ = 25.f;
-    int lastPick_[256] = {};              // anti-repeat memory per table
+    int lastPick_[512] = {};              // anti-repeat memory per table
     std::deque<std::string> recent_;      // lines said lately (never repeat within a while)
     int lastDialogue_[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
     int dialogueSerial_ = 0;
     std::deque<Pending> queue_;
+    // memory remarks
+    const Memory* memory_ = nullptr;
+    int memGame_ = -1;                    // {o}: the game being talked about
+    std::string memRank_;                 // {r}: the rank name
+    bool sessionGreeted_ = false;         // the first match of this run had its "first visit / long away" chance
+    int lastMemSit_ = -1;                 // the previous match's memory remark (not the same one twice in a row)
+    bool favouriteSaid_ = false;
 
     float rnd();
     int rndInt(int n);
@@ -98,7 +123,8 @@ private:
     int pickOther(int notSeat);           // a random bot seat != notSeat (1..3)
     int pickBot();
     // Adds a line from table `tableId` for `seat` (1..4; templates: {v} value, {p} actor, {g} the actor's left
-    // neighbour, {h} human address). `force` ignores cooldowns (important moments) and replaces a pending
+    // neighbour, {h} human address; memory lines also {o} the game, {r} the rank, and case endings {o:de} / {h:i} ...
+    // (i, e, de, den, in; {h:x} is the player's name, or "bu delikanlı" without one)). `force` ignores cooldowns (important moments) and replaces a pending
     // casual line of the same seat.
     bool say(int seat, int tableId, float delay, bool force = false, int value = 0, int actor = -1,
              float maxWait = 3.5f, BanterCue cue = BanterCue::None);

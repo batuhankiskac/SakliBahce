@@ -40,6 +40,12 @@ struct Fx {
 void init();
 void shutdown();
 bool ready();
+// Colour-blind mode (Ayarlar "Renk körü modu"): inks told apart by lightness (deuteranopia / protanopia) and a shape per
+// colour in place of the dot (sarı ●, mavi ■, siyah ▲, kırmızı ◆). Also sets ui::setColorBlind. Safe to call any
+// time: the atlases are repainted in place (same textures) by the next refresh() — Table3D::update calls it — or init().
+void setColorBlind(bool on);
+bool colorBlind();
+void refresh(); // outside BeginDrawing/BeginTextureMode: repaints the atlases if the mode changed
 
 // Draws a tile centred at `c`, `w` wide (height = heightFor(w)), rotated `rotDeg` degrees clockwise.
 // `faceKey` is shown while fx.flip >= 0.5, the back otherwise.

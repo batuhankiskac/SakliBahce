@@ -1053,6 +1053,38 @@ int main() {
                 h.settle();
             }
         }
+        // (b2) işle by the keyboard: another run-extending tile, the cursor on it, I (the meld rings), Enter
+        {
+            int meld = -1, tile = -1;
+            for (int i = 0; i < (int)h.game.table().size() && tile < 0; ++i) {
+                const okey::Meld& m = h.game.table()[i];
+                if (m.kind != okey::MeldKind::Run || m.tiles.front().number <= 1) continue;
+                const int id = freeCopy(h.game, m.tiles.front().color, m.tiles.front().number - 1, {});
+                okey::Meld out;
+                if (id >= 0 && okey::tryAddTile(m, id, ok, okey::AddSide::Front, out)) {
+                    meld = i;
+                    tile = id;
+                }
+            }
+            if (tile >= 0 && giveHuman(h.game, {tile})) {
+                h.settle();
+                h.frame(1.f / 60.f, {-10000, -10000}, 0, KEY_RIGHT); // (the first key shows the cursor)
+                const std::vector<int> sl = tt::rackSlots(h.table);
+                for (int i = 0; i < (int)sl.size(); ++i)
+                    if (sl[i] == tile) tt::setKeyboardSlot(h.table, i);
+                check(tt::keyboardTile(h.table) == tile, "the keyboard's cursor sits on the tile");
+                h.frame(1.f / 60.f, {-10000, -10000}, 0, KEY_I);
+                for (int i = 0; i < 20; ++i) h.frame();
+                h.shot("t11k_kb_isle", h.seat());
+                const size_t n0 = h.game.table()[meld].tiles.size();
+                h.frame(1.f / 60.f, {-10000, -10000}, 0, KEY_ENTER);
+                check(h.game.table()[meld].tiles.size() == n0 + 1 && h.game.table()[meld].tiles.front().id == tile,
+                      "I + Enter puts the cursor's tile on the meld it goes to");
+                h.settle();
+            } else {
+                std::printf("(no tile for the keyboard işle check)\n");
+            }
+        }
         // (c) okey alma: the real tile a joker stands for, dropped onto the joker
         {
             int joker = -1, tile = -1;

@@ -22,7 +22,7 @@ GAME     ?= saklibahce
 CORE_SRC := $(wildcard src/core/*.cpp)
 UI_SRC   := $(wildcard src/ui/*.cpp) $(wildcard src/r3d/*.cpp)
 APP_SRC  := $(wildcard src/app/*.cpp)
-TEST_NAMES := test_engine test_ai sim test_tavla tavla_sim test_batak batak_sim test_king king_sim test_pisti pisti_sim
+TEST_NAMES := test_engine test_ai sim test_tavla tavla_sim test_batak batak_sim test_king king_sim test_pisti pisti_sim test_banter test_analysis
 TEST_SRC := $(TEST_NAMES:%=tests/%.cpp)
 CORE_OBJ := $(CORE_SRC:%.cpp=$(BUILD)/%.o)
 UI_OBJ   := $(UI_SRC:%.cpp=$(BUILD)/%.o)
@@ -45,6 +45,7 @@ $(BUILD)/%.o: %.cpp
 
 $(TESTS): $(BUILD)/%: $(BUILD)/tests/%.o $(CORE_OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ -o $@
+$(BUILD)/test_analysis: $(BUILD)/src/app/Analysis.o
 
 tests: $(TESTS)
 
@@ -66,6 +67,8 @@ test: $(TESTS)
 	$(BUILD)/test_pisti
 	$(BUILD)/pisti_sim --hands 200 --seed 3 --levels 2,1,0,1
 	$(BUILD)/pisti_sim --hands 100 --seed 4 --levels 2,1,2,1 --mode esli
+	$(BUILD)/test_banter
+	$(BUILD)/test_analysis
 
 # The other table games played by the mouse in a hidden window (needs a display: run it awake, not over ssh)
 TABLES_CHECK_OBJ := $(CORE_OBJ) $(UI_OBJ) $(filter-out $(BUILD)/src/app/App.o $(BUILD)/src/app/main.o,$(APP_OBJ))

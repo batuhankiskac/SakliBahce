@@ -174,6 +174,7 @@ void Game::setPlayer(int seat, const std::string& name, bool human) {
 
 void Game::startMatch(uint64_t seed) {
     seed_ = seed;
+    log_.clear();
     totals_.fill(0);
     winnerSide_ = -1;
     handIndex_ = 0;
@@ -194,6 +195,7 @@ void Game::startMatch(uint64_t seed) {
 
 void Game::startNextHand() {
     if (stage_ != Stage::HandOver) return;
+    log_.push_back({LogKind::NextHand, -1, -1});
     ++handIndex_;
     dealer_ = nextActive(dealer_);
     beginHand();
@@ -382,7 +384,7 @@ int Game::leaderSide() const {
 // ---------------------------------------------------------------------------------------------------------
 // action
 
-ActionResult Game::playCard(int seat, int card) {
+ActionResult Game::playCardImpl(int seat, int card) {
     if (seat < 0 || seat >= 4 || !isActive(seat)) return ActionResult::fail("Bu oyuncu bu oyunda yok");
     if (stage_ != Stage::Playing) return ActionResult::fail("Şu an kart oynanmıyor");
     if (seat != current_)
@@ -602,6 +604,41 @@ void Game::push(GameEvent e) {
 // Turkish drops the pronoun: the human reads "Pişti yaptın! +10", the others "Hacı Rıza pişti yaptı! +10".
 std::string Game::says(int seat, const std::string& third, const std::string& second) const {
     return human_[seat] ? capitalizeFirst(second) : names_[seat] + " " + third;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// the match's action log (save / resume)
+
+ActionResult Game::playCard(int seat, int card) {
+    ActionResult r = playCardImpl(seat, card);
+    if (r.ok) log_.push_back({LogKind::Play, seat, card});
+    return r;
+}
+
+bool Game::replay(const LoggedAction& a) {
+    switch (a.kind) {
+    case LogKind::Play: return playCard(a.seat, a.card).ok;
+    case LogKind::NextHand:
+        if (stage_ != Stage::HandOver) return false;
+        startNextHand();
+        return true;
+    }
+    return false;
+}
+
+std::string LoggedAction::encode() const {
+    return std::to_string((int)kind) + " " + std::to_string(seat) + " " + std::to_string(card);
+}
+
+bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
+    out = LoggedAction();
+    int v[3] = {0, 0, 0};
+    if (!parseInts(line, v, 3)) return false;
+    if (v[0] < 0 || v[0] > (int)LogKind::NextHand) return false;
+    out.kind = (LogKind)v[0];
+    out.seat = v[1];
+    out.card = v[2];
+    return true;
 }
 
 } // namespace pisti

@@ -17,11 +17,13 @@
 //          the Usta policy for every candidate card (card play) and every koz (ihale) and picks the best
 //          expected score.
 #include "core/Batak.h"
+#include "core/BotStyle.h"
 #include <memory>
 
 namespace batak {
 
 enum class Level { Acemi = 0, Usta = 1, Kurt = 2 };
+using okey::BotStyle; // personality (core/BotStyle.h)
 
 const char* levelNameTR(Level l); // "Acemi" / "Usta" / "Kurt"
 
@@ -42,6 +44,15 @@ double estimateTricks(uint64_t hand, int trump);
 // The koz with the best estimate.
 int bestTrumpFor(uint64_t hand);
 
+// Hata analizi: Kurt's value of a card played now — the expected score difference of the hand for the seat's side
+// (its points minus the others' mean in tekli, minus the other side's in eşli), over sampled deals of the unseen cards
+// played out by the Usta policy; `se` is the standard error of its difference to the best card (paired, 0 for it).
+struct CardValue {
+    int card = -1;
+    double value = 0.0;
+    double se = 0.0;
+};
+
 class Bot {
 public:
     explicit Bot(Level level = Level::Usta, uint64_t seed = 1);
@@ -53,12 +64,25 @@ public:
 
     void setLevel(Level level);
     Level level() const;
+    // Personality: a bold bot bids above its estimate (Acemi/Usta +0.35 trick, Kurt takes the ihale with half a
+    // point less expected gain) and sometimes jumps one above the minimum; a cautious one bids below. Neutral (the
+    // default) = the level's tuned play.
+    void setStyle(BotStyle style);
+    BotStyle style() const;
     void resetForHand();                             // call at every HandStart (optional: bots are stateless)
     void observe(const GameEvent& e, const Game& g); // optional; the bot rebuilds its memory from Game
 
     // Next action for `seat` (== g.current(); the bot must be controllerOf(seat)): a bid or pas while
     // Bidding, a koz while ChoosingTrump, a card while Playing. < 30 ms typical.
     Action next(const Game& g, int seat);
+
+    // ---- Hata analizi (Kurt's judgement whatever the level; deterministic for the state, next() is not disturbed) ----
+    // Every legal card of g.current() == seat (decided by g.controllerOf(seat)).
+    std::vector<CardValue> evaluateCards(const Game& g, int seat);
+    // Bidding (g.current() == seat): expected score difference of declaring with `bid` and the best koz, and of passing.
+    bool evaluateBid(const Game& g, int seat, int bid, double& declare, double& pass);
+    // ChoosingTrump (the declarer): expected score difference with each suit as koz.
+    bool evaluateTrumps(const Game& g, int seat, double value[4]);
 
     // tests/tools only: tuning knobs. 0 Usta ihale margin (tekli), 1 Kurt ihale margin (tekli), 2 Kurt rollouts
     // per card decision, 3 Kurt deals per ihale decision, 4 Kurt deals per koz choice, 5 eşli partner share,

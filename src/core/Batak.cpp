@@ -133,6 +133,8 @@ void Game::setPlayer(int seat, const std::string& name, bool human) {
 
 void Game::startMatch(uint64_t seed) {
     rng_.reseed(seed);
+    matchSeed_ = seed;
+    log_.clear();
     totals_ = {};
     results_.clear();
     lastResult_ = HandResult();
@@ -149,6 +151,7 @@ void Game::startMatch(uint64_t seed) {
 
 void Game::startNextHand() {
     if (stage_ != Stage::HandOver) return;
+    log_.push_back({LogKind::NextHand, -1, -1});
     ++handIndex_;
     dealHand(nextSeat(dealer_), nullptr);
 }
@@ -308,7 +311,7 @@ std::vector<int> Game::legalBids(int seat) const {
 
 bool Game::canPass(int seat) const { return stage_ == Stage::Bidding && seat == current_; }
 
-ActionResult Game::bid(int seat, int value) {
+ActionResult Game::bidImpl(int seat, int value) {
     ActionResult t = checkTurn(seat, Stage::Bidding);
     if (!t.ok) return t;
     if (value > 13) return ActionResult::fail("En fazla 13 denebilir");
@@ -342,7 +345,7 @@ ActionResult Game::bid(int seat, int value) {
     return ActionResult::success();
 }
 
-ActionResult Game::pass(int seat) {
+ActionResult Game::passImpl(int seat) {
     ActionResult t = checkTurn(seat, Stage::Bidding);
     if (!t.ok) return t;
     bids_.push_back({seat, 0});
@@ -408,7 +411,7 @@ void Game::finishBidding(int seat, int value, bool forced) {
 // ---------------------------------------------------------------------------------------------------------
 // trump and play
 
-ActionResult Game::chooseTrump(int seat, int suit) {
+ActionResult Game::chooseTrumpImpl(int seat, int suit) {
     ActionResult t = checkTurn(seat, Stage::ChoosingTrump);
     if (!t.ok) return t;
     if (suit < 0 || suit >= kart::NUM_SUITS) return ActionResult::fail("Geçersiz koz");
@@ -459,7 +462,7 @@ ActionResult Game::checkPlay(int seat, int card) const {
     return ActionResult::fail("Daha büyük koz atmalısın");
 }
 
-ActionResult Game::playCard(int seat, int card) {
+ActionResult Game::playCardImpl(int seat, int card) {
     ActionResult t = checkPlay(seat, card);
     if (!t.ok) return t;
     auto& h = hands_[seat];
@@ -649,6 +652,48 @@ void Game::debugStartPlay(const std::array<std::vector<int>, 4>& hands, int decl
     const int l = leader >= 0 ? leader : declarer;
     leader_ = l;
     beginTurn(l);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// the match's action log (save / resume)
+
+ActionResult Game::logged(ActionResult r, LoggedAction a) {
+    if (r.ok) log_.push_back(a);
+    return r;
+}
+
+ActionResult Game::bid(int seat, int value) { return logged(bidImpl(seat, value), {LogKind::Bid, seat, value}); }
+ActionResult Game::pass(int seat) { return logged(passImpl(seat), {LogKind::Pass, seat, -1}); }
+ActionResult Game::chooseTrump(int seat, int suit) { return logged(chooseTrumpImpl(seat, suit), {LogKind::Trump, seat, suit}); }
+ActionResult Game::playCard(int seat, int card) { return logged(playCardImpl(seat, card), {LogKind::Play, seat, card}); }
+
+bool Game::replay(const LoggedAction& a) {
+    switch (a.kind) {
+    case LogKind::Bid: return bid(a.seat, a.value).ok;
+    case LogKind::Pass: return pass(a.seat).ok;
+    case LogKind::Trump: return chooseTrump(a.seat, a.value).ok;
+    case LogKind::Play: return playCard(a.seat, a.value).ok;
+    case LogKind::NextHand:
+        if (stage_ != Stage::HandOver) return false;
+        startNextHand();
+        return true;
+    }
+    return false;
+}
+
+std::string LoggedAction::encode() const {
+    return std::to_string((int)kind) + " " + std::to_string(seat) + " " + std::to_string(value);
+}
+
+bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
+    out = LoggedAction();
+    int v[3] = {0, 0, 0};
+    if (!kart::parseInts(line, v, 3)) return false;
+    if (v[0] < 0 || v[0] > (int)LogKind::NextHand) return false;
+    out.kind = (LogKind)v[0];
+    out.seat = v[1];
+    out.value = v[2];
+    return true;
 }
 
 } // namespace batak

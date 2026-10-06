@@ -702,7 +702,10 @@ void TableState::submitAll(Renderer& r) {
         const TileVis& v = vis[id];
         float amt = v.glow;
         int col = G_GOLD;
-        if (id == game->pendingLeftTile()) {
+        if (id == kbTile()) { // the keyboard's cursor: blue (carried: orange), always full
+            amt = 1.f;
+            col = kbHeld == id ? G_ORANGE : G_BLUE;
+        } else if (id == game->pendingLeftTile()) {
             amt = std::max(amt, 0.55f + 0.45f * pulse);
             col = G_ORANGE;
         } else if (id == newTile && now - newTileTime < 2.4f && v.glow < 0.3f) {
@@ -712,6 +715,29 @@ void TableState::submitAll(Renderer& r) {
         Pose rp = v.pose;
         rp.pos = poseToWorld(v.pose, {0.f, 0.f, TT * 0.5f + 0.0004f});
         submitRing(r, rp, col, amt, 1.f);
+    }
+    // İpucu: the suggested tiles breathe in green (rack and table), the pile / left tile too
+    if (hintLive()) {
+        const float hp = 0.55f + 0.45f * pulse;
+        for (int id : hintTiles) {
+            if (id < 0 || id >= NUM_TILES || id == dragged || vis[id].flying) continue;
+            Pose rp = vis[id].pose;
+            rp.pos = poseToWorld(vis[id].pose, {0.f, 0.f, TT * 0.5f + 0.0005f});
+            submitRing(r, rp, G_GREEN, hp, 1.08f);
+        }
+        if (hintPile && !pileOrder.empty()) {
+            Pose g;
+            g.pos = {w3d::PILE_POS.x, w3d::TABLE_Y + 0.0004f, w3d::PILE_POS.z};
+            g.rot = flatFaceUp(0.f);
+            submitGlow(r, g, G_GREEN, 0.25f + 0.25f * pulse, 1.85f);
+        }
+        const int lt = game->topDiscard(leftSeat());
+        if (hintLeft && lt >= 0) {
+            Pose g;
+            g.pos = {w3d::DISCARD_POS[leftSeat()].x, w3d::TABLE_Y + 0.0004f, w3d::DISCARD_POS[leftSeat()].z};
+            g.rot = flatFaceUp(0.f);
+            submitGlow(r, g, G_GREEN, 0.3f + 0.25f * pulse, 1.35f);
+        }
     }
     // what can be taken now
     const bool drawStage = canAct() && game->stage() == okey::TurnStage::NeedDraw && press.kind == Press::None;
@@ -757,7 +783,8 @@ void TableState::submitAll(Renderer& r) {
             const bool fits = isleFits(held, aim.meld, aim.meldJoker, &swap);
             const bool legal = fits && game->canWorkTable(human);
             // green: goes on now; orange: fits but not yet (not opened / opened this turn); red: never fits
-            const int ring = legal ? G_GREEN : (fits ? G_ORANGE : G_RED);
+            // (colour-blind mode: blue for "goes on", and the tag beside the tile says it in words anyway)
+            const int ring = legal ? (ui::colorBlind() ? G_BLUE : G_GREEN) : (fits ? G_ORANGE : G_RED);
             const MeldBox& b = boxes[aim.meld];
             const Meld& md = game->table()[aim.meld];
             for (int k = 0; k < md.size() && k < (int)b.pos.size(); ++k) {
@@ -772,6 +799,24 @@ void TableState::submitAll(Renderer& r) {
                 const float y = w3d::TABLE_Y + 0.0008f;
                 submitStrip(r, {x, y, b.z0 - 0.003f}, {x, y, b.z1 + 0.003f}, {0, 1, 0}, 0.007f, G_GREEN, 1.f);
             }
+        }
+    }
+    // the keyboard's işle target: its meld is ringed, a run's end marked
+    if (kbIsle.meld >= 0 && kbIsle.meld < (int)game->table().size() && kbIsle.meld < (int)boxes.size() && kbIsle.tile == kbTile()) {
+        const Meld& md = game->table()[kbIsle.meld];
+        const MeldBox& b = boxes[kbIsle.meld];
+        const int okc = ui::colorBlind() ? G_BLUE : G_GREEN;
+        for (int k = 0; k < md.size() && k < (int)b.pos.size(); ++k) {
+            if (kbIsle.joker >= 0 && k != kbIsle.joker) continue;
+            Pose tp = vis[md.tiles[k].id].pose;
+            tp.pos = poseToWorld(tp, {0.f, 0.f, TT * 0.5f + 0.0005f});
+            submitRing(r, tp, okc, 0.75f + 0.25f * pulse, 1.f);
+        }
+        if (kbIsle.joker < 0 && md.kind == MeldKind::Run) {
+            const bool front = isleFront(kbIsle.tile, kbIsle.meld, true);
+            const float x = front ? b.x0 - 0.0065f * b.scale : b.x1 + 0.0065f * b.scale;
+            const float y = w3d::TABLE_Y + 0.0008f;
+            submitStrip(r, {x, y, b.z0 - 0.003f}, {x, y, b.z1 + 0.003f}, {0, 1, 0}, 0.007f, okc, 1.f);
         }
     }
     // valid groups on the istaka: glowing strips on the ledge lip under them

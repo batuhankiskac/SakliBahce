@@ -21,6 +21,9 @@ int draggedTile(Table3D& t);
 bool confirmActive(Table3D& t);
 int selectedTile(Table3D& t);
 int hoverTile(Table3D& t);
+// the keyboard's cursor: put it on a rack slot / the tile it is on now (-1 while the keyboard is not in use)
+void setKeyboardSlot(Table3D& t, int slot);
+int keyboardTile(Table3D& t);
 int rackTileUnderRay(Table3D& t, const Ray& ray);            // human rack tile id hit by the ray, -1 if none
 Vector3 tileFaceCenter(Table3D& t, int id);                  // world centre of a tile's (current) face
 Vector3 tileCenter(Table3D& t, int id);

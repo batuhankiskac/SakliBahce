@@ -48,6 +48,8 @@ struct RulesConfig {
     int okeyStartPoints = 20;
     int okeyFinishPoints = 2;
     int okeyIndicatorPoints = 1;
+    // Renkli okey: a red or black gösterge doubles everything of that hand (finishes and the gösterge's point).
+    bool okeyColorDouble = false;
 };
 
 struct PlayerInfo {
@@ -129,6 +131,19 @@ struct OpenCheck {
 
 struct DiscardRecord { int player; int tile; };
 
+// One successful action of the match, as given to Game (a saved match is its seed plus these, replayed).
+enum class LogKind { Draw, TakeLeft, ReturnLeft, Open, Lay, Add, Swap, Discard, Finish, ShowIndicator, NextHand };
+struct LoggedAction {
+    LogKind kind = LogKind::Draw;
+    int seat = -1;
+    int tile = -1;
+    int meld = -1;
+    int side = 0;                        // AddSide
+    std::vector<std::vector<int>> melds; // Open / Lay
+    std::string encode() const;          // one text line
+    static bool decode(const std::string& line, LoggedAction& out);
+};
+
 class Game {
 public:
     explicit Game(const RulesConfig& cfg = RulesConfig());
@@ -186,6 +201,8 @@ public:
     int indicatorShownBy() const { return indicatorShownBy_; }
     // Would discarding `tile` finish the hand now? 0 no, 1 with sets, 2 with seven pairs.
     int finishKind(int seat, int tile) const;
+    // Renkli okey: this hand's points count double (the rule is on and the gösterge is red or black): 2, else 1.
+    int colorMultiplier() const;
 
     // ---- actions (only valid for seat == current()) ----
     ActionResult drawFromPile(int seat);               // NeedDraw -> Play
@@ -208,6 +225,11 @@ public:
     ActionResult finishHand(int seat, int tile);
     ActionResult showIndicator(int seat);              // klasik okey: show the gösterge's twin
 
+    // ---- save / resume: the seed of startMatch and every successful action since (startNextHand included) ----
+    uint64_t matchSeed() const { return matchSeed_; }
+    const std::vector<LoggedAction>& actionLog() const { return log_; }
+    bool replay(const LoggedAction& a); // applies one logged action (false: it does not apply here)
+
     // ---- events (UI animation/sound/banter; bots may observe) ----
     std::vector<GameEvent> drainEvents();              // returns and clears the queue
 
@@ -223,6 +245,17 @@ public:
 
 private:
     // --- engine owner may add members/helpers here ---
+    ActionResult logged(ActionResult r, LoggedAction a);
+    ActionResult drawFromPileImpl(int seat);
+    ActionResult takeFromLeftImpl(int seat);
+    ActionResult returnLeftTileImpl(int seat);
+    ActionResult openHandImpl(int seat, const std::vector<std::vector<int>>& groups);
+    ActionResult layMeldsImpl(int seat, const std::vector<std::vector<int>>& groups);
+    ActionResult addToMeldImpl(int seat, int tile, int meldIndex, AddSide side);
+    ActionResult swapJokerImpl(int seat, int tile, int meldIndex);
+    ActionResult discardImpl(int seat, int tile);
+    ActionResult finishHandImpl(int seat, int tile);
+    ActionResult showIndicatorImpl(int seat);
     void dealHand();
     void beginTurn(int seat);
     void endHand(HandEndReason reason, int winner, bool finishedWithJoker);
@@ -264,6 +297,8 @@ private:
     int indicatorShownBy_ = -1;
     HandResult lastResult_;
     std::vector<GameEvent> events_;
+    uint64_t matchSeed_ = 0;
+    std::vector<LoggedAction> log_;
 };
 
 } // namespace okey

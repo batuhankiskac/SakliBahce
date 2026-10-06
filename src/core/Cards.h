@@ -6,6 +6,7 @@
 // Seats as in the okey games: 0 = bottom (human), 1 = right, 2 = across, 3 = left; play goes 0 -> 1 -> 2 -> 3
 // (counter-clockwise, "sağdan"). Partners (eşli games) sit across: 0 & 2, 1 & 3.
 #include "core/Rng.h"
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -65,12 +66,43 @@ inline std::string cardNameTR(int id) {
     return std::string(suitNameTR(suitOf(id))) + " " + rankNameTR(rankOf(id));
 }
 
+// The card as a definite object (belirtme hali): "Maça Kızı", "Sinek Valeyi", "Kupa 7'yi", "Karo Ası".
+inline std::string cardAccusativeTR(int id) {
+    if (!isValidCard(id)) return "?";
+    const std::string suit = suitNameTR(suitOf(id));
+    switch (rankOf(id)) {
+    case Vale: return suit + " Valeyi";
+    case Kiz: return suit + " Kızı";
+    case Papaz: return suit + " Papazı";
+    case As: return suit + " Ası";
+    default: break;
+    }
+    static const char* const suf[] = {"", "", "'yi", "'ü", "'ü", "'i", "'yı", "'yi", "'i", "'u", "'u"};
+    const int r = rankOf(id);
+    return suit + " " + std::to_string(r) + suf[r];
+}
+
 // A fresh shuffled deck.
 inline std::vector<int> shuffledDeck(Rng& rng) {
     std::vector<int> d(NUM_CARDS);
     for (int i = 0; i < NUM_CARDS; ++i) d[i] = i;
     rng.shuffle(d);
     return d;
+}
+
+// Exactly `n` space-separated integers from `line` (the card games' saved action lines); false on anything else.
+inline bool parseInts(const std::string& line, int* out, int n) {
+    const char* p = line.c_str();
+    for (int i = 0; i < n; ++i) {
+        while (*p == ' ') ++p;
+        char* end = nullptr;
+        const long v = std::strtol(p, &end, 10);
+        if (end == p) return false;
+        out[i] = (int)v;
+        p = end;
+    }
+    while (*p == ' ' || *p == '\r' || *p == '\n') ++p;
+    return *p == 0;
 }
 
 } // namespace kart

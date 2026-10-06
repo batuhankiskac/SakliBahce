@@ -52,14 +52,18 @@ public:
     void startMatch(const ui::Settings& st, const std::array<std::string, 4>& names, uint64_t seed) override {
         batak::Rules r = st.batakEsli ? batak::Rules::esliBatak() : batak::Rules::tekli();
         r.targetScore = std::clamp(st.batakTarget, 11, 151);
+        r.trumpMustBeBroken = st.batakKozKirilmadan;
         g_ = batak::Game(r);
         names_ = names;
         for (int s = 0; s < 4; ++s) {
             g_.setPlayer(s, names[(size_t)s], s == 0);
             const batak::Level lv = s == 0 ? batak::Level::Kurt : (batak::Level)std::clamp(level_, 0, 2);
             bots_[(size_t)s] = std::make_unique<batak::Bot>(lv, seed * 4 + (uint64_t)s + 0xBA7Aull);
+            // personalities: Kel Mahmut (2) bold, Emekli Nuri (3) cautious; Hacı Rıza and the AI in my seat neutral
+            bots_[(size_t)s]->setStyle(batak::BotStyle::forSeat(s));
         }
         rng_.reseed(seed ^ 0xB47A4ull);
+        replay_ = false;
         resetTable();
         bidText_.fill("");
         g_.startMatch(seed);
@@ -113,16 +117,18 @@ public:
             hud_.label3D(r, {0.f, w3d::TABLE_Y + 0.01f, -0.05f}, std::string("Koz: ") + suitName(g_.trump()), ui::pal::Highlight, 16.f);
         }
         // the player's decisions
-        const bool mine = !aiSeat && actor() == 0 && !tableBusy();
+        const bool mine = !aiSeat && !replay_ && actor() == 0 && !tableBusy();
         if (mine && g_.stage() == batak::Stage::Bidding) {
             panel_.clear();
             panelKind_ = 1;
             panelValues_.clear();
             std::vector<r3d::GameHud::PanelButton> b;
-            b.push_back({"Pas", g_.canPass(0), false, ""});
+            const Hint* hint = activeHint();
+            const int hv = hint ? hint->choice : -1;
+            b.push_back({"Pas", g_.canPass(0), hv == 0, ""});
             panelValues_.push_back(0);
             for (int v : g_.legalBids(0)) {
-                b.push_back({std::to_string(v), true, false, ""});
+                b.push_back({std::to_string(v), true, hv == v, ""});
                 panelValues_.push_back(v);
             }
             const std::string sub = g_.highBid() > 0 ? "Şu an: " + std::to_string(g_.highBid()) + " (" + names_[(size_t)g_.highBidder()] + ")"
@@ -132,10 +138,11 @@ public:
             panelKind_ = 2;
             std::vector<r3d::GameHud::PanelButton> b;
             const std::vector<int>& h = g_.hand(0);
+            const Hint* hint = activeHint();
             for (int s = 0; s < 4; ++s) {
                 int n = 0;
                 for (int c : h) n += kart::suitOf(c) == s ? 1 : 0;
-                b.push_back({suitName(s), true, false, "elinde " + std::to_string(n) + " kart"});
+                b.push_back({suitName(s), true, hint && hint->choice == s, "elinde " + std::to_string(n) + " kart"});
             }
             hud_.panel(mouse, "Kozu seç", "İhaleyi " + std::to_string(g_.contract()) + " ile aldın", b, 4, 250.f, 130.f);
         } else {
@@ -148,6 +155,7 @@ public:
         if (g_.stage() == batak::Stage::HandOver) st = "El bitti";
         else if (g_.stage() == batak::Stage::MatchOver) st = "Oyun bitti";
         else if (now_ < dealUntil_) st = "Kağıtlar dağıtılıyor…";
+        else if (a == 0 && replay_) st = replaySelfStatus();
         else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
         else if (a == 0) {
             sc = ui::pal::Highlight;
@@ -167,9 +175,42 @@ public:
                                  Color{238, 198, 112, 255}});
             }
         }
-        hud_.status(st, sc, a == 0 && !aiSeat, parts, aiSeat);
-        hud_.buttons(mouse, {}, {}, {}, aiSeat);
+        hud_.status(st, sc, a == 0 && !aiSeat && !replay_, parts, aiSeat && !replay_);
+        drawButtons(mouse, aiSeat);
         hud_.toasts();
+    }
+
+    bool humanHandScore(int& score) const override {
+        if (g_.handResults().empty()) return false;
+        for (const batak::SideResult& sr : g_.lastHandResult().sides)
+            if (sr.side == g_.sideOf(0)) {
+                score = sr.points;
+                return true;
+            }
+        return false;
+    }
+
+    bool saveState(std::vector<std::string>& lines) const override {
+        lines.clear();
+        for (const batak::LoggedAction& a : g_.actionLog()) lines.push_back(a.encode());
+        return true;
+    }
+    bool restoreState(const std::vector<std::string>& lines) override {
+        bool ok = true;
+        for (const std::string& l : lines) {
+            batak::LoggedAction a;
+            if (!batak::LoggedAction::decode(l, a) || !g_.replay(a)) {
+                ok = false;
+                break;
+            }
+        }
+        g_.drainEvents(); // (what happened is already on the table: nothing to animate)
+        bidText_.fill("");
+        for (const batak::BidRecord& b : g_.bids())
+            if (b.seat >= 0 && b.seat < 4) bidText_[(size_t)b.seat] = b.value > 0 ? std::to_string(b.value) : std::string("Pas");
+        log_.clear();
+        restoreView();
+        return ok;
     }
 
     ui::SheetModel sheet(bool aiMode) const override {
@@ -261,6 +302,17 @@ public:
     }
 
 protected:
+    int replayLine(const std::string& line) override {
+        batak::LoggedAction a;
+        if (!batak::LoggedAction::decode(line, a)) return -1;
+        if (a.kind == batak::LogKind::NextHand) {
+            if (g_.stage() == batak::Stage::HandOver) return 0;     // the sheet is up: App deals the next hand
+            return g_.stage() == batak::Stage::MatchOver ? -1 : 1; // (already dealt)
+        }
+        if (!g_.replay(a)) return -1;
+        pumpEngine();
+        return 1;
+    }
     void pumpEngine() override {
         for (const batak::GameEvent& e : g_.drainEvents()) {
             using E = batak::EvType;
@@ -364,6 +416,43 @@ protected:
         batak::Action a = b.next(g_, cur);
         batak::ActionResult r = batak::applyAction(g_, cur, a);
         if (!r.ok) batak::applyAction(g_, cur, batak::fallbackAction(g_, cur));
+    }
+    size_t decisionStamp() const override { return g_.actionLog().size() + 100000u * (size_t)g_.handIndex(); }
+    bool computeHint(Hint& h) override {
+        const int cur = g_.current();
+        if (cur < 0 || actor() != 0 || !bots_[0]) return false;
+        const batak::Action a = bots_[0]->next(g_, cur);
+        switch (a.kind) {
+        case batak::Action::Kind::Bid:
+            h.choice = a.value;
+            h.text = "İpucu: " + std::to_string(a.value) + " de";
+            break;
+        case batak::Action::Kind::Pass:
+            h.choice = 0;
+            h.text = "İpucu: pas";
+            break;
+        case batak::Action::Kind::ChooseTrump:
+            h.choice = a.suit;
+            h.text = std::string("İpucu: koz ") + suitName(a.suit);
+            break;
+        case batak::Action::Kind::Play:
+            h.card = a.card;
+            h.text = "İpucu: " + std::string(cur != 0 ? "açık elden " : "") + kart::cardAccusativeTR(a.card) + " oyna";
+            break;
+        }
+        return true;
+    }
+    std::vector<std::pair<int, int>> trickOnTable() const override {
+        std::vector<std::pair<int, int>> v;
+        for (const batak::PlayedCard& pc : g_.trick()) v.push_back({pc.seat, pc.card});
+        return v;
+    }
+    std::array<std::vector<int>, 4> wonPiles() const override {
+        std::array<std::vector<int>, 4> w;
+        for (const batak::Trick& t : g_.tricks())
+            if (t.winner >= 0 && t.winner < 4)
+                for (const batak::PlayedCard& pc : t.cards) w[(size_t)t.winner].push_back(pc.card);
+        return w;
     }
     void onHudClick(int id) override {
         const int i = id - r3d::GameHud::PANEL_ID;

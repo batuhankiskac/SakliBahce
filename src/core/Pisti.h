@@ -114,6 +114,16 @@ struct ActionResult {
     static ActionResult fail(std::string e) { return {false, std::move(e)}; }
 };
 
+// One successful action of the match, as given to Game (a saved match is its seed plus these, replayed).
+enum class LogKind { Play, NextHand };
+struct LoggedAction {
+    LogKind kind = LogKind::Play;
+    int seat = -1;
+    int card = -1;
+    std::string encode() const;  // one text line: "kind seat card"
+    static bool decode(const std::string& line, LoggedAction& out);
+};
+
 class Game {
 public:
     explicit Game(const Rules& rules = Rules());
@@ -181,6 +191,11 @@ public:
     // ---- action ----
     ActionResult playCard(int seat, int card);
 
+    // ---- save / resume: the seed of startMatch and every successful action since (startNextHand included) ----
+    uint64_t matchSeed() const { return seed_; }
+    const std::vector<LoggedAction>& actionLog() const { return log_; }
+    bool replay(const LoggedAction& a); // applies one logged action (false: it does not apply here)
+
     // ---- events ----
     std::vector<GameEvent> drainEvents();
 
@@ -200,6 +215,7 @@ public:
     void debugSetNextDeck(const std::vector<int>& deck) { nextDeck_ = deck; }
 
 private:
+    ActionResult playCardImpl(int seat, int card);
     void setupSeats();
     void beginHand();
     void dealCards();                                  // one deal of 4 to every active seat
@@ -240,6 +256,7 @@ private:
     int winnerSide_ = -1;
     HandResult lastResult_;
     std::vector<GameEvent> events_;
+    std::vector<LoggedAction> log_;
 };
 
 // Point value of one card in the hand score (As 1, Vale 1, Sinek 2 = 2, Karo 10 = 3, others 0).

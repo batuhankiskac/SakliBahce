@@ -3,7 +3,7 @@
 //   sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] [--no-wait] [--katlamali]
 //       [--okey] [--esli]
 //       [--match H]
-//       [--slow MS] [--feed-log FILE]
+//       [--slow MS] [--feed-log FILE] [--styles | --styles-fixed]
 //
 // levels: 0 = Acemi (Easy), 1 = Usta (Normal), 2 = Kurt (Hard), one per seat. --rotate shifts the level
 // assignment by one seat every match so seat position does not bias the level comparison. --duplicate
@@ -16,6 +16,12 @@
 // (with the position), to investigate the decision-time budget. --feed-log FILE writes one CSV row per
 // discard to an unopened right neighbour (public features + whether they opened with it), to calibrate the
 // bots' yandan açma cezası estimate.
+// --styles gives the bots the table's personalities (BotStyle::forSeat) by slot: slot k (the k-th entry of
+// --levels, moving with the rotation) plays seat k's preset (0, 1 neutral, 2 Kel Mahmut bold, 3 Emekli Nuri
+// cautious); per-slot behaviour stats are printed and, with --duplicate, the paired difference of every slot
+// against slot 0 (slot 1 is a neutral control). --styles-fixed ties the presets to the physical seats instead
+// (as in the game: levels rotate under fixed people), for the level comparison with styles on. --style-knobs MASK
+// keeps only some of the personality knobs (STYLE_K_* bits in core/Bot.cpp), to measure them one by one.
 //
 // Build: clang++ -std=c++17 -O2 -Wall -Wextra -Isrc src/core/Meld.cpp src/core/Game.cpp src/core/Solver.cpp
 //        src/core/Bot.cpp tests/sim.cpp -o build/ai/sim
@@ -37,6 +43,7 @@ using namespace okey;
 
 namespace okey::detail {
 extern unsigned teamAwareMask; // core/Bot.cpp
+extern unsigned styleKnobs;    // core/Bot.cpp (STYLE_K_* bits)
 }
 
 namespace {
@@ -100,6 +107,13 @@ double nowMs() {
     using namespace std::chrono;
     return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
 }
+
+// Per persona (slot with --styles, physical seat with --styles-fixed).
+struct StyleStats {
+    long long seatHands = 0, scoreSum = 0, wins = 0, opened = 0, openedPairs = 0, openTurnSum = 0;
+    long long ownTurns = 0, takeLeft = 0, leftOpenCaused = 0, penalties = 0, winScore = 0;
+    long long finishPairs = 0, finishOkey = 0, unopened = 0;
+};
 
 struct LevelStats {
     long long seatHands = 0;   // seat-hands played at this level
@@ -191,6 +205,7 @@ int main(int argc, char** argv) {
     double slowMs = -1.0;
     const char* feedLog = nullptr;
     int teamAb = -1; // --team-ab L: eşli, every seat level L; one team plays for the team, the other does not
+    int styleMode = 0; // 1 --styles (by slot), 2 --styles-fixed (by seat)
 
     RulesConfig rules;
     for (int i = 1; i < argc; ++i) {
@@ -222,10 +237,15 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--match") && i + 1 < argc) rules.numHands = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--slow") && i + 1 < argc) slowMs = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--feed-log") && i + 1 < argc) feedLog = argv[++i];
+        else if (!std::strcmp(argv[i], "--styles")) styleMode = 1;
+        else if (!std::strcmp(argv[i], "--styles-fixed")) styleMode = 2;
+        else if (!std::strcmp(argv[i], "--style-knobs") && i + 1 < argc)
+            detail::styleKnobs = (unsigned)std::strtoul(argv[++i], nullptr, 0);
 
         else {
             std::fprintf(stderr, "usage: sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] "
-                                 "[--no-wait] [--katlamali] [--okey] [--esli] [--match H] [--slow MS] [--feed-log FILE]\n");
+                                 "[--no-wait] [--katlamali] [--okey] [--esli] [--match H] [--slow MS] [--feed-log FILE] "
+                                 "[--styles | --styles-fixed]\n");
             return 2;
         }
     }
@@ -239,6 +259,11 @@ int main(int argc, char** argv) {
     std::array<Bot, 4> bots = {Bot(BotLevel::Normal, seed * 4 + 1), Bot(BotLevel::Normal, seed * 4 + 2),
                                Bot(BotLevel::Normal, seed * 4 + 3), Bot(BotLevel::Normal, seed * 4 + 4)};
     int seatLevel[4];
+    int persona[4] = {0, 1, 2, 3}; // style stats bucket of each seat
+    StyleStats sty[4];
+    double styBlock[4] = {}, styBlockCnt[4] = {};
+    long long styPairN[4] = {};
+    double styPairSum[4] = {}, styPairSq[4] = {};
     if (teamAb >= 0) std::printf("team-ab: every seat plays %s; the stats say Acemi for the bots that ignore the "
                                  "partner and Usta for the ones that play for the team\n", levelName(teamAb));
 
@@ -266,6 +291,8 @@ int main(int argc, char** argv) {
             seatLevel[s] = rotate ? levels[(s + matchIndex) % 4] : levels[s];
             if (teamAb >= 0) seatLevel[s] = (s + matchIndex) % 2 == 0 ? 1 : 0;
             bots[s].setLevel((BotLevel)(teamAb >= 0 ? teamAb : seatLevel[s]));
+            persona[s] = styleMode == 1 && rotate ? (s + matchIndex) % 4 : s;
+            bots[s].setStyle(styleMode ? BotStyle::forSeat(persona[s]) : BotStyle{});
             g.setPlayer(s, std::string("Bot") + std::to_string(s), false);
         }
         if (teamAb >= 0) detail::teamAwareMask = matchIndex % 2 == 0 ? 0x5u : 0xAu;
@@ -343,6 +370,7 @@ int main(int argc, char** argv) {
                         break;
                     case EvType::TakeLeft:
                         ++takeLeft;
+                        sty[persona[e.player]].takeLeft++;
                         rTook[e.player].push_back(e.tile);
                         if (lastFeed[Game::leftOf(e.player)] >= 0) feedRows[lastFeed[Game::leftOf(e.player)]].taken = 1;
                         break;
@@ -364,11 +392,13 @@ int main(int argc, char** argv) {
                         if (lastEvType == (int)EvType::ReturnLeft) ++penReturn;
                         else if (lastEvType == (int)EvType::Open) {
                             ++penLeftOpen, penLeftOpenPts += e.amount;
+                            sty[persona[e.player]].leftOpenCaused++;
                             if (lastFeed[e.player] >= 0) feedRows[lastFeed[e.player]].fed = e.amount;
                         }
                         else if (lastWasDiscardJoker) ++penOkey;
                         else ++penIslek;
                         lv[seatLevel[e.player]].penalties++;
+                        sty[persona[e.player]].penalties++;
                         if (verbose) {
                             std::printf("    PENALTY seat %d: %s\n", e.player, e.text.c_str());
                             dumpState(g, e.player);
@@ -393,6 +423,28 @@ int main(int argc, char** argv) {
                 if (hr.finishedInOneGo) ++finishElden;
             } else {
                 ++exhausted;
+            }
+            for (int s = 0; s < 4; ++s) {
+                StyleStats& S = sty[persona[s]];
+                const PlayerInfo& ps = g.player(s);
+                S.seatHands++;
+                S.scoreSum += hr.score[s];
+                S.ownTurns += ownTurns[s];
+                styBlock[persona[s]] += hr.score[s];
+                styBlockCnt[persona[s]] += 1;
+                if (ps.opened) {
+                    S.opened++;
+                    if (ps.openedWithPairs) S.openedPairs++;
+                    S.openTurnSum += std::max(1, openTurn[s]);
+                } else {
+                    S.unopened++;
+                }
+                if (hr.reason == HandEndReason::PlayerFinished && hr.winner == s) {
+                    S.wins++;
+                    S.winScore += hr.score[s];
+                    if (hr.finishedWithPairs) S.finishPairs++;
+                    if (hr.finishedWithJoker) S.finishOkey++;
+                }
             }
             for (int s = 0; s < 4; ++s) {
                 LevelStats& L = lv[seatLevel[s]];
@@ -468,6 +520,15 @@ int main(int argc, char** argv) {
                 }
             }
             for (int l = 0; l < 3; ++l) blockSum[l] = blockCnt[l] = 0;
+            if (styleMode && styBlockCnt[0] > 0)
+                for (int p = 1; p < 4; ++p) {
+                    if (!styBlockCnt[p]) continue;
+                    const double d = styBlock[p] / styBlockCnt[p] - styBlock[0] / styBlockCnt[0];
+                    styPairN[p]++;
+                    styPairSum[p] += d;
+                    styPairSq[p] += d * d;
+                }
+            for (int p = 0; p < 4; ++p) styBlock[p] = styBlockCnt[p] = 0;
 
         }
     }
@@ -552,6 +613,31 @@ int main(int argc, char** argv) {
         for (int b = 0; b < 3; ++b)
             if (pairN[a][b])
                 std::printf("PAIR a=%d b=%d n=%lld sum=%.4f sq=%.4f\n", a, b, pairN[a][b], pairSum[a][b], pairSq[a][b]);
+    if (styleMode) {
+        std::printf("styles (%s): 0, 1 neutral (Hacı Rıza), 2 bold (Kel Mahmut), 3 cautious (Emekli Nuri)\n",
+                    styleMode == 1 ? "by slot" : "by seat");
+        for (int p = 0; p < 4; ++p) {
+            const StyleStats& S = sty[p];
+            if (!S.seatHands) continue;
+            const double n = (double)S.seatHands;
+            std::printf("STYLE %d (%+.0f) avg %7.2f | win %5.1f%% (avg win %.1f, pairs %4.1f%%, okey %4.1f%%) | "
+                        "opened %5.1f%% pairs %5.1f%% of openings, at own turn %.2f | take-left %.3f/turn | "
+                        "yandan açma caused %.3f/hand | penalties %.3f/hand\n",
+                        p, BotStyle::forSeat(p).boldness, S.scoreSum / n, 100.0 * S.wins / n,
+                        S.wins ? (double)S.winScore / S.wins : 0.0, S.wins ? 100.0 * S.finishPairs / S.wins : 0.0,
+                        S.wins ? 100.0 * S.finishOkey / S.wins : 0.0, 100.0 * S.opened / n,
+                        S.opened ? 100.0 * S.openedPairs / S.opened : 0.0,
+                        S.opened ? (double)S.openTurnSum / S.opened : 0.0,
+                        S.ownTurns ? (double)S.takeLeft / S.ownTurns : 0.0, S.leftOpenCaused / n, S.penalties / n);
+        }
+        for (int p = 1; p < 4; ++p) {
+            if (!styPairN[p]) continue;
+            const double n = (double)styPairN[p], mean = styPairSum[p] / n;
+            const double var = std::max(0.0, styPairSq[p] / n - mean * mean);
+            std::printf("paired style %d - style 0 = %+.2f +- %.2f per seat-hand (n=%lld deals)\n", p, mean,
+                        std::sqrt(var / std::max(1.0, n - 1)), styPairN[p]);
+        }
+    }
     std::printf("decisions: %lld, avg %.3f ms, max %.2f ms\n", decisions, timeSum / std::max(1LL, decisions), timeMax);
     std::printf("rejected actions: %lld (fallback rejected: %lld, stuck turns: %lld)\n", rejected, fallbackRejected,
                 stuckTurns);

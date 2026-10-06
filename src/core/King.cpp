@@ -290,6 +290,8 @@ void Game::setPlayer(int seat, const std::string& name, bool human) {
 
 void Game::startMatch(uint64_t seed) {
     rng_.reseed(seed);
+    matchSeed_ = seed;
+    log_.clear();
     handIndex_ = 0;
     sheet_.clear();
     timesChosen_.fill(0);
@@ -307,6 +309,7 @@ void Game::startMatch(uint64_t seed) {
 
 void Game::startNextHand() {
     if (stage_ != Stage::HandOver) return;
+    log_.push_back({LogKind::NextHand, -1, -1, -1});
     ++handIndex_;
     dealHand();
 }
@@ -390,7 +393,7 @@ std::vector<ContractOption> Game::options(int seat) const {
     return v;
 }
 
-ActionResult Game::chooseContract(int seat, Contract c, int trump) {
+ActionResult Game::chooseContractImpl(int seat, Contract c, int trump) {
     std::string why;
     if (!canChoose(seat, c, &why)) return ActionResult::fail(why);
     if (c == Contract::Koz && (trump < 0 || trump >= NUM_SUITS)) return ActionResult::fail("Koz rengini seçmelisin");
@@ -458,7 +461,7 @@ bool Game::isLegal(int seat, int card) const {
     return (legalMask(rules_, trickContext(), maskOf(seats_[seat].hand)) & cardBit(card)) != 0;
 }
 
-ActionResult Game::playCard(int seat, int card) {
+ActionResult Game::playCardImpl(int seat, int card) {
     if (stage_ != Stage::Playing) return ActionResult::fail("Şu an kart atma zamanı değil");
     if (seat < 0 || seat >= 4 || seat != current_) return ActionResult::fail("Sıra sende değil");
     std::vector<int>& hand = seats_[seat].hand;
@@ -694,6 +697,51 @@ void Game::debugSetHands(const std::array<std::vector<int>, 4>& hands) {
         seats_[s].hand = hands[s];
         std::sort(seats_[s].hand.begin(), seats_[s].hand.end());
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// the match's action log (save / resume)
+
+ActionResult Game::chooseContract(int seat, Contract c, int trump) {
+    ActionResult r = chooseContractImpl(seat, c, trump);
+    if (r.ok) log_.push_back({LogKind::Choose, seat, (int)c, trump_});
+    return r;
+}
+
+ActionResult Game::playCard(int seat, int card) {
+    ActionResult r = playCardImpl(seat, card);
+    if (r.ok) log_.push_back({LogKind::Play, seat, card, -1});
+    return r;
+}
+
+bool Game::replay(const LoggedAction& a) {
+    switch (a.kind) {
+    case LogKind::Choose:
+        if (a.value < 0 || a.value >= NUM_CONTRACTS) return false;
+        return chooseContract(a.seat, (Contract)a.value, a.trump).ok;
+    case LogKind::Play: return playCard(a.seat, a.value).ok;
+    case LogKind::NextHand:
+        if (stage_ != Stage::HandOver) return false;
+        startNextHand();
+        return true;
+    }
+    return false;
+}
+
+std::string LoggedAction::encode() const {
+    return std::to_string((int)kind) + " " + std::to_string(seat) + " " + std::to_string(value) + " " + std::to_string(trump);
+}
+
+bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
+    out = LoggedAction();
+    int v[4] = {0, 0, 0, 0};
+    if (!parseInts(line, v, 4)) return false;
+    if (v[0] < 0 || v[0] > (int)LogKind::NextHand) return false;
+    out.kind = (LogKind)v[0];
+    out.seat = v[1];
+    out.value = v[2];
+    out.trump = v[3];
+    return true;
 }
 
 } // namespace king

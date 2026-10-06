@@ -1272,12 +1272,18 @@ void drawArtAtlas(RenderTexture2D& rt, uint32_t seed) {
     endRoomCanvas(rt);
 }
 
-// ============================================================================ the night street outside
+// ============================================================================ the street outside (by day or by night)
 namespace {
 
 struct StreetMap {  // world (a, y) in metres -> canvas pixels inside a panel rect
     Rectangle px;
     float a0, a1, y0, y1;  // a increases to the right; y0 bottom, y1 top
+    int phase = 3, season = 2;  // w3d::DayPhase / w3d::Season (0 sabah .. 3 gece, 0 ilkbahar .. 3 kış)
+    bool day() const { return phase <= 1; }         // morning, noon: sunlit facades, shops open, no lamps
+    bool lampsOn() const { return phase >= 2; }     // evening, night: street lamps, lit windows, neon
+    bool snowy() const { return season == 3; }
+    // a night colour, or its daylight counterpart (at dusk the night painting keeps a little of the day)
+    Color dn(Color night, Color dayc) const { return day() ? dayc : (phase == 2 ? mix(night, dayc, 0.18f) : night); }
     Vector2 P(float a, float y) const {
         return {px.x + (a - a0) / (a1 - a0) * px.width, px.y + (y1 - y) / (y1 - y0) * px.height};
     }
@@ -1290,6 +1296,33 @@ struct StreetMap {  // world (a, y) in metres -> canvas pixels inside a panel re
 
 void windowLit(const StreetMap& m, float a, float y, float w, float h, int style, okey::Rng& rng) {
     Rectangle r = m.R(a, y, w, h);
+    if (m.day()) {  // sky reflected in the glass, lace curtains, a closed shutter here and there
+        const uint32_t hsh = (uint32_t)(a * 131.f) * 2654435761u ^ (uint32_t)(y * 17.f) * 40503u;
+        DrawRectangleRec({r.x - 4, r.y - 4, r.width + 8, r.height + 8}, Color{150, 142, 132, 255});
+        rectGradV(r, Color{168, 190, 212, 255}, Color{88, 104, 124, 255});
+        DrawLineEx({r.x + 3, r.y + r.height * 0.8f}, {r.x + r.width * 0.5f, r.y + 3}, 3.f, Color{236, 242, 250, 90});
+        if (style == 1 || (hsh >> 7) % 3 == 0) {  // lace
+            DrawRectangleRec({r.x, r.y, r.width * 0.32f, r.height}, Color{232, 228, 216, 230});
+            DrawRectangleRec({r.x + r.width * 0.68f, r.y, r.width * 0.32f, r.height}, Color{232, 228, 216, 230});
+        } else if (style == 2) {  // wooden shutters (panjur) closed against the sun
+            DrawRectangleRec(r, Color{96, 120, 96, 255});
+            for (float yy = r.y + 4; yy < r.y + r.height; yy += 7) DrawLineEx({r.x, yy}, {r.x + r.width, yy}, 2.f, Color{70, 92, 72, 255});
+        }
+        DrawLineEx({r.x + r.width / 2, r.y}, {r.x + r.width / 2, r.y + r.height}, 3.f, Color{120, 112, 104, 255});
+        DrawRectangleRec({r.x - 8, r.y + r.height + 3, r.width + 16, 6}, Color{200, 194, 184, 255});
+        if (m.season == 0 || m.season == 1) {  // geraniums in pots on the sill (spring, summer)
+            if ((hsh >> 3) % 2 == 0)
+                for (int k = 0; k < 3; ++k) {
+                    Vector2 pp{r.x + r.width * (0.2f + 0.3f * k), r.y + r.height - 2.f};
+                    DrawRectangleRec({pp.x - 5, pp.y, 10, 7}, Color{170, 90, 60, 255});
+                    ellipse({pp.x, pp.y - 3}, 8, 6, Color{60, 110, 50, 255}, 10);
+                    ellipse({pp.x + 2, pp.y - 6}, 3.5f, 3.f, (k + (int)(hsh >> 5)) % 2 ? Color{214, 40, 50, 255} : Color{236, 110, 150, 255}, 8);
+                }
+        }
+        if (m.snowy()) DrawRectangleRec({r.x - 9, r.y + r.height, r.width + 18, 5}, Color{240, 243, 248, 255});
+        (void)rng;
+        return;
+    }
     DrawRectangleRec({r.x - 4, r.y - 4, r.width + 8, r.height + 8}, Color{34, 36, 48, 255});
     if (style == 0) {  // dark window, faint reflection
         rectGradV(r, Color{18, 24, 44, 255}, Color{10, 14, 26, 255});
@@ -1307,11 +1340,12 @@ void windowLit(const StreetMap& m, float a, float y, float w, float h, int style
     // mullion + sill
     DrawLineEx({r.x + r.width / 2, r.y}, {r.x + r.width / 2, r.y + r.height}, 3.f, Color{40, 40, 50, 255});
     DrawRectangleRec({r.x - 8, r.y + r.height + 3, r.width + 16, 6}, Color{70, 72, 84, 255});
+    if (m.snowy()) DrawRectangleRec({r.x - 9, r.y + r.height, r.width + 18, 4}, Color{150, 158, 186, 255});
     (void)rng;
 }
 
-void sign(Rectangle r, const char* text, Color bg, Color fg, float size) {
-    DrawCircleGradient({r.x + r.width / 2, r.y + r.height / 2}, r.width * 0.8f, alpha(bg, 0.35f), alpha(bg, 0.f));
+void sign(const StreetMap& m, Rectangle r, const char* text, Color bg, Color fg, float size) {
+    if (m.lampsOn()) DrawCircleGradient({r.x + r.width / 2, r.y + r.height / 2}, r.width * 0.8f, alpha(bg, 0.35f), alpha(bg, 0.f));
     DrawRectangleRec(r, bg);
     frameRect(r, 3.f, scaleRgb(bg, 0.6f));
     textC(FontId::Sign, text, {r.x + r.width / 2, r.y + r.height / 2}, size, fg, 3.f);
@@ -1319,11 +1353,18 @@ void sign(Rectangle r, const char* text, Color bg, Color fg, float size) {
 
 // Night-time stucco: slate blue to a dull mauve (the street lamps add the warmth where they reach).
 Color nightWall(okey::Rng& rng) { return mix(Color{40, 42, 58, 255}, Color{60, 52, 54, 255}, rng.uniform(0.f, 1.f)); }
+// By day: the old plastered blocks in faded pastels.
+Color dayWall(float a) {
+    static const Color kWalls[5] = {{214, 192, 160, 255}, {190, 170, 152, 255}, {196, 202, 188, 255}, {222, 204, 178, 255}, {204, 176, 160, 255}};
+    return kWalls[((int)std::floor(a * 3.7f + 100.f)) % 5];
+}
 
 // Apartment block body from the pavement to `top`: cornice bands and the upper floors' windows (no ground floor).
 void apartment(const StreetMap& m, float a, float w, float top, int floors, Color wallc, okey::Rng& rng) {
     const float storey = 3.1f, groundH = 3.4f;
+    wallc = m.dn(wallc, dayWall(a));
     rectGradV(m.R(a, 0, w, top), scaleRgb(wallc, 0.7f), wallc);
+    if (m.snowy()) DrawRectangleRec(m.R(a - 0.1f, top - 0.05f, w + 0.2f, 0.16f), m.dn(Color{150, 158, 186, 255}, Color{242, 244, 248, 255}));
     for (int f = 0; f <= floors; ++f) DrawRectangleRec(m.R(a, groundH + f * storey - 0.12f, w, 0.18f), scaleRgb(wallc, 1.25f));
     int nw = std::max(2, (int)(w / 1.6f));
     for (int f = 0; f < floors; ++f)
@@ -1334,12 +1375,19 @@ void apartment(const StreetMap& m, float a, float w, float top, int floors, Colo
             windowLit(m, wa, wy, 0.9f, 1.5f, style, rng);
             if (rng.chance(0.3f)) {  // balcony railing
                 Rectangle rail = m.R(wa - 0.3f, wy - 0.15f, 1.5f, 0.9f);
-                frameRect(rail, 3.f, Color{30, 30, 36, 255});
-                for (float x = rail.x; x < rail.x + rail.width; x += 8) DrawLineEx({x, rail.y}, {x, rail.y + rail.height}, 1.5f, Color{30, 30, 36, 255});
+                const Color rc = m.dn(Color{30, 30, 36, 255}, Color{60, 58, 58, 255});
+                frameRect(rail, 3.f, rc);
+                for (float x = rail.x; x < rail.x + rail.width; x += 8) DrawLineEx({x, rail.y}, {x, rail.y + rail.height}, 1.5f, rc);
+                if (m.day() && m.season <= 1)  // flowers spilling over the railing
+                    for (float x = rail.x + 6; x < rail.x + rail.width - 4; x += 13) {
+                        ellipse({x, rail.y + 2}, 7, 5, Color{70, 120, 56, 255}, 8);
+                        ellipse({x + 2, rail.y - 1}, 3, 3, ((int)x / 13) % 2 ? Color{220, 50, 70, 255} : Color{250, 200, 70, 255}, 6);
+                    }
+                if (m.snowy()) DrawRectangleRec({rail.x - 2, rail.y - 3, rail.width + 4, 5}, m.dn(Color{150, 158, 186, 255}, Color{242, 244, 248, 255}));
             }
             if (rng.chance(0.1f)) {  // satellite dish
                 Vector2 p = m.P(wa + 1.0f, wy + 1.3f);
-                ellipse(p, 10, 12, Color{150, 150, 158, 255});
+                ellipse(p, 10, 12, m.dn(Color{150, 150, 158, 255}, Color{226, 226, 230, 255}));
             }
         }
 }
@@ -1359,25 +1407,38 @@ void shopFront(const StreetMap& m, float ga, float gw, int kind, float k, okey::
         Rectangle aw = m.R(ga - 0.2f, 2.7f * k, gw + 0.4f, 0.6f * k);
         for (int s = 0; s < 12; ++s)
             DrawRectangleRec({aw.x + s * aw.width / 12, aw.y, aw.width / 12, aw.height}, s % 2 ? Color{176, 36, 36, 255} : Color{206, 196, 178, 255});
-        sign(m.R(ga + gw * 0.2f, 3.35f * k, gw * 0.6f, 0.6f * k), "BAKKAL", Color{200, 30, 30, 255}, Color{255, 240, 200, 255}, 44 * k);
+        sign(m, m.R(ga + gw * 0.2f, 3.35f * k, gw * 0.6f, 0.6f * k), "BAKKAL", Color{200, 30, 30, 255}, Color{255, 240, 200, 255}, 44 * k);
         for (int c = 0; c < 3; ++c) DrawRectangleRec(m.R(ga + 0.3f + c * 0.7f, 0.0f, 0.6f, 0.4f * k), Color{150, 110, 60, 255});
+    } else if (kind == 1 && m.day()) {  // the tailor is open by day: jackets in the window
+        Rectangle shop = m.R(ga, 0.2f * k, gw, 2.5f * k);
+        rectGradV(shop, Color{150, 140, 126, 255}, Color{104, 94, 84, 255});
+        for (int j = 0; j < 3; ++j) {
+            const float jx = ga + 0.25f + j * (gw - 0.5f) / 3.f;
+            const Color jc = j == 0 ? Color{60, 64, 80, 255} : j == 1 ? Color{110, 84, 60, 255} : Color{70, 72, 70, 255};
+            DrawRectangleRounded(m.R(jx, 0.8f * k, (gw - 0.6f) / 3.2f, 1.1f * k), 0.25f, 4, jc);
+            ellipse(m.P(jx + (gw - 0.6f) / 6.4f, 2.0f * k), m.S() * 0.07f, m.S() * 0.06f, Color{40, 38, 36, 255}, 8);
+        }
+        frameRect(shop, 4.f, Color{70, 66, 60, 255});
+        DrawRectangleRec(m.R(ga, 2.75f * k, gw, 0.08f * k), Color{60, 62, 70, 255});  // the shutter rolled up in its box
+        sign(m, m.R(ga + gw * 0.15f, 3.0f * k, gw * 0.7f, 0.5f * k), "TERZİ", Color{34, 34, 40, 255}, Color{176, 168, 150, 255}, 34 * k);
     } else if (kind == 1) {  // closed shop: rolled-down shutter (kepenk) with graffiti
         Rectangle sh = m.R(ga, 0.f, gw, 2.8f * k);
         rectGradV(sh, Color{50, 52, 62, 255}, Color{30, 32, 40, 255});
         for (float y = sh.y; y < sh.y + sh.height; y += 7) DrawLineEx({sh.x, y}, {sh.x + sh.width, y}, 1.5f, Color{22, 24, 32, 255});
         textC(FontId::Hand, "Aşk  bu  sokakta", {sh.x + sh.width * 0.5f, sh.y + sh.height * 0.5f}, 36, Color{150, 50, 110, 200});
-        sign(m.R(ga + gw * 0.15f, 3.0f * k, gw * 0.7f, 0.5f * k), "TERZİ", Color{34, 34, 40, 255}, Color{176, 168, 150, 255}, 34 * k);
+        sign(m, m.R(ga + gw * 0.15f, 3.0f * k, gw * 0.7f, 0.5f * k), "TERZİ", Color{34, 34, 40, 255}, Color{176, 168, 150, 255}, 34 * k);
     } else if (kind == 2) {  // pharmacy, closed for the night (the next one is on duty)
         Rectangle shop = m.R(ga, 0.2f * k, gw, 2.5f * k);
-        rectGradV(shop, Color{34, 46, 50, 255}, Color{18, 24, 28, 255});
-        for (int s = 0; s < 3; ++s) DrawRectangleRec(m.R(ga + 0.2f, (0.7f + s * 0.6f) * k, gw - 0.4f, 0.05f), Color{64, 72, 82, 255});
+        if (m.day()) rectGradV(shop, Color{214, 226, 222, 255}, Color{170, 186, 182, 255});  // open: bright shelves
+        else rectGradV(shop, Color{34, 46, 50, 255}, Color{18, 24, 28, 255});
+        for (int s = 0; s < 3; ++s) DrawRectangleRec(m.R(ga + 0.2f, (0.7f + s * 0.6f) * k, gw - 0.4f, 0.05f), m.dn(Color{64, 72, 82, 255}, Color{140, 150, 158, 255}));
         // the duty-pharmacy notice taped inside the glass door, lit by the night light
         Rectangle note = m.R(ga + 0.35f, 1.1f * k, 0.42f, 0.55f * k);
         DrawRectangleRec(note, Color{150, 156, 150, 255});
         for (int l = 0; l < 4; ++l) DrawRectangleRec(m.R(ga + 0.4f, (1.2f + l * 0.1f) * k, 0.32f, 0.03f), Color{90, 60, 64, 255});
-        sign(m.R(ga + gw * 0.15f, 2.9f * k, gw * 0.7f, 0.6f * k), "ECZANE", Color{58, 60, 66, 255}, Color{130, 30, 36, 255}, 44 * k);
+        sign(m, m.R(ga + gw * 0.15f, 2.9f * k, gw * 0.7f, 0.6f * k), "ECZANE", Color{58, 60, 66, 255}, Color{130, 30, 36, 255}, 44 * k);
         Rectangle e = m.R(ga + gw - 0.4f, 2.3f * k, 0.6f * k, 0.6f * k);
-        DrawCircleGradient({e.x + e.width / 2, e.y + e.height / 2}, e.width * 1.3f, Color{255, 50, 60, 110}, Color{255, 50, 60, 0});
+        if (m.lampsOn()) DrawCircleGradient({e.x + e.width / 2, e.y + e.height / 2}, e.width * 1.3f, Color{255, 50, 60, 110}, Color{255, 50, 60, 0});
         DrawRectangleRec(e, Color{220, 26, 36, 255});
         frameRect(e, 3.f, Color{255, 120, 120, 255});
         textC(FontId::Sign, "E", {e.x + e.width / 2, e.y + e.height / 2}, 48 * k, WHITE);
@@ -1385,12 +1446,18 @@ void shopFront(const StreetMap& m, float ga, float gw, int kind, float k, okey::
         Rectangle door = m.R(ga + 0.4f, 0.f, 1.3f, 2.4f * k);
         DrawRectangleRec(door, Color{48, 32, 26, 255});
         DrawRectangleRec(inset(door, 8), Color{90, 72, 50, 255});
-        DrawCircleGradient(m.P(ga + 1.05f, 2.7f * k), 40, Color{255, 220, 150, 200}, Color{255, 200, 120, 0});
-        ellipse(m.P(ga + 1.05f, 2.7f * k), 7, 9, Color{255, 240, 200, 255});
+        if (m.lampsOn()) DrawCircleGradient(m.P(ga + 1.05f, 2.7f * k), 40, Color{255, 220, 150, 200}, Color{255, 200, 120, 0});
+        ellipse(m.P(ga + 1.05f, 2.7f * k), 7, 9, m.lampsOn() ? Color{255, 240, 200, 255} : Color{200, 196, 186, 255});
         Rectangle shop = m.R(ga + 2.1f, 0.2f * k, gw - 2.2f, 2.4f * k);
-        rectGradV(shop, Color{40, 38, 42, 255}, Color{24, 22, 26, 255});  // the barber has closed for the night
-        DrawCircleGradient(m.P(ga + 2.1f + (gw - 2.2f) * 0.3f, 1.6f * k), m.S() * 0.6f, Color{120, 140, 170, 50}, Color{120, 140, 170, 0});
-        sign(m.R(ga + 2.2f, 2.8f * k, gw - 2.4f, 0.5f * k), "BERBER", Color{26, 34, 80, 255}, Color{220, 222, 236, 255}, 36 * k);
+        if (m.day()) {  // the barber is open: mirror, chair
+            rectGradV(shop, Color{186, 182, 172, 255}, Color{140, 134, 126, 255});
+            DrawRectangleRec(m.R(ga + 2.4f, 1.2f * k, gw - 2.8f, 0.8f * k), Color{200, 214, 222, 255});
+            DrawRectangleRounded(m.R(ga + 2.1f + (gw - 2.2f) * 0.4f, 0.3f * k, 0.6f, 0.75f * k), 0.3f, 4, Color{120, 40, 36, 255});
+        } else {
+            rectGradV(shop, Color{40, 38, 42, 255}, Color{24, 22, 26, 255});  // the barber has closed for the night
+            DrawCircleGradient(m.P(ga + 2.1f + (gw - 2.2f) * 0.3f, 1.6f * k), m.S() * 0.6f, Color{120, 140, 170, 50}, Color{120, 140, 170, 0});
+        }
+        sign(m, m.R(ga + 2.2f, 2.8f * k, gw - 2.4f, 0.5f * k), "BERBER", Color{26, 34, 80, 255}, Color{220, 222, 236, 255}, 36 * k);
         Rectangle pole = m.R(ga + 1.9f, 1.0f * k, 0.18f, 1.1f * k);
         DrawRectangleRec(pole, Color{140, 140, 148, 255});
         for (float y = pole.y; y < pole.y + pole.height; y += 14) tri({pole.x, y}, {pole.x + pole.width, y + 6}, {pole.x, y + 8}, Color{170, 30, 30, 255});
@@ -1399,6 +1466,7 @@ void shopFront(const StreetMap& m, float ga, float gw, int kind, float k, okey::
 
 // Sodium street lamp on our side of the street: a warm pool on the facade and on the pavement under it.
 void lampPool(const StreetMap& m, float a, float y, float radius) {
+    if (!m.lampsOn()) return;
     Vector2 lp = m.P(a, y);
     DrawCircleGradient(lp, m.S() * radius, Color{255, 160, 70, 64}, Color{255, 150, 60, 0});
     ellipseGrad(m.P(a, 0.05f), m.S() * radius * 0.9f, m.S() * 0.35f, Color{255, 170, 80, 70}, Color{255, 160, 70, 0});
@@ -1408,7 +1476,7 @@ void overheadCables(const StreetMap& m) {
     for (int k = 0; k < 3; ++k) {
         Vector2 p0 = m.P(m.a0, 5.2f + k * 0.5f), p1 = m.P(m.a1, 4.8f + k * 0.7f), c = m.P((m.a0 + m.a1) * 0.5f, 4.2f + k * 0.4f);
         Vector2 pts[3] = {p0, c, p1};
-        DrawSplineBezierQuadratic(pts, 3, 2.f, Color{10, 10, 16, 255});
+        DrawSplineBezierQuadratic(pts, 3, 2.f, m.dn(Color{10, 10, 16, 255}, Color{40, 40, 44, 255}));
     }
 }
 
@@ -1418,11 +1486,33 @@ void overheadCables(const StreetMap& m) {
 
 // Deep navy sky, a little lighter and warmer where the city's glow sits on the horizon.
 void nightSky(const StreetMap& m, float yHorizon, okey::Rng& rng) {
-    rectGradV(m.R(m.a0, yHorizon, m.a1 - m.a0, m.y1 - yHorizon), Color{3, 5, 14, 255}, Color{18, 24, 52, 255});
-    rectGradV(m.R(m.a0, yHorizon, m.a1 - m.a0, 1.1f), Color{28, 34, 70, 0}, Color{34, 38, 74, 200});
+    const Rectangle sky = m.R(m.a0, yHorizon, m.a1 - m.a0, m.y1 - yHorizon);
+    if (m.phase == 3) {
+        rectGradV(sky, Color{3, 5, 14, 255}, Color{18, 24, 52, 255});
+        rectGradV(m.R(m.a0, yHorizon, m.a1 - m.a0, 1.1f), Color{28, 34, 70, 0}, Color{34, 38, 74, 200});
+    } else {
+        // zenith -> horizon: morning pale gold, noon blue, evening an orange glow under a violet sky; winter greyer
+        Color top, hor;
+        if (m.phase == 0) top = {112, 156, 212, 255}, hor = {246, 218, 176, 255};
+        else if (m.phase == 1) top = {66, 128, 214, 255}, hor = {184, 214, 240, 255};
+        else top = {44, 46, 104, 255}, hor = {246, 136, 80, 255};
+        if (m.snowy()) top = mix(top, Color{160, 166, 178, 255}, 0.55f), hor = mix(hor, Color{214, 216, 222, 255}, 0.55f);
+        rectGradV(sky, top, hor);
+        if (m.phase == 2) rectGradV(m.R(m.a0, yHorizon, m.a1 - m.a0, 0.9f), Color{255, 150, 90, 0}, Color{255, 170, 100, 160});
+        // a few soft clouds (their own random stream: the night's layout stays as it is)
+        okey::Rng cr(0xC10D + (uint32_t)m.px.y);
+        const Color cc = m.phase == 2 ? Color{250, 170, 140, 150} : (m.snowy() ? Color{228, 230, 236, 170} : Color{250, 250, 252, 150});
+        for (int i = 0; i < 9; ++i) {
+            const float a = cr.uniform(m.a0, m.a1), y = cr.uniform(yHorizon + 1.2f, m.y1 - 0.4f), w = cr.uniform(0.8f, 2.2f);
+            for (int k = 0; k < 5; ++k)
+                ellipse(m.P(a + (k - 2) * w * 0.22f, y + cr.uniform(-0.05f, 0.12f)), m.S() * w * cr.uniform(0.18f, 0.3f),
+                        m.S() * w * cr.uniform(0.07f, 0.12f), cc, 18);
+        }
+    }
     for (int i = 0; i < 30; ++i) {  // a few faint stars: the city lets through no more
         Vector2 p = m.P(rng.uniform(m.a0, m.a1), rng.uniform(yHorizon + 1.6f, m.y1));
-        DrawRectangleV(p, {2.f, 2.f}, Color{190, 200, 255, (unsigned char)rng.range(50, 150)});
+        unsigned char a = (unsigned char)rng.range(50, 150);
+        if (m.phase == 3) DrawRectangleV(p, {2.f, 2.f}, Color{190, 200, 255, a});
     }
 }
 
@@ -1431,16 +1521,21 @@ void cityHill(const StreetMap& m, float a0, float a1, float yBase, float yTop, o
     auto h = [&](float t) {
         return yBase + (yTop - yBase) * (0.62f + 0.24f * std::sin(t * 4.3f + 0.6f) + 0.14f * std::sin(t * 11.7f + 2.f));
     };
+    // far away in the haze by day, a dark ridge against the dusk
+    const Color hillC = m.day() ? (m.phase == 0 ? Color{150, 150, 166, 255} : Color{132, 146, 170, 255})
+                                : (m.phase == 2 ? Color{40, 34, 58, 255} : Color{11, 13, 26, 255});
     const int N = 64;
     for (int i = 0; i < N; ++i) {
         float t0 = (float)i / N, t1 = (float)(i + 1) / N;
         quad2(m.P(a0 + (a1 - a0) * t0, yBase), m.P(a0 + (a1 - a0) * t1, yBase), m.P(a0 + (a1 - a0) * t1, h(t1)),
-              m.P(a0 + (a1 - a0) * t0, h(t0)), Color{11, 13, 26, 255});
+              m.P(a0 + (a1 - a0) * t0, h(t0)), hillC);
     }
     // blocky rooftops on the ridge
     for (float a = a0; a < a1 - 0.2f; a += rng.uniform(0.25f, 0.6f)) {
         float t = (a - a0) / (a1 - a0), w = rng.uniform(0.18f, 0.4f);
-        DrawRectangleRec(m.R(a, yBase, w, h(t) - yBase + rng.uniform(0.02f, 0.09f)), Color{11, 13, 26, 255});
+        const float rh = h(t) - yBase + rng.uniform(0.02f, 0.09f);
+        DrawRectangleRec(m.R(a, yBase, w, rh), hillC);
+        if (m.snowy()) DrawRectangleRec(m.R(a, yBase + rh - 0.025f, w, 0.025f), m.day() ? Color{236, 238, 244, 255} : Color{96, 102, 130, 255});
     }
     for (int i = 0; i < 150; ++i) {
         float t = rng.uniform(0.f, 1.f), a = a0 + (a1 - a0) * t;
@@ -1448,6 +1543,7 @@ void cityHill(const StreetMap& m, float a0, float a1, float yBase, float yTop, o
         float r = rng.uniform(0.f, 1.f);
         Color c = r < 0.6f ? Color{255, 196, 120, 255} : (r < 0.85f ? Color{255, 160, 70, 255} : Color{190, 214, 255, 255});
         c.a = (unsigned char)rng.range(110, 255);
+        if (m.day()) c = Color{110, 118, 138, (unsigned char)(c.a / 2)};
         DrawRectangleV(m.P(a, y), {rng.uniform(1.5f, 3.f), rng.uniform(1.5f, 2.5f)}, c);
     }
 }
@@ -1457,6 +1553,21 @@ void cityHill(const StreetMap& m, float a0, float a1, float yBase, float yTop, o
 void distantMosque(const StreetMap& m, float a, float yBase, float s) {
     auto P = [&](float x, float y) { return m.P(a + x * s, yBase + y * s); };
     const float px = m.S() * s;  // canvas pixels per unit of the mosque's own scale
+    if (m.day()) {  // pale stone and lead domes in the haze
+        const Color stone{196, 192, 184, 255}, stoneD{168, 164, 158, 255}, lead{128, 136, 148, 255};
+        DrawRectangleRec(m.R(a - 0.75f * s, yBase, 1.5f * s, 0.42f * s), stoneD);
+        for (int side = -1; side <= 1; side += 2) DrawCircleSector(P(side * 0.52f, 0.42f), px * 0.24f, 180.f, 360.f, 20, lead);
+        DrawRectangleRec(m.R(a - 0.42f * s, yBase + 0.42f * s, 0.84f * s, 0.12f * s), stone);
+        DrawCircleSector(P(0.f, 0.54f), px * 0.44f, 180.f, 360.f, 32, lead);
+        DrawLineEx(P(0.f, 0.98f), P(0.f, 1.1f), 2.f, Color{180, 170, 130, 255});
+        for (int side = -1; side <= 1; side += 2) {
+            float x = side * 0.95f;
+            DrawRectangleRec(m.R(a + (x - 0.04f) * s, yBase, 0.08f * s, 1.7f * s), stone);
+            tri(P(x - 0.055f, 1.7f), P(x + 0.055f, 1.7f), P(x, 2.05f), lead);
+            for (float by : {0.95f, 1.38f}) DrawRectangleRec(m.R(a + (x - 0.075f) * s, yBase + by * s, 0.15f * s, 0.03f * s), stoneD);
+        }
+        return;
+    }
     ellipseGrad(P(0.f, 0.45f), px * 1.5f, px * 0.75f, Color{255, 180, 100, 44}, Color{255, 180, 100, 0});
     rectGradV(m.R(a - 0.75f * s, yBase, 1.5f * s, 0.42f * s), Color{112, 92, 68, 255}, Color{150, 120, 80, 255});
     for (int side = -1; side <= 1; side += 2) DrawCircleSector(P(side * 0.52f, 0.42f), px * 0.24f, 180.f, 360.f, 20, Color{104, 88, 70, 255});
@@ -1484,7 +1595,11 @@ void distantMosque(const StreetMap& m, float a, float yBase, float s) {
 }
 
 // Neon lettering: a soft coloured bloom, the tube itself, a hot pale core.
-void neonText(const char* s, Vector2 c, float size, Color tube) {
+void neonText(const char* s, Vector2 c, float size, Color tube, bool lit) {
+    if (!lit) {  // switched off by day: just the glass tube
+        textC(FontId::Hand, s, c, size, mix(tube, Color{200, 190, 190, 255}, 0.55f));
+        return;
+    }
     Vector2 ms = ui::measureText(FontId::Hand, s, size);
     ellipseGrad(c, ms.x * 0.8f, size * 0.95f, alpha(tube, 0.3f), alpha(tube, 0.f));
     for (int k = 0; k < 8; ++k) {
@@ -1519,37 +1634,44 @@ void bufe(const StreetMap& m, float ga, float gw, okey::Rng& rng) {
     Rectangle door = m.R(ga + gw * 0.66f, 0.f, gw * 0.3f, 1.9f);
     rectGradV(door, Color{96, 118, 112, 255}, Color{64, 80, 76, 255});
     frameRect(door, 5.f, Color{40, 44, 50, 255});
-    ellipseGrad(m.P(ga + gw * 0.4f, 0.05f), m.S() * gw * 0.6f, m.S() * 0.3f, Color{170, 210, 190, 70}, Color{170, 210, 190, 0});
+    if (m.lampsOn()) ellipseGrad(m.P(ga + gw * 0.4f, 0.05f), m.S() * gw * 0.6f, m.S() * 0.3f, Color{170, 210, 190, 70}, Color{170, 210, 190, 0});
     // sign band: dark board, red neon script, a blue neon tube under it
     Rectangle band = m.R(ga - 0.1f, 1.98f, gw + 0.2f, 0.66f);
     DrawRectangleRec(band, Color{22, 22, 28, 255});
-    neonText("Büfe", {band.x + band.width * 0.36f, band.y + band.height * 0.5f}, 84.f, Color{255, 56, 72, 255});
+    neonText("Büfe", {band.x + band.width * 0.36f, band.y + band.height * 0.5f}, 84.f, Color{255, 56, 72, 255}, m.lampsOn());
     Vector2 u0 = m.P(ga + gw * 0.68f, 2.12f), u1 = m.P(ga + gw - 0.05f, 2.12f);
-    ellipseGrad({(u0.x + u1.x) * 0.5f, u0.y - 14.f}, (u1.x - u0.x) * 0.75f, 34.f, Color{80, 150, 255, 80}, Color{80, 150, 255, 0});
-    DrawLineEx(u0, u1, 4.f, Color{150, 200, 255, 255});
-    textC(FontId::Sign, "TEKEL", {(u0.x + u1.x) * 0.5f, u0.y - 26.f}, 38.f, Color{150, 200, 255, 255}, 3.f);
+    const Color tekel = m.lampsOn() ? Color{150, 200, 255, 255} : Color{176, 196, 214, 255};
+    if (m.lampsOn()) ellipseGrad({(u0.x + u1.x) * 0.5f, u0.y - 14.f}, (u1.x - u0.x) * 0.75f, 34.f, Color{80, 150, 255, 80}, Color{80, 150, 255, 0});
+    DrawLineEx(u0, u1, 4.f, tekel);
+    textC(FontId::Sign, "TEKEL", {(u0.x + u1.x) * 0.5f, u0.y - 26.f}, 38.f, tekel, 3.f);
 }
 
 // The row of single-storey shops opposite our windows (a flat roof with a parapet, stove pipes, an antenna).
 void lowShopRow(const StreetMap& m, float a0, float a1, float roofY, okey::Rng& rng) {
-    const Color wallc{44, 42, 52, 255};
+    const Color wallc = m.dn(Color{44, 42, 52, 255}, Color{200, 186, 166, 255});
     rectGradV(m.R(a0, 0.f, a1 - a0, roofY), scaleRgb(wallc, 1.1f), scaleRgb(wallc, 0.7f));
-    DrawRectangleRec(m.R(a0 - 0.05f, roofY - 0.13f, a1 - a0 + 0.1f, 0.13f), Color{58, 56, 66, 255});  // cornice
-    DrawRectangleRec(m.R(a0 - 0.05f, roofY - 0.16f, a1 - a0 + 0.1f, 0.03f), Color{24, 24, 30, 255});
+    DrawRectangleRec(m.R(a0 - 0.05f, roofY - 0.13f, a1 - a0 + 0.1f, 0.13f), m.dn(Color{58, 56, 66, 255}, Color{182, 170, 154, 255}));  // cornice
+    DrawRectangleRec(m.R(a0 - 0.05f, roofY - 0.16f, a1 - a0 + 0.1f, 0.03f), m.dn(Color{24, 24, 30, 255}, Color{120, 112, 104, 255}));
+    if (m.snowy()) DrawRectangleRec(m.R(a0 - 0.05f, roofY - 0.02f, a1 - a0 + 0.1f, 0.1f), m.dn(Color{150, 158, 186, 255}, Color{242, 244, 248, 255}));
+    const bool stoves = m.season >= 2;  // the stoves on the roofs smoke in autumn and winter
     for (float x : {a0 + 1.3f, a0 + 5.1f, a1 - 1.6f}) {  // stove pipes (soba borusu), each with a thread of smoke
         float h = rng.uniform(0.45f, 0.75f);
         DrawRectangleRec(m.R(x, roofY, 0.07f, h), Color{20, 20, 26, 255});
         DrawRectangleRec(m.R(x - 0.05f, roofY + h, 0.17f, 0.04f), Color{20, 20, 26, 255});
         for (int k = 0; k < 7; ++k)
-            ellipse(m.P(x + 0.04f + k * 0.07f + rng.uniform(-0.03f, 0.03f), roofY + h + 0.08f + k * 0.1f), m.S() * (0.05f + k * 0.018f),
-                    m.S() * (0.04f + k * 0.012f), Color{90, 92, 116, (unsigned char)(46 - k * 5)}, 12);
+        {
+            const Vector2 sp = m.P(x + 0.04f + k * 0.07f + rng.uniform(-0.03f, 0.03f), roofY + h + 0.08f + k * 0.1f);
+            const Color smoke = m.day() ? Color{220, 220, 226, (unsigned char)(70 - k * 8)} : Color{90, 92, 116, (unsigned char)(46 - k * 5)};
+            if (stoves) ellipse(sp, m.S() * (0.05f + k * 0.018f), m.S() * (0.04f + k * 0.012f), smoke, 12);
+        }
     }
     Vector2 ant = m.P(a0 + 3.2f, roofY);  // TV aerial
     Vector2 top = m.P(a0 + 3.2f, roofY + 0.9f);
-    DrawLineEx(ant, top, 2.f, Color{24, 24, 30, 255});
+    const Color antC = m.dn(Color{24, 24, 30, 255}, Color{70, 70, 76, 255});
+    DrawLineEx(ant, top, 2.f, antC);
     for (int k = 0; k < 4; ++k) {
         float y = roofY + 0.5f + k * 0.12f, w = 0.36f - k * 0.06f;
-        DrawLineEx(m.P(a0 + 3.2f - w, y), m.P(a0 + 3.2f + w, y), 2.f, Color{24, 24, 30, 255});
+        DrawLineEx(m.P(a0 + 3.2f - w, y), m.P(a0 + 3.2f + w, y), 2.f, antC);
     }
     // shop fronts: the büfe opposite the near window, the shuttered tailor between, the pharmacy opposite the far one
     const float k = 0.82f;
@@ -1567,10 +1689,12 @@ void leftStreet(const StreetMap& m, okey::Rng& rng) {
     // apartment blocks at either end of the shop row
     apartment(m, -1.f, 5.7f, 9.6f, 2, nightWall(rng), rng);
     shopFront(m, -0.6f, 4.9f, 0, 1.f, rng);  // the bakkal opposite our street door, closing up:
-    Rectangle shut = m.R(-0.6f, 1.2f, 4.9f, 1.5f);  // its shutter is half down, the light spills out under it
-    rectGradV(shut, Color{48, 50, 60, 255}, Color{34, 36, 44, 255});
-    for (float y = shut.y; y < shut.y + shut.height; y += 7) DrawLineEx({shut.x, y}, {shut.x + shut.width, y}, 1.5f, Color{22, 24, 32, 255});
-    DrawRectangleRec({shut.x, shut.y + shut.height - 7, shut.width, 7}, Color{74, 76, 86, 255});
+    if (m.phase == 3) {
+        Rectangle shut = m.R(-0.6f, 1.2f, 4.9f, 1.5f);  // its shutter is half down, the light spills out under it
+        rectGradV(shut, Color{48, 50, 60, 255}, Color{34, 36, 44, 255});
+        for (float y = shut.y; y < shut.y + shut.height; y += 7) DrawLineEx({shut.x, y}, {shut.x + shut.width, y}, 1.5f, Color{22, 24, 32, 255});
+        DrawRectangleRec({shut.x, shut.y + shut.height - 7, shut.width, 7}, Color{74, 76, 86, 255});
+    }
     apartment(m, 14.8f, 4.2f, 9.6f, 2, nightWall(rng), rng);
     shopFront(m, 15.2f, 3.4f, 3, 1.f, rng);
     lowShopRow(m, 4.7f, 14.8f, roofY, rng);
@@ -1578,7 +1702,7 @@ void leftStreet(const StreetMap& m, okey::Rng& rng) {
 
 }  // namespace
 
-void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed) {
+void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed, int phase, int season) {
     okey::Rng rng(seed ^ 0x57EE7u);
     beginRoomCanvas(rt);
     rlDisableBackfaceCulling();
@@ -1586,18 +1710,21 @@ void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed) {
     // --- left street: the facade across the street (a = distance along the panel, left to right)
     {
         StreetMap m{street::LEFT, 0.f, 18.f, -1.f, 7.f};
+        m.phase = phase;
+        m.season = season;
         leftStreet(m, rng);
         // parked car at the far kerb (Murat 131 silhouette), in front of the bakkal
         Rectangle body = m.R(0.4f, 0.25f, 4.3f, 0.75f);
-        DrawRectangleRounded(body, 0.3f, 6, Color{36, 40, 52, 255});
-        quad2(m.P(1.3f, 1.0f), m.P(3.7f, 1.0f), m.P(3.2f, 1.45f), m.P(1.9f, 1.45f), Color{30, 34, 46, 255});
-        quad2(m.P(1.5f, 1.03f), m.P(3.5f, 1.03f), m.P(3.1f, 1.38f), m.P(2.0f, 1.38f), Color{70, 90, 120, 255});
+        DrawRectangleRounded(body, 0.3f, 6, m.dn(Color{36, 40, 52, 255}, Color{176, 64, 52, 255}));
+        quad2(m.P(1.3f, 1.0f), m.P(3.7f, 1.0f), m.P(3.2f, 1.45f), m.P(1.9f, 1.45f), m.dn(Color{30, 34, 46, 255}, Color{160, 56, 46, 255}));
+        quad2(m.P(1.5f, 1.03f), m.P(3.5f, 1.03f), m.P(3.1f, 1.38f), m.P(2.0f, 1.38f), m.dn(Color{70, 90, 120, 255}, Color{150, 176, 200, 255}));
+        if (m.snowy()) DrawRectangleRounded(m.R(1.85f, 1.42f, 1.4f, 0.08f), 0.5f, 4, m.dn(Color{150, 158, 186, 255}, Color{244, 246, 250, 255}));
         ellipse(m.P(1.2f, 0.25f), m.S() * 0.33f, m.S() * 0.33f, Color{14, 14, 18, 255});
         ellipse(m.P(3.9f, 0.25f), m.S() * 0.33f, m.S() * 0.33f, Color{14, 14, 18, 255});
-        DrawLineEx(m.P(0.5f, 0.95f), m.P(4.6f, 0.95f), 3.f, Color{140, 150, 170, 160});
+        DrawLineEx(m.P(0.5f, 0.95f), m.P(4.6f, 0.95f), 3.f, m.dn(Color{140, 150, 170, 160}, Color{230, 230, 236, 200}));
         // pavement kerb
-        DrawRectangleRec(m.R(-1.f, -1.f, 20.f, 1.0f), Color{40, 42, 50, 255});
-        DrawRectangleRec(m.R(-1.f, -0.02f, 20.f, 0.06f), Color{90, 90, 96, 255});
+        DrawRectangleRec(m.R(-1.f, -1.f, 20.f, 1.0f), m.snowy() ? m.dn(Color{110, 118, 146, 255}, Color{232, 236, 242, 255}) : m.dn(Color{40, 42, 50, 255}, Color{150, 146, 140, 255}));
+        DrawRectangleRec(m.R(-1.f, -0.02f, 20.f, 0.06f), m.dn(Color{90, 90, 96, 255}, Color{196, 192, 186, 255}));
         // a cat on the step
         Vector2 cp = m.P(12.7f, 0.1f);
         ellipse(cp, 14, 9, Color{20, 18, 18, 255});
@@ -1607,34 +1734,41 @@ void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed) {
         ellipse({cp.x + 14, cp.y - 9}, 1.5f, 1.2f, Color{200, 220, 90, 255}, 6);
         lampPool(m, 8.6f, 2.2f, 2.6f);  // the street lamp between our windows
         overheadCables(m);
-        // night haze over everything
-        rectGradV(street::LEFT, Color{16, 22, 56, 44}, Color{30, 32, 52, 22});
+        // night haze over everything (a light summer haze by day, the dusk's orange)
+        if (m.phase == 3) rectGradV(street::LEFT, Color{16, 22, 56, 44}, Color{30, 32, 52, 22});
+        else if (m.phase == 2) rectGradV(street::LEFT, Color{60, 30, 70, 40}, Color{255, 140, 80, 26});
+        else rectGradV(street::LEFT, Color{230, 236, 245, 22}, Color{240, 236, 226, 34});
     }
     // --- back window: across the side street a low bakery (the oven is already lit for the morning bread); over
     // its roof the neighbourhood's roofs and a minaret against the city glow
     {
         StreetMap m{street::BACK, -9.f, 2.f, -1.f, 7.f};
+        m.phase = phase;
+        m.season = season;
         nightSky(m, 2.4f, rng);
         for (float a = -9.f; a < 2.f; a += rng.uniform(0.35f, 0.8f)) {  // distant roofs, a few lit windows
             float w = rng.uniform(0.4f, 0.9f), top = rng.uniform(2.9f, 3.3f);
-            DrawRectangleRec(m.R(a, 2.4f, w, top - 2.4f), Color{13, 14, 27, 255});
+            DrawRectangleRec(m.R(a, 2.4f, w, top - 2.4f), m.day() ? Color{132, 132, 148, 255} : m.dn(Color{13, 14, 27, 255}, Color{70, 60, 80, 255}));
+            if (m.snowy()) DrawRectangleRec(m.R(a, top - 0.03f, w, 0.03f), m.dn(Color{110, 116, 146, 255}, Color{240, 242, 248, 255}));
             if (rng.chance(0.55f))
-                DrawRectangleV(m.P(a + rng.uniform(0.05f, w - 0.12f), top - rng.uniform(0.1f, 0.35f)), {5.f, 6.f}, Color{255, 196, 120, 210});
+                DrawRectangleV(m.P(a + rng.uniform(0.05f, w - 0.12f), top - rng.uniform(0.1f, 0.35f)), {5.f, 6.f},
+                               m.day() ? Color{96, 100, 116, 255} : Color{255, 196, 120, 210});
         }
         {  // the minaret: shaft over the roofs, a lit balcony, a lead cone
             const float x = -6.55f;
-            DrawRectangleRec(m.R(x - 0.05f, 2.4f, 0.1f, 1.4f), Color{24, 22, 38, 255});
-            tri(m.P(x - 0.07f, 3.8f), m.P(x + 0.07f, 3.8f), m.P(x, 4.25f), Color{24, 22, 38, 255});
-            DrawRectangleRec(m.R(x - 0.11f, 3.1f, 0.22f, 0.04f), Color{40, 38, 56, 255});
-            ellipseGrad(m.P(x, 3.13f), 30.f, 12.f, Color{150, 240, 170, 170}, Color{150, 240, 170, 0});
+            DrawRectangleRec(m.R(x - 0.05f, 2.4f, 0.1f, 1.4f), m.dn(Color{24, 22, 38, 255}, Color{200, 196, 188, 255}));
+            tri(m.P(x - 0.07f, 3.8f), m.P(x + 0.07f, 3.8f), m.P(x, 4.25f), m.dn(Color{24, 22, 38, 255}, Color{124, 132, 144, 255}));
+            DrawRectangleRec(m.R(x - 0.11f, 3.1f, 0.22f, 0.04f), m.dn(Color{40, 38, 56, 255}, Color{176, 172, 164, 255}));
+            if (m.lampsOn()) ellipseGrad(m.P(x, 3.13f), 30.f, 12.f, Color{150, 240, 170, 170}, Color{150, 240, 170, 0});
         }
         // the bakery (fırın): a single storey, dark shop, the oven's glow at the back, a warm lit doorway
         const float roofY = 2.72f;
-        rectGradV(m.R(-10.f, 0.f, 6.4f, roofY), Color{50, 44, 50, 255}, Color{32, 30, 36, 255});
-        DrawRectangleRec(m.R(-10.05f, roofY - 0.12f, 6.5f, 0.12f), Color{62, 58, 66, 255});
+        rectGradV(m.R(-10.f, 0.f, 6.4f, roofY), m.dn(Color{50, 44, 50, 255}, Color{212, 188, 156, 255}), m.dn(Color{32, 30, 36, 255}, Color{176, 154, 128, 255}));
+        DrawRectangleRec(m.R(-10.05f, roofY - 0.12f, 6.5f, 0.12f), m.dn(Color{62, 58, 66, 255}, Color{190, 170, 142, 255}));
+        if (m.snowy()) DrawRectangleRec(m.R(-10.05f, roofY - 0.02f, 6.5f, 0.1f), m.dn(Color{150, 158, 186, 255}, Color{242, 244, 248, 255}));
         Rectangle shop = m.R(-8.7f, 0.3f, 3.4f, 1.75f);
-        rectGradV(shop, Color{44, 32, 28, 255}, Color{26, 20, 20, 255});
-        ellipseGrad(m.P(-7.0f, 0.75f), m.S() * 1.4f, m.S() * 0.7f, Color{255, 130, 50, 120}, Color{255, 120, 40, 0});
+        rectGradV(shop, m.dn(Color{44, 32, 28, 255}, Color{120, 92, 70, 255}), m.dn(Color{26, 20, 20, 255}, Color{90, 66, 50, 255}));
+        ellipseGrad(m.P(-7.0f, 0.75f), m.S() * 1.4f, m.S() * 0.7f, Color{255, 130, 50, (unsigned char)(m.day() ? 60 : 120)}, Color{255, 120, 40, 0});
         for (int k = 0; k < 3; ++k) {  // racks of loaves catching the oven light
             DrawRectangleRec(m.R(-8.5f, 0.75f + k * 0.4f, 3.0f, 0.03f), Color{70, 50, 40, 255});
             for (float x = -8.4f; x < -5.6f; x += 0.22f)
@@ -1643,30 +1777,48 @@ void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed) {
         }
         frameRect(shop, 5.f, Color{30, 26, 28, 255});
         Rectangle door = m.R(-5.0f, 0.f, 0.9f, 2.0f);
-        rectGradV(door, Color{200, 140, 70, 255}, Color{150, 96, 50, 255});
+        rectGradV(door, m.dn(Color{200, 140, 70, 255}, Color{110, 82, 58, 255}), m.dn(Color{150, 96, 50, 255}, Color{80, 60, 44, 255}));
         frameRect(door, 6.f, Color{40, 32, 30, 255});
-        ellipseGrad(m.P(-4.55f, 0.05f), m.S() * 1.1f, m.S() * 0.25f, Color{255, 170, 90, 80}, Color{255, 160, 80, 0});
-        sign(m.R(-8.3f, 2.12f, 2.6f, 0.46f), "FIRIN", Color{72, 24, 24, 255}, Color{206, 188, 150, 255}, 40);
+        if (m.lampsOn()) ellipseGrad(m.P(-4.55f, 0.05f), m.S() * 1.1f, m.S() * 0.25f, Color{255, 170, 90, 80}, Color{255, 160, 80, 0});
+        sign(m, m.R(-8.3f, 2.12f, 2.6f, 0.46f), "FIRIN", Color{72, 24, 24, 255}, Color{206, 188, 150, 255}, 40);
         // an apartment block beyond the bakery, the barber and a doorway under its lamp
         apartment(m, -3.6f, 5.8f, 6.5f + rng.uniform(-0.6f, 0.6f), 1, nightWall(rng), rng);
         shopFront(m, -3.2f, 5.0f, 3, 1.f, rng);
         lampPool(m, -5.9f, 2.4f, 2.4f);
-        DrawRectangleRec(m.R(-9.f, -1.f, 11.f, 1.0f), Color{40, 42, 50, 255});
-        rectGradV(street::BACK, Color{16, 22, 56, 40}, Color{30, 32, 52, 20});
+        DrawRectangleRec(m.R(-9.f, -1.f, 11.f, 1.0f), m.snowy() ? m.dn(Color{110, 118, 146, 255}, Color{232, 236, 242, 255}) : m.dn(Color{40, 42, 50, 255}, Color{150, 146, 140, 255}));
+        if (m.phase == 3) rectGradV(street::BACK, Color{16, 22, 56, 40}, Color{30, 32, 52, 20});
+        else if (m.phase == 2) rectGradV(street::BACK, Color{60, 30, 70, 36}, Color{255, 140, 80, 24});
     }
     // --- road seen from above: wet cobbles (Arnavut kaldırımı) with lamp reflections
     {
         Rectangle r = street::ROAD;
-        DrawRectangleRec(r, Color{12, 13, 18, 255});
+        const bool day = phase <= 1, lamps = phase >= 2, snowy = season == 3;
+        DrawRectangleRec(r, day ? Color{98, 96, 94, 255} : Color{12, 13, 18, 255});
         for (float y = r.y + 2; y < r.y + r.height * 0.78f; y += 9)
             for (float x = r.x + rng.uniform(0.f, 8.f); x < r.x + r.width; x += rng.uniform(9.f, 13.f)) {
-                Color c = mix(Color{22, 24, 32, 255}, Color{40, 42, 52, 255}, rng.uniform(0.f, 1.f));
+                const float t = rng.uniform(0.f, 1.f);
+                Color c = day ? mix(Color{112, 110, 106, 255}, Color{146, 142, 136, 255}, t) : mix(Color{22, 24, 32, 255}, Color{40, 42, 52, 255}, t);
                 DrawRectangleRounded({x, y, rng.uniform(7.f, 11.f), 7}, 0.5f, 3, c);
             }
-        DrawRectangleRec({r.x, r.y + r.height * 0.8f, r.width, r.height * 0.2f}, Color{44, 44, 50, 255});  // our pavement
-        DrawRectangleRec({r.x, r.y + r.height * 0.78f, r.width, 5}, Color{80, 80, 88, 255});
-        for (int k = 0; k < 3; ++k)
-            DrawCircleGradient({r.x + r.width * (0.2f + k * 0.35f), r.y + r.height * 0.45f}, 110, Color{255, 170, 80, 60}, Color{255, 170, 80, 0});
+        DrawRectangleRec({r.x, r.y + r.height * 0.8f, r.width, r.height * 0.2f}, day ? Color{160, 156, 150, 255} : Color{44, 44, 50, 255});  // our pavement
+        DrawRectangleRec({r.x, r.y + r.height * 0.78f, r.width, 5}, day ? Color{192, 188, 182, 255} : Color{80, 80, 88, 255});
+        if (snowy) {  // trodden snow, two dark ruts where the cars go
+            const Color sn = day ? Color{226, 230, 238, 235} : Color{92, 100, 130, 225};
+            DrawRectangleRec(r, sn);
+            for (float f : {0.3f, 0.52f}) DrawRectangleRec({r.x, r.y + r.height * f, r.width, 9}, day ? Color{150, 152, 160, 200} : Color{40, 44, 60, 200});
+        }
+        if (season == 2) {  // fallen leaves along the kerb and on the pavement
+            okey::Rng lr(seed ^ 0x1EAFu);
+            for (int i = 0; i < 260; ++i) {
+                const float y = r.y + r.height * (lr.chance(0.6f) ? lr.uniform(0.72f, 1.f) : lr.uniform(0.f, 0.72f));
+                Color c = mix(Color{190, 96, 30, 255}, Color{150, 110, 40, 255}, lr.uniform(0.f, 1.f));
+                if (!day) c = scaleRgb(c, 0.35f);
+                ellipse({r.x + lr.uniform(0.f, r.width), y}, lr.uniform(2.f, 3.5f), lr.uniform(1.2f, 2.2f), c, 6);
+            }
+        }
+        if (lamps)
+            for (int k = 0; k < 3; ++k)
+                DrawCircleGradient({r.x + r.width * (0.2f + k * 0.35f), r.y + r.height * 0.45f}, 110, Color{255, 170, 80, 60}, Color{255, 170, 80, 0});
     }
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();

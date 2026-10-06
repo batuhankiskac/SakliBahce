@@ -58,9 +58,23 @@ public:
     virtual bool consumeAiToggleRequest() = 0;
     virtual void toast(const std::string& text, Color c, float seconds) = 0;
     virtual std::string lastLogLine() const { return {}; } // autoplay log after a hand
+    // Save / resume: the match as lines of text (its rules are in App's save; typically the engine's action log), and
+    // the same match, just started again by startMatch with the saved seed, brought to that point. False: not supported.
+    virtual bool saveState(std::vector<std::string>& lines) const { (void)lines; return false; }
+    virtual bool restoreState(const std::vector<std::string>& lines) { (void)lines; return false; }
+    // Maç tekrarı: in replay mode no bot and no player moves; replayStep applies one saved action line with the usual
+    // animations: 1 done, 0 not now (try again later, e.g. while the sheet is up), -1 does not apply (the replay
+    // ends). setReplayMode returns false when the game cannot be replayed.
+    virtual bool setReplayMode(bool on) { (void)on; return false; }
+    virtual int replayStep(const std::string& line) { (void)line; return -1; }
+    // The player's score of the hand that just ended, for the record ("En iyi el"); false: none.
+    virtual bool humanHandScore(int& score) const { (void)score; return false; }
     // tools/tables_check: a point on the virtual canvas the player could click right now for a legal move (a card,
     // a point of the board, a panel or HUD button), after drawHUD() has run this frame. False: nothing to do.
     virtual bool debugHumanClick(const r3d::Renderer& r, Vector2& out) const { (void)r; (void)out; return false; }
+    // tools/tables_check: a short name for what this frame's HUD shows that is worth a picture ("" = nothing special);
+    // with --out the first frame of every new name is saved.
+    virtual std::string debugPhase() const { return {}; }
 };
 
 // The game behind a ui::GameKind that isn't an okey game (nullptr for the okey games / not built yet).

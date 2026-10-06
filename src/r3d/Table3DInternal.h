@@ -142,13 +142,25 @@ struct Toast {
     float age = 0.f, dur = 2.6f;
 };
 
-enum class Btn { None, Open, GiveBack, Series, Pairs, Menu, ConfirmYes, ConfirmNo, AiToggle };
-constexpr int NUM_BUTTONS = 6; // El Aç, Geri Ver, Seri Diz, Çift Diz, Yapay Zeka, Menü (bottom-right column)
+enum class Btn { None, Open, GiveBack, Series, Pairs, Menu, ConfirmYes, ConfirmNo, AiToggle, Hint };
+constexpr int NUM_BUTTONS = 7; // El Aç, Geri Ver, Seri Diz, Çift Diz, İpucu, Yapay Zeka, Menü (bottom-right column)
 
 struct Input {
     Vector2 mouse{-10000, -10000};
     bool pressed = false, down = false, released = false;
     bool keySeries = false, keyPairs = false, keyOpen = false;
+    // the keyboard (Table3D::update reads them; tools pass raylib key codes through table3dtest::input)
+    bool kLeft = false, kRight = false, kUp = false, kDown = false, kShift = false;
+    bool kEnter = false, kSpace = false, kBack = false;
+    bool kDraw = false, kTakeLeft = false, kIsle = false, kGive = false;
+    bool anyKey() const {
+        return kLeft || kRight || kUp || kDown || kEnter || kSpace || kBack || kDraw || kTakeLeft || kIsle || kGive || keyOpen;
+    }
+};
+
+// The keyboard's işle: the cursor tile onto table meld `meld` (a joker swap when joker >= 0).
+struct KbIsle {
+    int tile = -1, meld = -1, joker = -1;
 };
 
 struct Press {
@@ -282,9 +294,30 @@ struct TableState {
     // "Yapay Zeka" mode (Table3D::setAiMode)
     bool aiMode = false;
     bool aiToggleRequested = false;
+    // "İpucu": App answers hintRequested with Table3D::showHint (what Kurt would do now); shown until the turn moves on
+    bool hintRequested = false;
+    std::vector<int> hintTiles;
+    bool hintPile = false, hintLeft = false;
+    int hintTurn = -1;
+    okey::TurnStage hintStage = okey::TurnStage::NeedDraw;
+    bool hintLive() const;
     bool aiArrangePending = false; // the AI's istaka is re-arranged at the next chance (not while dealing)
     bool aiPairs = false;          // the AI's istaka is laid out in pairs (sticky while they hold up)
     t3d::Place place;
+    // keyboard (Table3D.cpp handleKeys): a cursor over the istaka, a tile carried with Space / Shift, işle targets
+    int kbSlot = -1;             // the cursor's slot (always on a tile)
+    int kbHeld = -1;             // tile picked up with Space: the arrows carry it
+    t3d::KbIsle kbIsle;          // İşle target chosen with I (Enter puts it there)
+    int kbIsleIdx = -1;
+    int confirmFocus = 1;        // confirm modal: 0 "Evet, at", 1 "Vazgeç" (the arrows switch, Enter presses)
+    int kbTile() const;          // the cursor's tile while the keyboard is in use (-1: none shown)
+    void handleKeys();
+    void kbFixCursor();
+    void kbMoveCursor(int dCol, int dRow);
+    bool kbCarry(int dCol, int dRow);
+    void kbCycleIsle();
+    std::string keyHelpText() const;
+    void drawKeyHelp();
     int newTile = -1;
     float newTileTime = -10.f;
 

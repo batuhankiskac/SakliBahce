@@ -3227,6 +3227,58 @@ void testClassicMelds() {
     CHECK_EQ(bad, 0);
 }
 
+// Save / resume: a match replayed from its seed and action log (through the text form) ends in the same state.
+void testActionLogReplay() {
+    for (int variant = 0; variant < 3; ++variant) {
+        RulesConfig cfg;
+        cfg.numHands = 2;
+        if (variant == 1) cfg.teams = true;
+        if (variant == 2) cfg.variant = Variant::Okey, cfg.okeyStartPoints = 3;
+        Game g(cfg);
+        g.startMatch(77 + (uint64_t)variant);
+        Rng rng(9);
+        for (int steps = 0; steps < 20000 && g.handState() != HandState::MatchOver; ++steps) {
+            if (g.handState() == HandState::HandOver) {
+                g.startNextHand();
+                continue;
+            }
+            const int s = g.current();
+            if (g.stage() == TurnStage::NeedDraw) {
+                if (g.canTakeFromLeft(s) && g.topDiscard(Game::leftOf(s)) >= 0 && rng.chance(0.3f) && g.takeFromLeft(s).ok) {
+                    if (g.pendingLeftTile() >= 0) g.returnLeftTile(s);
+                } else {
+                    g.drawFromPile(s);
+                }
+                continue;
+            }
+            const std::vector<int>& h = g.player(s).hand;
+            if (!g.discard(s, h[(size_t)rng.range((int)h.size())]).ok) g.discard(s, h.front());
+        }
+        CHECK(variant == 2 || g.handState() == HandState::MatchOver); // (klasik: random play rarely finishes a hand)
+        CHECK(!g.actionLog().empty());
+        Game r(cfg);
+        r.startMatch(g.matchSeed());
+        bool all = true;
+        for (const LoggedAction& a : g.actionLog()) {
+            LoggedAction b;
+            CHECK(LoggedAction::decode(a.encode(), b));
+            all = all && r.replay(b);
+        }
+        CHECK(all);
+        CHECK(r.handState() == g.handState() && r.handIndex() == g.handIndex() && r.pileCount() == g.pileCount());
+        for (int s = 0; s < 4; ++s) {
+            CHECK_EQ(r.player(s).totalScore, g.player(s).totalScore);
+            CHECK(r.player(s).handScores == g.player(s).handScores);
+            CHECK(r.player(s).hand == g.player(s).hand);
+        }
+        CHECK_EQ(r.actionLog().size(), g.actionLog().size());
+    }
+    LoggedAction m{LogKind::Open, 2, -1, -1, 0, {{1, 2, 3}, {40, 41, 42, 43}}}, back;
+    CHECK(LoggedAction::decode(m.encode(), back));
+    CHECK(back.kind == LogKind::Open && back.seat == 2 && back.melds == m.melds);
+    CHECK(!LoggedAction::decode("7 x", back));
+}
+
 void testClassicGame() {
     RulesConfig cfg;
     cfg.variant = Variant::Okey;
@@ -3316,6 +3368,31 @@ void testClassicGame() {
         if (he && c.mult == 4) CHECK_EQ(he->text, std::string("Kel Mahmut eli bitirdi! (okey atarak, çiftten, ×4)"));
         if (he && c.mult == 1) CHECK_EQ(he->text, std::string("Kel Mahmut eli bitirdi!"));
         CHECK(conserved(g));
+    }
+
+    // renkli okey: a red / black gösterge doubles the hand (here Siyah 2), a yellow / blue one does not
+    {
+        RulesConfig rc = cfg;
+        rc.okeyColorDouble = true;
+        Game gc(rc);
+        gc.startMatch(5);
+        Setup f;
+        f.cfg = rc;
+        f.hands[2] = normal;
+        f.seat = 2;
+        apply(gc, f);
+        CHECK_EQ(gc.colorMultiplier(), 2);
+        CHECK(gc.finishHand(2, T(K, 10)).ok);
+        CHECK_EQ(gc.lastHandResult().multiplier, 2);
+        for (int p : {0, 1, 3}) CHECK_EQ(gc.lastHandResult().score[p], -4);
+        const std::vector<GameEvent> cev = gc.drainEvents();
+        const GameEvent* he = findEv(cev, EvType::HandEnd);
+        CHECK(he && he->text == std::string("Kel Mahmut eli bitirdi! (renkli gösterge, ×2)"));
+        gc.debugSetOkey(T(Y, 2));
+        CHECK_EQ(gc.colorMultiplier(), 1);
+        gc.debugSetOkey(T(R, 2));
+        CHECK_EQ(gc.colorMultiplier(), 2);
+        CHECK_EQ(g.colorMultiplier(), 1); // the rule is off
     }
 
     // gösterge: only the twin's holder, on their turn, before their first discard; -1 from everyone else
@@ -3511,6 +3588,7 @@ int main(int argc, char** argv) {
         {"game: match end", testMatchEnd},
         {"klasik: melds", testClassicMelds},
         {"klasik: game", testClassicGame},
+        {"save: action log replay", testActionLogReplay},
         {"eşli 101", testTeams},
         {"game: determinism", testDeterminism},
         {"fuzz", [scale] { testFuzz(scale); }},

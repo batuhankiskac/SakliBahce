@@ -45,6 +45,8 @@ constexpr int STAR3_PX = 128;
 
 struct State {
     bool ready = false;
+    bool colorBlind = false;   // atlases painted with the colour-blind inks and shape marks
+    bool wantColorBlind = false;
     Texture2D atlas{};
     Texture2D soft{};
     Texture2D atlas3{};
@@ -138,6 +140,30 @@ void starPoints(Vector2 c, float rOut, float rIn, int points, float rotDeg, std:
 
 void circle(Vector2 c, float r, Color col) { DrawCircleSector(c, r, 0.f, 360.f, 48, col); }
 
+// Colour-blind mode: a shape per colour where the dot is (sarı ●, mavi ■, siyah ▲, kırmızı ◆), `r` ~ the dot radius.
+void shapeMark(int color, Vector2 c, float r, Color ink) {
+    const Color lip{255, 255, 255, 190};
+    auto shape = [&](Vector2 p, float rr, Color col) {
+        switch (color) {
+        case okey::Blue: DrawRectangleRec({p.x - rr * 0.86f, p.y - rr * 0.86f, rr * 1.72f, rr * 1.72f}, col); break;
+        case okey::Black: {
+            const Vector2 a{p.x, p.y - rr * 1.15f}, b{p.x - rr * 1.1f, p.y + rr * 0.8f}, d{p.x + rr * 1.1f, p.y + rr * 0.8f};
+            DrawTriangle(a, b, d, col);
+            break;
+        }
+        case okey::Red: {
+            const Vector2 t{p.x, p.y - rr * 1.2f}, l{p.x - rr * 1.0f, p.y}, b{p.x, p.y + rr * 1.2f}, rt{p.x + rr * 1.0f, p.y};
+            DrawTriangle(t, l, rt, col);
+            DrawTriangle(l, b, rt, col);
+            break;
+        }
+        default: circle(p, rr, col); break;
+        }
+    };
+    shape({c.x + 0.4f, c.y + 0.55f}, r + 0.25f, lip);
+    shape(c, r, darken(ink, 0.08f));
+}
+
 // ------------------------------------------------------------------ atlas painting (tile units)
 struct Painter {
     Font font{};
@@ -201,8 +227,12 @@ struct Painter {
         DrawTextEx(font, s.c_str(), {p.x - 0.35f, p.y - 0.45f}, size, 0.f, mulAlpha(darken(ink, 0.45f), 0.55f));
         DrawTextEx(font, s.c_str(), p, size, 0.f, ink);
         rlPopMatrix();
-        // the small dot under the number
+        // the small dot under the number (colour-blind mode: the colour's shape, a little bigger)
         const Vector2 dc{W / 2, 50.5f};
+        if (g.colorBlind) {
+            shapeMark(color, dc, 5.0f, ink);
+            return;
+        }
         circle({dc.x + 0.35f, dc.y + 0.5f}, 3.5f, rgba(255, 255, 255, 190));
         circle(dc, 3.4f, darken(ink, 0.12f));
         circle({dc.x - 0.8f, dc.y - 0.9f}, 1.1f, mulAlpha(lighten(ink, 0.55f), 0.8f));
@@ -337,7 +367,7 @@ Texture2D buildSoftTexture() {
     return t;
 }
 
-Texture2D buildAtlas() {
+Image buildAtlasImage() {
     const int rows = (NUM_CELLS + ATLAS_COLS - 1) / ATLAS_COLS;
     RenderTexture2D rt = LoadRenderTexture(ATLAS_COLS * CELL_PW, rows * CELL_PH);
     Painter p;
@@ -367,7 +397,11 @@ Texture2D buildAtlas() {
     ImageFlipVertical(&img);
     UnloadRenderTexture(rt);
     if (p.ownFont) UnloadFont(p.font);
+    return img;
+}
 
+Texture2D buildAtlas() {
+    Image img = buildAtlasImage();
     Texture2D t = LoadTextureFromImage(img);
     UnloadImage(img);
     GenTextureMipmaps(&t);
@@ -378,6 +412,15 @@ Texture2D buildAtlas() {
 
 // ------------------------------------------------------------------ 3D face atlas painting (face units)
 Color ink3D(int color) {
+    if (g.colorBlind) { // (as tileInk's colour-blind inks, a touch deeper for the warm light)
+        switch (color) {
+        case okey::Yellow: return rgba(226, 160, 0);
+        case okey::Blue: return rgba(0, 90, 184);
+        case okey::Black: return rgba(22, 22, 26);
+        case okey::Red: return rgba(208, 64, 14);
+        default: return rgba(22, 22, 26);
+        }
+    }
     // a touch deeper than the 2D inks: the 3D faces are lit by warm tungsten light
     switch (color) {
     case okey::Yellow: return rgba(222, 154, 0); // golden: stays yellow under the warm lamp
@@ -446,6 +489,10 @@ struct Painter3D {
         DrawTextEx(font, s.c_str(), p, size, 0.f, ink);
         rlPopMatrix();
         const Vector2 dc{F3W / 2, 57.5f};
+        if (g.colorBlind) {
+            shapeMark(color, dc, 6.6f, ink);
+            return;
+        }
         circle({dc.x + 0.45f, dc.y + 0.6f}, 4.6f, rgba(255, 255, 255, 200));
         circle(dc, 4.4f, darken(ink, 0.1f));
         circle({dc.x - 1.1f, dc.y - 1.2f}, 1.4f, mulAlpha(lighten(ink, 0.55f), 0.8f));
@@ -492,10 +539,7 @@ Rectangle cell3Rect(int key) {
     return Rectangle{(float)(col * CELL3_PW), (float)(row * CELL3_PH), (float)CELL3_PW, (float)CELL3_PH};
 }
 
-Texture2D finishTexture(RenderTexture2D& rt, bool anisotropic) {
-    Image img = LoadImageFromTexture(rt.texture);
-    ImageFlipVertical(&img);
-    UnloadRenderTexture(rt);
+Texture2D finishImage(Image img, bool anisotropic) {
     Texture2D t = LoadTextureFromImage(img);
     UnloadImage(img);
     GenTextureMipmaps(&t);
@@ -508,7 +552,7 @@ Texture2D finishTexture(RenderTexture2D& rt, bool anisotropic) {
     return t;
 }
 
-Texture2D buildAtlas3D() {
+Image buildAtlas3DImage() {
     RenderTexture2D rt = LoadRenderTexture(ATLAS3_COLS * CELL3_PW, ATLAS3_ROWS * CELL3_PH);
     Painter p2d;
     Painter3D p;
@@ -536,7 +580,31 @@ Texture2D buildAtlas3D() {
     EndBlendMode();
     EndTextureMode();
     if (ownFont) UnloadFont(p.font);
-    return finishTexture(rt, true);
+    Image img = LoadImageFromTexture(rt.texture);
+    ImageFlipVertical(&img);
+    UnloadRenderTexture(rt);
+    return img;
+}
+
+Texture2D finishTexture(RenderTexture2D& rt, bool anisotropic) {
+    Image img = LoadImageFromTexture(rt.texture);
+    ImageFlipVertical(&img);
+    UnloadRenderTexture(rt);
+    return finishImage(img, anisotropic);
+}
+
+Texture2D buildAtlas3D() { return finishImage(buildAtlas3DImage(), true); }
+
+// Repaints the two face atlases in place (same textures, so meshes and materials keep using them).
+void repaintAtlases() {
+    Image a = buildAtlasImage();
+    UpdateTexture(g.atlas, a.data);
+    UnloadImage(a);
+    GenTextureMipmaps(&g.atlas);
+    Image b = buildAtlas3DImage();
+    UpdateTexture(g.atlas3, b.data);
+    UnloadImage(b);
+    GenTextureMipmaps(&g.atlas3);
 }
 
 Texture2D buildStar3D() {
@@ -582,6 +650,7 @@ int faceKeyOf(int tileId) {
 
 void init() {
     if (g.ready) return;
+    g.colorBlind = g.wantColorBlind;
     g.atlas = buildAtlas();
     g.soft = buildSoftTexture();
     g.atlas3 = buildAtlas3D();
@@ -594,7 +663,22 @@ void shutdown() {
     if (g.soft.id) UnloadTexture(g.soft);
     if (g.atlas3.id) UnloadTexture(g.atlas3);
     if (g.star3.id) UnloadTexture(g.star3);
+    const bool want = g.wantColorBlind;
     g = State{};
+    g.wantColorBlind = want;
+}
+
+void setColorBlind(bool on) {
+    g.wantColorBlind = on;
+    ui::setColorBlind(on);
+}
+
+bool colorBlind() { return g.wantColorBlind; }
+
+void refresh() {
+    if (!g.ready || g.colorBlind == g.wantColorBlind) return;
+    g.colorBlind = g.wantColorBlind;
+    repaintAtlases();
 }
 
 bool ready() { return g.ready; }

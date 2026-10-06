@@ -120,6 +120,14 @@ enum Gesture {
 
 // ============================================================================ background patrons
 struct Patron : Seated {
+    bool present = true;      // at this hour (w3d::bgTableBusy)
+    bool scarf = false;       // wears one in winter (CharactersLife.cpp)
+    // a reaction to a big moment at our table (CharactersLife.cpp)
+    float reactIn = -1.f;     // delay before it starts
+    float reactT = -1.f, reactDur = 0.f;
+    int reactKind = 0, reactStyle = 0;
+    bool shout = false;       // says something when the reaction starts
+    Vector3 reactAt{};
     int table = 0, side = 0, variant = 0;
     int role = 0;             // index at the table
     float talk = 0.f;         // mouthless: talking makes the head bob and hands gesture
@@ -188,6 +196,41 @@ struct Cayci {
     Matrix thighW[2]{}, shinW[2]{};
     Matrix eyeW[2]{}, lidW[2]{}, browW[2]{}, mouthW{}, lipW{};
     float counterIdleT = 0.f;
+    // a round for everyone: after our table, the busy background tables in turn
+    std::vector<int> roundBg;
+    bool roundQueued = false;
+    bool roundReply = false;
+};
+
+// ============================================================================ bystanders (a long match)
+struct Watcher {
+    int state = -1;           // -1 away, 0 walking in, 1 watching, 2 walking out
+    bool came = false;        // already came during this match
+    int variant = 0;
+    PersonLook L;
+    const PersonMeshes* pm = nullptr;
+    Vector3 pos{}, spot{};
+    float yaw = 0.f, speed = 0.f, phase = 0.f;
+    std::vector<Vector3> path;
+    size_t pathI = 0;
+    float wait = 0.f;         // standing still (hands behind his back), or the delay before leaving
+    float hYaw = 0.f, hYawV = 0.f, hPitch = 0.f, hPitchV = 0.f;
+    Vector3 gaze{0, 0.8f, 0};
+    float gazeHold = 0.f;
+    float reactIn = -1.f, reactT = -1.f, reactDur = 0.f;
+    int reactKind = 0;
+    float lean = 0.f, leanV = 0.f;
+    Matrix torsoW = MatrixIdentity(), headW = MatrixIdentity();
+    Matrix thighW[2]{}, shinW[2]{};
+    Matrix upperW[2]{}, foreW[2]{}, handW[2]{};
+    HandPose pose[2]{HandPose::Rest, HandPose::Rest};
+    Vector3 wristL[2]{};      // smoothed wrist targets (character-local)
+    bool wristInit = false;
+};
+
+struct CrowdLine {
+    std::string text;
+    Vector3 where{};
 };
 
 // ============================================================================ bubbles
@@ -221,6 +264,17 @@ struct Cast {
     std::vector<BgTable> bgTables;
     Cayci boy;
     BubbleState bubbles;
+    // --- time of day, season, crowd reactions, bystanders, tea rounds (CharactersLife.cpp)
+    int dayMode = 0, seasonMode = 0, phase = 3, seasonNow = 2;
+    float lookCheckT = 0.f;
+    std::deque<CrowdLine> crowdLines;
+    float crowdLineCd = 0.f;      // seconds until the crowd may shout again
+    std::deque<int> teaServed;
+    Watcher watchers[2];
+    bool spectate = false;
+    float spectateT = 0.f;
+    Mesh scarf[3]{};
+    Mat scarfMat{};
     float humanWait = 0.f;               // seconds the human has been on turn
     float lastHumanEventT = -100.f;
     int submitCount = 0;                 // debug: submissions last frame
@@ -258,6 +312,18 @@ struct Cast {
     void updateCayci(float dt);
     void planTrip(bool ours, int bgTable);
     void submitCrowd(Renderer& r);
+    // --- CharactersLife.cpp
+    void initLife(Renderer& r);
+    void freeLife(Renderer& r);
+    void evalLook(bool force);
+    void updateLife(float dt);
+    void patronReact(Patron& p, float dt);
+    void startPatronReaction(Patron& p);
+    Key patronRest(const Patron& p, int a, float t) const;
+    void crowdShout(int kind, Vector3 where);
+    void updateWatcher(Watcher& w, float dt);
+    void submitLife(Renderer& r);
+    int pickBgTable();
     // --- Characters.cpp
     void sfx(ui::Sfx s);
     void pushLine(int who, const std::string& text, float seconds, float maxWait, bool teaOrder = false);

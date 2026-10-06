@@ -145,6 +145,16 @@ struct ActionResult {
     static ActionResult fail(std::string e) { return {false, std::move(e)}; }
 };
 
+// One successful action of the match, as given to Game (a saved match is its seed plus these, replayed).
+enum class LogKind { Bid, Pass, Trump, Play, NextHand };
+struct LoggedAction {
+    LogKind kind = LogKind::Pass;
+    int seat = -1;
+    int value = -1;              // Bid: the bid, Trump: the suit, Play: the card
+    std::string encode() const;  // one text line: "kind seat value"
+    static bool decode(const std::string& line, LoggedAction& out);
+};
+
 // ---- card-set helpers (bit i = card id i) shared by the engine and the bots ----
 inline uint64_t bit(int card) { return 1ull << card; }
 inline uint64_t suitMask(int suit) { return 0x1FFFull << (13 * suit); }
@@ -246,6 +256,11 @@ public:
     ActionResult chooseTrump(int seat, int suit);
     ActionResult playCard(int seat, int card);     // seat = owner of the card (== current())
 
+    // ---- save / resume: the seed of startMatch and every successful action since (startNextHand included) ----
+    uint64_t matchSeed() const { return matchSeed_; }
+    const std::vector<LoggedAction>& actionLog() const { return log_; }
+    bool replay(const LoggedAction& a); // applies one logged action (false: it does not apply here)
+
     // ---- events ----
     std::vector<GameEvent> drainEvents();
     const std::vector<GameEvent>& pendingEvents() const { return events_; }
@@ -260,6 +275,11 @@ public:
     void debugSetHandIndex(int i) { handIndex_ = i; }
 
 private:
+    ActionResult logged(ActionResult r, LoggedAction a);
+    ActionResult bidImpl(int seat, int value);
+    ActionResult passImpl(int seat);
+    ActionResult chooseTrumpImpl(int seat, int suit);
+    ActionResult playCardImpl(int seat, int card);
     void dealHand(int dealer, const std::array<std::vector<int>, 4>* fixed);
     void resetHandState();
     void finishBidding(int seat, int value, bool forced);
@@ -302,6 +322,8 @@ private:
     HandResult lastResult_;
     int winnerSide_ = -1;
     std::vector<GameEvent> events_;
+    uint64_t matchSeed_ = 0;
+    std::vector<LoggedAction> log_;
 };
 
 } // namespace batak

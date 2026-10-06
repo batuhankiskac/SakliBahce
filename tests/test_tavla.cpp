@@ -841,7 +841,7 @@ void testAgainstReference() {
 // Random games with random legal steps: invariants and termination.
 void testFuzz() {
     okey::Rng rng(77);
-    int games = 0, mars = 0;
+    int games = 0, mars = 0, doubles = 0;
     long long steps = 0;
     for (int n = 0; n < 3000; ++n) {
         Rules r;
@@ -850,6 +850,7 @@ void testFuzz() {
         r.winnerStarts = rng.chance(0.7f);
         r.confirmTurn = rng.chance(0.3f);
         r.katmerliMars = rng.chance(0.2f);
+        r.doubling = rng.chance(0.5f);
         Game g(r);
         g.setPlayer(0, "Sen", rng.chance(0.5f));
         g.setPlayer(1, "Kel Mahmut", false);
@@ -864,7 +865,25 @@ void testFuzz() {
             for (const GameEvent& e : g.drainEvents()) CHECK(!e.text.empty());
             switch (g.stage()) {
             case Stage::OpeningRoll: CHECK(g.rollOpening().ok); break;
-            case Stage::NeedRoll: CHECK(g.roll(g.current()).ok); break;
+            case Stage::NeedRoll:
+                if (g.canDouble(g.current()) && rng.chance(0.1f)) {
+                    CHECK(!g.acceptDouble(g.current()).ok);
+                    CHECK(g.offerDouble(g.current()).ok);
+                    ++doubles;
+                } else {
+                    CHECK(!g.offerDouble(1 - g.current()).ok);
+                    CHECK(g.roll(g.current()).ok);
+                }
+                break;
+            case Stage::DoubleOffered: {
+                const int q = g.responder();
+                CHECK_EQ(q, 1 - g.current());
+                CHECK(!g.roll(g.current()).ok);
+                CHECK(!g.acceptDouble(g.current()).ok);
+                if (rng.chance(0.75f)) CHECK(g.acceptDouble(q).ok);
+                else CHECK(g.declineDouble(q).ok);
+                break;
+            }
             case Stage::Moving: {
                 const int p = g.current();
                 const std::vector<Step> st = g.legalSteps();
@@ -888,8 +907,9 @@ void testFuzz() {
             case Stage::GameOver:
                 ++games;
                 mars += g.lastResult().mars;
-                CHECK(g.lastResult().points >= 1 && g.lastResult().points <= 3);
-                CHECK_EQ(g.position().off[g.lastResult().winner], 15);
+                CHECK(g.lastResult().base >= 1 && g.lastResult().base <= 3);
+                CHECK_EQ(g.lastResult().points, g.lastResult().base * g.lastResult().cube);
+                CHECK(g.lastResult().dropped || g.position().off[g.lastResult().winner] == 15);
                 g.startNextGame();
                 break;
             default: break;
@@ -900,7 +920,7 @@ void testFuzz() {
         CHECK(g.score(g.matchWinner()) >= r.matchPoints);
         CHECK(g.score(1 - g.matchWinner()) < r.matchPoints);
     }
-    std::printf("  fuzz: %d games, %lld random steps, %d mars\n", games, steps, mars);
+    std::printf("  fuzz: %d games, %lld random steps, %d mars, %d doubles\n", games, steps, mars, doubles);
 }
 
 void testDeterminism() {
@@ -932,12 +952,381 @@ void testDeterminism() {
     CHECK(l1.find("Maç") != std::string::npos);
 }
 
+void testDoubling() {
+    // off by default: no offers
+    {
+        Game g = moving(Position::initial(), 0, 6, 5);
+        g.debugSetTurn(0, Stage::NeedRoll);
+        CHECK(!g.canDouble(0));
+        CHECK(g.offerDouble(0).error == "Bu masada katlama yok");
+    }
+    Rules r;
+    r.doubling = true;
+    r.matchPoints = 5;
+    Game g(r);
+    g.setPlayer(0, "Sen", true);
+    g.setPlayer(1, "Kel Mahmut", false);
+    g.startMatch(3);
+    CHECK_EQ(g.cubeValue(), 1);
+    CHECK_EQ(g.cubeOwner(), -1);
+    CHECK(!g.canDouble(0) && !g.canDouble(1));
+    CHECK(g.offerDouble(0).error == "Önce başlangıç zarları atılmalı");
+    g.debugQueueDice(5, 3);
+    CHECK(g.rollOpening().ok);
+    CHECK_EQ(g.stage(), Stage::NeedRoll);
+    CHECK(!g.canDouble(0)); // the game's first turn
+    CHECK(g.offerDouble(0).error == "İlk hamleden önce katlanmaz");
+    g.drainEvents();
+    // a later turn: the cube is in the middle, either player may double on his turn
+    g.debugSetTurn(0, Stage::NeedRoll);
+    CHECK(g.canDouble(0));
+    CHECK(!g.canDouble(1));
+    CHECK(g.offerDouble(1).error == "Sıra sende değil");
+    CHECK(g.offerDouble(0).ok);
+    CHECK_EQ(g.stage(), Stage::DoubleOffered);
+    CHECK_EQ(g.responder(), 1);
+    CHECK_EQ(g.cubeValue(), 1); // not yet taken
+    std::vector<GameEvent> ev = g.drainEvents();
+    const GameEvent* e = findEvent(ev, EvType::DoubleOffer);
+    CHECK(e && e->player == 0 && e->amount == 2 && e->text == "Katladın: 2");
+    CHECK(g.roll(0).error == "Önce katlamaya cevap verilmeli");
+    CHECK(g.offerDouble(0).error == "Katlama zaten teklif edildi");
+    CHECK(g.acceptDouble(0).error == "Katlamayı sen teklif ettin; cevap rakibinden");
+    CHECK(g.acceptDouble(1).ok);
+    CHECK_EQ(g.stage(), Stage::NeedRoll);
+    CHECK_EQ(g.current(), 0); // the offerer rolls
+    CHECK_EQ(g.cubeValue(), 2);
+    CHECK_EQ(g.cubeOwner(), 1);
+    ev = g.drainEvents();
+    e = findEvent(ev, EvType::DoubleTake);
+    CHECK(e && e->player == 1 && e->amount == 2 && e->text == "Kel Mahmut katlamayı kabul etti");
+    CHECK(!g.gameLog().empty() && g.gameLog().back().note == "katladı: 2, kabul");
+    CHECK(g.acceptDouble(1).error == "Cevap verilecek bir katlama yok");
+    // the cube is Mahmut's now: only he may redouble
+    CHECK(!g.canDouble(0));
+    CHECK(g.offerDouble(0).error == "Katlama zarı rakibinde; sadece o katlayabilir");
+    CHECK(g.roll(0).ok);
+    g.debugSetTurn(1, Stage::NeedRoll);
+    CHECK(g.canDouble(1));
+    CHECK(g.offerDouble(1).ok);
+    ev = g.drainEvents();
+    e = findEvent(ev, EvType::DoubleOffer);
+    CHECK(e && e->text == "Kel Mahmut katladı: 4");
+    // dropping: Mahmut wins the cube's current value (2), no mars counted
+    CHECK(g.declineDouble(0).ok);
+    CHECK_EQ(g.stage(), Stage::GameOver);
+    CHECK_EQ(g.lastResult().winner, 1);
+    CHECK(g.lastResult().dropped);
+    CHECK(!g.lastResult().mars);
+    CHECK_EQ(g.lastResult().cube, 2);
+    CHECK_EQ(g.lastResult().points, 2);
+    CHECK_EQ(g.score(1), 2);
+    ev = g.drainEvents();
+    e = findEvent(ev, EvType::DoubleDrop);
+    CHECK(e && e->player == 0 && e->text == "Pes ettin");
+    e = findEvent(ev, EvType::GameEnd);
+    CHECK(e && e->player == 1 && e->amount == 2 && e->text == "Kel Mahmut oyunu aldı (+2, katlama 2)");
+    CHECK(g.offerDouble(1).error == "Oyun bitti");
+
+    // game 2: the cube goes back to the middle; a mars on a 4-cube is 2 x 4 = 8
+    g.startNextGame();
+    CHECK_EQ(g.cubeValue(), 1);
+    CHECK_EQ(g.cubeOwner(), -1);
+    CHECK(!g.crawfordGame());
+    g.debugSetTurn(1, Stage::NeedRoll);
+    CHECK(g.offerDouble(1).ok && g.acceptDouble(0).ok);
+    g.debugSetTurn(0, Stage::NeedRoll);
+    CHECK(g.offerDouble(0).ok && g.acceptDouble(1).ok);
+    CHECK_EQ(g.cubeValue(), 4);
+    g.debugSetPosition(PB().at(0, 0, 1).at(1, 12, 15).fill());
+    g.debugSetTurn(0, Stage::Moving);
+    g.debugSetDice(1, 2);
+    g.drainEvents();
+    CHECK(g.applyStep(0, 0, OFF).ok);
+    CHECK(g.lastResult().mars);
+    CHECK_EQ(g.lastResult().base, 2);
+    CHECK_EQ(g.lastResult().points, 8);
+    ev = g.drainEvents();
+    e = findEvent(ev, EvType::GameEnd);
+    CHECK(e && e->amount == 8 && e->text == "Mars ettin! (2 × 4 = +8)");
+    CHECK_EQ(g.stage(), Stage::MatchOver); // 8 >= 5
+
+    // Crawford: 3-point match; Sen reaches 2 -> the next game has no cube, the one after it has
+    Rules c;
+    c.doubling = true;
+    c.matchPoints = 3;
+    Game h(c);
+    h.setPlayer(0, "Sen", true);
+    h.setPlayer(1, "Kel Mahmut", false);
+    h.startMatch(9);
+    h.debugSetPosition(PB().at(0, 0, 1).at(1, 12, 15).fill());
+    h.debugSetTurn(0, Stage::Moving);
+    h.debugSetDice(1, 2);
+    CHECK(h.applyStep(0, 0, OFF).ok); // mars: 2-0
+    CHECK_EQ(h.score(0), 2);
+    h.drainEvents();
+    h.startNextGame();
+    CHECK(h.crawfordGame());
+    ev = h.drainEvents();
+    e = findEvent(ev, EvType::GameStart);
+    CHECK(e && e->text.find("Crawford") != std::string::npos);
+    h.debugSetTurn(1, Stage::NeedRoll);
+    CHECK(!h.canDouble(1));
+    CHECK(h.offerDouble(1).error == "Crawford oyununda katlama yapılmaz");
+    h.debugSetPosition(PB().at(1, 23, 1).at(0, 3, 5).fill());
+    h.debugSetTurn(1, Stage::Moving);
+    h.debugSetDice(4, 2);
+    CHECK(h.applyStep(1, 23, OFF).ok); // 2-1
+    h.startNextGame();
+    CHECK(!h.crawfordGame()); // post-Crawford: the cube is back
+    h.debugSetTurn(1, Stage::NeedRoll);
+    CHECK(h.canDouble(1));
+
+    // the cube stops at 64
+    {
+        Rules big;
+        big.doubling = true;
+        big.matchPoints = 1000;
+        Game m(big);
+        m.startMatch(4);
+        int side = 0;
+        while (m.cubeValue() < 64) {
+            m.debugSetTurn(side, Stage::NeedRoll);
+            CHECK(m.offerDouble(side).ok && m.acceptDouble(1 - side).ok);
+            side = 1 - side;
+        }
+        m.debugSetTurn(side, Stage::NeedRoll);
+        CHECK(!m.canDouble(side));
+        CHECK(m.offerDouble(side).error == "Katlama zarı en yüksek değerde");
+    }
+}
+
+void testHistory() {
+    CHECK_EQ(stepNotation(0, Step{23, 17, 6, false}), std::string("24/18"));
+    CHECK_EQ(stepNotation(0, Step{17, 12, 5, true}), std::string("18/13*"));
+    CHECK_EQ(stepNotation(0, Step{BAR, 21, 3, false}), std::string("bar/22"));
+    CHECK_EQ(stepNotation(0, Step{5, OFF, 6, false}), std::string("6/çıktı"));
+    CHECK_EQ(stepNotation(1, Step{0, 6, 6, true}), std::string("24/18*")); // in Mahmut's own numbering
+    CHECK_EQ(stepNotation(1, Step{BAR, 2, 3, false}), std::string("bar/22"));
+    TurnRecord t;
+    t.player = 0;
+    t.d1 = 5;
+    t.d2 = 6;
+    t.steps = {Step{23, 17, 6, false}, Step{17, 12, 5, true}};
+    CHECK_EQ(turnNotation(t), std::string("6-5 şeşbeş: 24/18 18/13*"));
+    t.steps.clear();
+    CHECK_EQ(turnNotation(t), std::string("6-5 şeşbeş: oynayamadı"));
+
+    // the game's record: whole turns as they end, undone steps forgotten, the winning turn too
+    Game g = moving(Position::initial(), 0, 6, 5);
+    CHECK(g.gameLog().empty());
+    CHECK(g.applyStep(0, 23, 17).ok);
+    CHECK(g.undoStep(0).ok);
+    CHECK(g.applyStep(0, 23, 17).ok);
+    CHECK(g.applyStep(0, 17, 12).ok);
+    CHECK_EQ(g.current(), 1);
+    CHECK_EQ((int)g.gameLog().size(), 1);
+    CHECK_EQ(turnNotation(g.gameLog()[0]), std::string("6-5 şeşbeş: 24/18 18/13"));
+    // no move: recorded as such
+    Game n = moving(PB().bar(0, 1).at(1, 18, 2).at(1, 19, 2).at(1, 20, 2).at(1, 21, 2).at(1, 22, 2).at(1, 23, 2).at(0, 3, 14).fill(),
+                    0, 1, 1);
+    n.debugSetTurn(0, Stage::NeedRoll);
+    n.debugQueueDice(6, 6);
+    CHECK(n.roll(0).ok);
+    CHECK_EQ((int)n.gameLog().size(), 1);
+    CHECK_EQ(turnNotation(n.gameLog()[0]), std::string("6-6 düşeş: oynayamadı"));
+    // the winning turn ends the game and stays in the record
+    Game w = moving(PB().at(0, 0, 1).at(1, 12, 15).fill(), 0, 1, 2);
+    CHECK(w.applyStep(0, 0, OFF).ok);
+    CHECK_EQ((int)w.gameLog().size(), 1);
+    CHECK_EQ(turnNotation(w.gameLog()[0]), std::string("2-1 yeki dü: 1/çıktı"));
+    // a new game starts a new record
+    w.startNextGame();
+    CHECK(w.gameLog().empty());
+}
+
+void testBotCube() {
+    Rules r;
+    r.doubling = true;
+    r.matchPoints = 1000; // money-like: no score to protect
+    // a race, 105 pips against 117 (about 84%): Usta and Kurt double; that far behind they drop
+    const Position race = PB().at(0, 5, 5).at(0, 6, 5).at(0, 7, 5).at(1, 18, 1).at(1, 17, 5).at(1, 16, 5).at(1, 15, 4).fill();
+    for (BotLevel lv : {BotLevel::Normal, BotLevel::Hard}) {
+        Game g = moving(race, 0, 1, 2, r);
+        g.debugSetTurn(0, Stage::NeedRoll);
+        Bot me(lv, 1), him(lv, 2);
+        CHECK(me.next(g, 0).kind == BotAction::Kind::Double);
+        CHECK(g.offerDouble(0).ok);
+        CHECK(him.next(g, 1).kind == BotAction::Kind::Drop);
+    }
+    CHECK(botWinProbability(race, 0) > 0.8 && botWinProbability(race, 0) < 0.9);
+    // far too good (75 against 105, the other has nothing off): play on for the mars
+    {
+        const Position tooGood = PB().at(0, 2, 5).at(0, 3, 5).at(0, 4, 5).at(1, 18, 5).at(1, 17, 5).at(1, 16, 5).fill();
+        CHECK(botWinProbability(tooGood, 0) > 0.98);
+        Game g = moving(tooGood, 0, 1, 2, r);
+        g.debugSetTurn(0, Stage::NeedRoll);
+        Bot kurt(BotLevel::Hard, 1);
+        CHECK(kurt.next(g, 0).kind == BotAction::Kind::Roll);
+    }
+    // the start position: nobody doubles, a double is taken
+    for (BotLevel lv : {BotLevel::Normal, BotLevel::Hard}) {
+        Game g = moving(Position::initial(), 0, 1, 2, r);
+        g.debugSetTurn(0, Stage::NeedRoll);
+        Bot me(lv, 1), him(lv, 2);
+        CHECK(me.next(g, 0).kind == BotAction::Kind::Roll);
+        CHECK(g.offerDouble(0).ok);
+        CHECK(him.next(g, 1).kind == BotAction::Kind::Take);
+    }
+    const double p0 = botWinProbability(Position::initial(), 0);
+    CHECK(p0 > 0.5 && p0 < 0.6); // being on roll is worth a little
+    // a closer race (105 against 111, about 74%): a double, and it is taken
+    {
+        const Position close = PB().at(0, 5, 5).at(0, 6, 5).at(0, 7, 5).at(1, 18, 3).at(1, 17, 5).at(1, 16, 5).at(1, 15, 2).fill();
+        const double pc = botWinProbability(close, 0);
+        CHECK(pc > 0.68 && pc < 0.78);
+        Game g = moving(close, 0, 1, 2, r);
+        g.debugSetTurn(0, Stage::NeedRoll);
+        CHECK(g.offerDouble(0).ok);
+        Bot him(BotLevel::Hard, 2);
+        CHECK(him.next(g, 1).kind == BotAction::Kind::Take);
+    }
+    // match score (3 points): Mahmut 2 - 0 (mars), the Crawford game goes to Sen (1-2), then: the trailer doubles
+    // at once, the leader never doubles (one point wins him the match), and he takes anything (a drop loses it)
+    {
+        Rules m;
+        m.doubling = true;
+        m.matchPoints = 3;
+        Game g(m);
+        g.setPlayer(0, "Sen", true);
+        g.setPlayer(1, "Kel Mahmut", false);
+        g.startMatch(5);
+        g.debugSetPosition(PB().at(1, 23, 1).at(0, 12, 15).fill());
+        g.debugSetTurn(1, Stage::Moving);
+        g.debugSetDice(1, 2);
+        CHECK(g.applyStep(1, 23, OFF).ok); // 0-2
+        g.startNextGame();                  // Crawford
+        CHECK(g.crawfordGame());
+        g.debugSetPosition(PB().at(0, 0, 1).at(1, 20, 5).fill());
+        g.debugSetTurn(0, Stage::Moving);
+        g.debugSetDice(4, 2);
+        CHECK(g.applyStep(0, 0, OFF).ok);  // 1-2
+        g.startNextGame();                  // post-Crawford
+        CHECK(!g.crawfordGame());
+        g.debugSetTurn(0, Stage::NeedRoll);
+        Bot kurt(BotLevel::Hard, 7), usta(BotLevel::Normal, 8);
+        CHECK(kurt.next(g, 0).kind == BotAction::Kind::Double); // even from the start position
+        // Mahmut in a won race: no double (dead cube)
+        const Position won = PB().at(1, 18, 5).at(1, 17, 5).at(1, 16, 5).at(0, 5, 1).at(0, 6, 5).at(0, 7, 5).at(0, 8, 4).fill();
+        g.debugSetPosition(won);
+        g.debugSetTurn(1, Stage::NeedRoll);
+        CHECK(g.canDouble(1));
+        CHECK(kurt.next(g, 1).kind == BotAction::Kind::Roll);
+        CHECK(usta.next(g, 1).kind == BotAction::Kind::Roll);
+        // a hopeless race for Sen, but dropping would lose the match (2 + 1 >= 3): free take
+        CHECK(g.offerDouble(1).ok);
+        CHECK(kurt.next(g, 0).kind == BotAction::Kind::Take);
+        CHECK(usta.next(g, 0).kind == BotAction::Kind::Take);
+    }
+}
+
+void testReplay() {
+    // Bots play matches (with and without the cube, an undo now and then); at many points the match is rebuilt
+    // from the seed plus the action log written as text: the same position, dice, scores, cube, record and stage.
+    for (int n = 0; n < 24; ++n) {
+        Rules r;
+        r.matchPoints = 3 + n % 3;
+        r.doubling = n % 2 == 0;
+        r.confirmTurn = n % 4 == 1;
+        r.katmerliMars = n % 5 == 0;
+        const uint64_t seed = 500 + (uint64_t)n;
+        Game g(r);
+        g.setPlayer(0, "Sen", true);
+        g.setPlayer(1, "Kel Mahmut", false);
+        g.startMatch(seed);
+        Bot a((BotLevel)(n % 3), 1), b(BotLevel::Hard, 2);
+        okey::Rng rng(seed);
+        int guard = 0, checksDone = 0;
+        auto compare = [&]() {
+            std::vector<std::string> lines;
+            for (const LoggedAction& x : g.actionLog()) lines.push_back(x.encode());
+            Game h(r);
+            h.setPlayer(0, "Sen", true);
+            h.setPlayer(1, "Kel Mahmut", false);
+            h.startMatch(seed);
+            bool ok = true;
+            for (const std::string& ln : lines) {
+                LoggedAction x;
+                ok = ok && LoggedAction::decode(ln, x) && x.encode() == ln && h.replay(x);
+            }
+            CHECK(ok);
+            CHECK(h.position() == g.position());
+            CHECK_EQ(h.stage(), g.stage());
+            CHECK_EQ(h.current(), g.current());
+            CHECK_EQ(h.score(0), g.score(0));
+            CHECK_EQ(h.score(1), g.score(1));
+            CHECK_EQ(h.cubeValue(), g.cubeValue());
+            CHECK_EQ(h.cubeOwner(), g.cubeOwner());
+            CHECK_EQ(h.gameIndex(), g.gameIndex());
+            CHECK_EQ(h.dice().leftCount(), g.dice().leftCount());
+            CHECK_EQ(h.dice().d1, g.dice().d1);
+            CHECK_EQ(h.gameLog().size(), g.gameLog().size());
+            CHECK_EQ(h.actionLog().size(), g.actionLog().size());
+            // and both go on alike: the next roll is the same
+            if (g.stage() == Stage::NeedRoll) {
+                Game g2 = g;
+                CHECK(g2.roll(g2.current()).ok && h.roll(h.current()).ok);
+                CHECK_EQ(g2.dice().d1 * 10 + g2.dice().d2, h.dice().d1 * 10 + h.dice().d2);
+            }
+            ++checksDone;
+        };
+        while (g.stage() != Stage::MatchOver && guard++ < 20000) {
+            g.drainEvents();
+            if (rng.chance(0.03f)) compare();
+            if (g.stage() == Stage::GameOver) {
+                g.startNextGame();
+                continue;
+            }
+            const int p = g.stage() == Stage::OpeningRoll ? 0 : (g.responder() >= 0 ? g.responder() : g.current());
+            if (g.canUndo() && g.current() == p && rng.chance(0.05f)) {
+                CHECK(g.undoStep(p).ok);
+                continue;
+            }
+            const BotAction act = (p == 0 ? a : b).next(g, p);
+            if (!applyBotAction(g, p, act).ok) applyBotAction(g, p, fallbackAction(g, p));
+        }
+        compare();
+        CHECK(checksDone > 1);
+    }
+    // bad lines
+    LoggedAction x;
+    CHECK(!LoggedAction::decode("", x));
+    CHECK(!LoggedAction::decode("2 0 23 17", x));
+    CHECK(!LoggedAction::decode("1 0 x", x));
+    CHECK(!LoggedAction::decode("99 0", x));
+    CHECK(!LoggedAction::decode("1 5", x));
+    CHECK(LoggedAction::decode("2 1 0 6 6", x) && x.kind == ActKind::Step && x.from == 0 && x.to == 6 && x.die == 6);
+    CHECK(LoggedAction::decode("8 -1", x) && x.kind == ActKind::NextGame);
+    // a step that does not apply is refused
+    Game g;
+    g.startMatch(1);
+    CHECK(!g.replay(x));
+    LoggedAction st;
+    st.kind = ActKind::Step;
+    st.player = 0;
+    st.from = 3;
+    st.to = 1;
+    st.die = 2;
+    CHECK(!g.replay(st));
+}
+
 void testBots() {
     // Every level plays complete matches against every level with zero rejected actions.
     for (int la = 0; la < 3; ++la)
         for (int lb = 0; lb < 3; ++lb) {
             Rules r;
             r.confirmTurn = (la + lb) % 2 == 1;
+            r.doubling = (la * 3 + lb) % 2 == 0; // and with the cube
             Game g(r);
             g.setPlayer(0, "A", false);
             g.setPlayer(1, "B", false);
@@ -952,7 +1341,7 @@ void testBots() {
                     b.resetForGame();
                     continue;
                 }
-                const int p = g.stage() == Stage::OpeningRoll ? 0 : g.current();
+                const int p = g.stage() == Stage::OpeningRoll ? 0 : (g.responder() >= 0 ? g.responder() : g.current());
                 const BotAction act = (p == 0 ? a : b).next(g, p);
                 if (!applyBotAction(g, p, act).ok) {
                     ++rejected;
@@ -1043,6 +1432,10 @@ int main() {
     testAgainstReference();
     testFuzz();
     testDeterminism();
+    testDoubling();
+    testHistory();
+    testBotCube();
+    testReplay();
     testBots();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

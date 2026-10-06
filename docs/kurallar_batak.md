@@ -20,7 +20,7 @@ Kâğıtları dağıtan her elde sağa geçer. İhaleye dağıtanın sağındaki
 1. **Renge uymak zorunlu:** Yerdeki renkten elinde varsa onu atmalısın.
 2. **Yükseltmek zorunlu:** O renkten yerdekinden büyük kâğıdın varsa büyüğünü atmalısın. Ele daha önce koz çakılmışsa yükseltmen gerekmez, çünkü zaten alamazsın.
 3. **Koz çakmak zorunlu:** O renkten hiç kâğıdın yoksa koz atmalısın. Yerde koz varsa ve elindeki koz onu geçiyorsa büyük kozu atmalısın; geçemiyorsan yine de koz atarsın.
-4. **Koz açılmadan koz atılmaz:** Biri koz çakana kadar ele kozla başlanmaz. Elinde koz dışında kâğıt kalmadıysa başlayabilirsin.
+4. **Koz açılmadan koz atılmaz:** Biri koz çakana kadar ele kozla başlanmaz. Elinde koz dışında kâğıt kalmadıysa başlayabilirsin. (Bu kural isteğe bağlıdır, aşağıdaki nota bakın.)
 5. Ne o renk ne koz varsa istediğin kâğıdı atarsın.
 
 ## Puan
@@ -35,9 +35,11 @@ Kâğıtları dağıtan her elde sağa geçer. İhaleye dağıtanın sağındaki
 
 Karşılıklı oturanlar ortaktır (sen ve karşındaki). İhaleye takım olarak girilir; ortakların aldığı eller toplanır. Koz söylendikten sonra ihaleyi alanın ortağı kâğıtlarını yere açar. İhaleci o eli de kendi eli gibi oynar, açık eli herkes görür. Puanlar takıma yazılır.
 
+**Önce koz açılmalı (isteğe bağlı):** Ayarlardaki "Önce koz açılmalı" açıkken (varsayılan) 4. kural geçerlidir. Kapatırsan koz baştan açık sayılır: ihaleci de, eli alan da ilk kâğıttan itibaren kozla ele başlayabilir. Öteki kurallar (renge uymak, yükseltmek, koz çakmak) aynen kalır.
+
 ## Masadan masaya değişenler
 
-Batak kahvehaneden kahvehaneye biraz değişir. Başka masalarda şunlara da rastlarsın (bizim masada ayarlardan yalnızca eşli oyun ve hedef puan seçilir):
+Batak kahvehaneden kahvehaneye biraz değişir. Başka masalarda şunlara da rastlarsın (bizim masada ayarlardan eşli oyun, hedef puan ve "önce koz açılmalı" kuralı seçilir):
 
 - Herkes pas derse ihale dağıtana kalabilir ya da kâğıtlar yeniden dağıtılabilir.
 - Onluk hesap: puanlar 10 ile çarpılır (7 deyip 8 alan +80).

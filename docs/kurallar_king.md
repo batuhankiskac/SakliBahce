@@ -1,6 +1,6 @@
 # King Nasıl Oynanır?
 
-King dört kişiyle, jokersiz 52'lik desteyle oynanır. Herkese 13 kart dağıtılır. Bir parti **20 el** sürer. Her elde sırası gelen oyuncu ("seçen") kartlarına bakar, o elde ne oynanacağını söyler ve ilk kartı da o atar. Partinin sonunda puanı en yüksek olan kazanır. Sıfırın altında kalan da kahvenin çayını ısmarlar, orası size kalmış.
+King dört kişiyle, jokersiz 52'lik desteyle oynanır. Herkese 13 kart dağıtılır. Bir parti **20 el** sürer (kısa King'de 12 el, aşağıya bakın). Her elde sırası gelen oyuncu ("seçen") kartlarına bakar, o elde ne oynanacağını söyler ve ilk kartı da o atar. Partinin sonunda puanı en yüksek olan kazanır. Sıfırın altında kalan da kahvenin çayını ısmarlar, orası size kalmış.
 
 ## Kim seçer?
 
@@ -46,6 +46,10 @@ Koz seçen, rengi de söyler (Maça, Kupa, Karo ya da Sinek). Aldığın her el 
 
 Bir elde dağıtılan puanlar sabittir. Bir koz eli +650, cezalar ise sırasıyla −650, −390, −480, −400, −320 ve −360'tır. 8 koz eli +5200, 12 ceza eli −5200 eder. Yani bir partide herkesin puanı toplanınca **sıfır** çıkar. Çetelede her satır bir eldir: hangi oyun oynandı, kim kaç yazdı, toplamlar ne oldu.
 
+## Kısa King (12 el)
+
+Ayarlardan **Kısa King** seçilirse parti **12 el** sürer. Herkes 3 kez seçer: **1 kez koz, 2 kez ceza**. Her ceza yine bütün partide en fazla 2 kez oynanır; cezaların ve kozun kuralları, puanları aynıdır. Partide 4 koz eli ve 8 ceza eli oynandığı için puanların toplamı artık sıfır çıkmaz; hangi cezaların seçildiğine göre değişir.
+
 ## Kahvehane usulleri (değişebilenler)
 
 Masadan masaya değişen kurallar da var; bizim masada yukarıdaki kahvehane usulü oynanır. Başka masalarda şunlara rastlarsın:
@@ -55,7 +59,6 @@ Masadan masaya değişen kurallar da var; bizim masada yukarıdaki kahvehane usu
 - Koz çakarken de yükseltme zorunluluğu, ya da Batak gibi düz renkte büyük atma.
 - Rıfkıda sadece rıfkı (ya da rıfkıyla As) tek kalırsa kartların yeniden dağıtılması.
 - Koz elinde 11 el alanın "King yapıp" partiyi bitirmesi.
-- Kısa parti: 12 el, herkese 1 koz ve 2 ceza.
 - Eşli King, Kanlı King, Duble Yol gibi türler.
 
 ## Kaynaklar

@@ -1,6 +1,6 @@
 // Headless tavla bot-vs-bot simulation for SaklıBahçe.
 //
-//   tavla_sim --games N --seed S --levels a,b [--match P] [--threads T] [--verbose]
+//   tavla_sim --games N --seed S --levels a,b [--match P] [--doubling] [--threads T] [--verbose]
 //
 // levels: 0 = Acemi (Easy), 1 = Usta (Normal), 2 = Kurt (Hard). Games are played in duplicate pairs: every
 // deal (seed) is played twice with the sides swapped. The dice sequence depends only on the seed (each roll
@@ -8,6 +8,8 @@
 // same seat; the paired difference over deals removes most of the dice luck from the standard error.
 // Without --match every game is a 1-point "match" (one game: 1 point, mars 2). With --match P whole matches
 // to P points are played and the match win rate is reported as well.
+// --doubling plays with the katlama zarı: single games are then "money" games (worth base x cube, no match
+// score to protect: played as the first game of a long match); the cube actions are counted per level.
 // Every bot action goes through applyBotAction; a rejected action is printed (state + error), counted and
 // replaced by fallbackAction (the count must be 0). Decision times are measured on the first step of every
 // turn (when the bot computes its play) and reported as p50 / p99 / max per level.
@@ -66,6 +68,8 @@ struct GameOut {
     int points = 0;
     bool mars = false;
     int turns = 0;
+    int cube = 1;
+    bool dropped = false;
     bool stuck = false;
 };
 
@@ -82,13 +86,19 @@ struct Stats {
     std::vector<double> dealNet;          // per deal: (points A - points B) summed over both games
     std::array<long long, 2> matchWins{};
     long long matches = 0;
+    // katlama: per level index 0..2
+    std::array<long long, 3> offers{}, takes{}, drops{};
+    long long cubeSum = 0, droppedGames = 0;
 };
 
 // Plays one match (one game when matchPoints == 1). seatLevel[s] = level of seat s. Returns per-game outcomes.
-std::vector<GameOut> playMatch(uint64_t seed, const std::array<int, 2>& seatLevel, int matchPoints, Stats& st,
-                               bool verbose, int& matchWinnerSeat) {
+std::vector<GameOut> playMatch(uint64_t seed, const std::array<int, 2>& seatLevel, int matchPoints, bool doubling,
+                               Stats& st, bool verbose, int& matchWinnerSeat) {
     Rules r;
-    r.matchPoints = matchPoints;
+    // a single game (matchPoints 0) is the first game of a long match: no score to protect
+    const bool single = matchPoints == 0;
+    r.matchPoints = single ? 1000 : matchPoints;
+    r.doubling = doubling;
     Game g(r);
     g.setPlayer(0, std::string(levelName(seatLevel[0])) + "-0", false);
     g.setPlayer(1, std::string(levelName(seatLevel[1])) + "-1", false);
@@ -107,6 +117,9 @@ std::vector<GameOut> playMatch(uint64_t seed, const std::array<int, 2>& seatLeve
                 actions = 0;
             }
             if (e.type == EvType::TurnEnd) ++cur.turns;
+            if (e.type == EvType::DoubleOffer) ++st.offers[seatLevel[e.player]];
+            if (e.type == EvType::DoubleTake) ++st.takes[seatLevel[e.player]];
+            if (e.type == EvType::DoubleDrop) ++st.drops[seatLevel[e.player]];
         }
         const Stage s = g.stage();
         if (s == Stage::MatchOver || s == Stage::GameOver) {
@@ -114,8 +127,14 @@ std::vector<GameOut> playMatch(uint64_t seed, const std::array<int, 2>& seatLeve
             cur.winnerSeat = res.winner;
             cur.points = res.points;
             cur.mars = res.mars;
+            cur.cube = res.cube;
+            cur.dropped = res.dropped;
             outs.push_back(cur);
             if (s == Stage::MatchOver) break;
+            if (single) {
+                matchWinnerSeat = res.winner;
+                return outs;
+            }
             g.startNextGame();
             continue;
         }
@@ -127,7 +146,7 @@ std::vector<GameOut> playMatch(uint64_t seed, const std::array<int, 2>& seatLeve
             outs.push_back(cur);
             return outs;
         }
-        const int p = s == Stage::OpeningRoll ? 0 : g.current();
+        const int p = s == Stage::OpeningRoll ? 0 : (g.responder() >= 0 ? g.responder() : g.current());
         const bool decision = s == Stage::Moving && g.turnSteps().empty();
         const double t0 = nowMs();
         BotAction a = bots[p].next(g, p);
@@ -167,6 +186,7 @@ int main(int argc, char** argv) {
     uint64_t seed = 1;
     int la = 2, lb = 1;
     int matchPoints = 0;
+    bool doubling = false;
     int threads = (int)std::max(1u, std::thread::hardware_concurrency());
     bool verbose = false;
     for (int i = 1; i < argc; ++i) {
@@ -177,8 +197,9 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--match") && i + 1 < argc) matchPoints = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--threads") && i + 1 < argc) threads = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
+        else if (!std::strcmp(argv[i], "--doubling")) doubling = true;
         else {
-            std::printf("usage: tavla_sim --games N --seed S --levels a,b [--match P] [--threads T] [--verbose]\n");
+            std::printf("usage: tavla_sim --games N --seed S --levels a,b [--match P] [--doubling] [--threads T] [--verbose]\n");
             return 2;
         }
     }
@@ -198,7 +219,7 @@ int main(int argc, char** argv) {
                     std::array<int, 2> seatLevel = swap ? std::array<int, 2>{lb, la} : std::array<int, 2>{la, lb};
                     const int seatA = swap;
                     int mw = -1;
-                    const std::vector<GameOut> outs = playMatch(s, seatLevel, matchPoints ? matchPoints : 1, st, verbose, mw);
+                    const std::vector<GameOut> outs = playMatch(s, seatLevel, matchPoints, doubling, st, verbose, mw);
                     for (const GameOut& o : outs) {
                         if (o.stuck || o.winnerSeat < 0) continue;
                         const int side = o.winnerSeat == seatA ? 0 : 1;
@@ -207,6 +228,8 @@ int main(int argc, char** argv) {
                         st.points[side] += o.points;
                         st.mars[side] += o.mars;
                         st.turns += o.turns;
+                        st.cubeSum += o.cube;
+                        st.droppedGames += o.dropped;
                         net += side == 0 ? o.points : -o.points;
                     }
                     if (matchPoints && mw >= 0) {
@@ -229,6 +252,13 @@ int main(int argc, char** argv) {
         all.games += s.games;
         all.turns += s.turns;
         all.matches += s.matches;
+        all.cubeSum += s.cubeSum;
+        all.droppedGames += s.droppedGames;
+        for (int l = 0; l < 3; ++l) {
+            all.offers[l] += s.offers[l];
+            all.takes[l] += s.takes[l];
+            all.drops[l] += s.drops[l];
+        }
         for (int k = 0; k < 2; ++k) {
             all.wins[k] += s.wins[k];
             all.points[k] += s.points[k];
@@ -252,9 +282,10 @@ int main(int argc, char** argv) {
     const double ppg = mean / gamesPerDeal;
     const double ppgSe = nd > 0 ? sd / std::sqrt(nd) / gamesPerDeal : 0;
 
-    std::printf("tavla_sim: %s (A) vs %s (B), %lld games (%lld duplicate deals), seed %llu, %s, %d threads, %.1f s\n",
+    std::printf("tavla_sim: %s (A) vs %s (B), %lld games (%lld duplicate deals), seed %llu, %s%s, %d threads, %.1f s\n",
                 levelName(la), levelName(lb), all.games, (long long)nd, (unsigned long long)seed,
-                matchPoints ? ("matches to " + std::to_string(matchPoints)).c_str() : "single games", threads, wall / 1000.0);
+                matchPoints ? ("matches to " + std::to_string(matchPoints)).c_str() : "single games",
+                doubling ? " with the cube" : "", threads, wall / 1000.0);
     std::printf("  A game win rate     : %.2f%% +- %.2f%%\n", 100 * wr, 100 * wrSe);
     std::printf("  A net points / game : %+.4f +- %.4f (paired by deal, z = %.1f)\n", ppg, ppgSe, ppgSe > 0 ? ppg / ppgSe : 0.0);
     std::printf("  points / game       : A %.3f  B %.3f\n", all.points[0] / std::max(1.0, n), all.points[1] / std::max(1.0, n));
@@ -262,6 +293,15 @@ int main(int argc, char** argv) {
                 100.0 * all.mars[0] / std::max(1LL, all.wins[0]), 100.0 * all.mars[1] / std::max(1LL, all.wins[1]),
                 100.0 * (all.mars[0] + all.mars[1]) / std::max(1.0, n));
     std::printf("  turns / game        : %.1f\n", all.turns / std::max(1.0, n));
+    if (doubling) {
+        std::printf("  cube                : mean value %.2f, %.1f%% of games dropped\n", all.cubeSum / std::max(1.0, n),
+                    100.0 * all.droppedGames / std::max(1.0, n));
+        for (int l : {la, lb}) {
+            if (l == lb && la == lb) break;
+            std::printf("  %-5s cube actions  : %lld doubles, %lld takes, %lld drops\n", levelName(l), all.offers[l],
+                        all.takes[l], all.drops[l]);
+        }
+    }
     if (matchPoints) {
         const double m = (double)all.matches;
         const double mw = m > 0 ? all.matchWins[0] / m : 0;

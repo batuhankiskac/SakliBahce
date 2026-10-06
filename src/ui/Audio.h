@@ -54,6 +54,12 @@ public:
     void setMusicEnabled(bool on);    // the old radio on the wall (recordings from assets/music)
     void setMasterVolume(float v01);
     void setRain(float amount01);     // rain outside the windows (ambience bus): 0 = a dry night
+    // A regular's murmur for a speech bubble that just appeared: friendly gibberish synthesised from the Turkish text
+    // (its vowels, consonants, pauses and punctuation; at most ~2.5 s), in the speaker's own voice, panned to where he
+    // sits. `voice`: 1 Hacı Rıza, 2 Kel Mahmut, 3 Emekli Nuri (the seats), 4 a patron in the crowd, 5 the çaycı.
+    // A new line of the same voice fades the previous one out. Main thread; renders the line at once (< 1 ms).
+    void speak(int voice, const std::string& text);
+    void setVoicesEnabled(bool on);   // Settings::voices
     // True once when the radio starts a new recording: `text` = "Title — Artist" (for a "now playing" note).
     bool consumeNowPlaying(std::string& text);
 

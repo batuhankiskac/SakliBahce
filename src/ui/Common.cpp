@@ -225,8 +225,48 @@ void setCurrentViewport(const Viewport& vp) { g_viewport = vp; }
 const Viewport& currentViewport() { return g_viewport; }
 Vector2 virtualMouse() { return virtualMouse(g_viewport); }
 
+// ---------------------------------------------------------------- accessibility
+namespace {
+float g_hudScale = 1.f;
+bool g_colorBlind = false;
+bool g_kbNav = false;
+bool g_mouseKnown = false;
+Vector2 g_lastMouse{0, 0};
+} // namespace
+
+void setHudTextScale(float s) { g_hudScale = std::clamp(s, 0.75f, 2.f); }
+float hudTextScale() { return g_hudScale; }
+void setColorBlind(bool on) { g_colorBlind = on; }
+bool colorBlind() { return g_colorBlind; }
+
+bool keyboardNav() { return g_kbNav; }
+void noteKeyboardNav() { g_kbNav = true; }
+void updateInputMode(Vector2 mouse) {
+    // (a parked pointer — "no mouse" while a screen is up or in autoplay — is not the mouse moving)
+    const bool parked = mouse.x < -5000.f || mouse.y < -5000.f;
+    const bool wasParked = g_lastMouse.x < -5000.f || g_lastMouse.y < -5000.f;
+    if (g_mouseKnown && !parked && !wasParked) {
+        const float dx = mouse.x - g_lastMouse.x, dy = mouse.y - g_lastMouse.y;
+        if (dx * dx + dy * dy > 16.f || IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
+            g_kbNav = false;
+    }
+    g_lastMouse = mouse;
+    g_mouseKnown = true;
+}
+bool keyPressedRepeat(int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); }
+bool shiftDown() { return IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT); }
+
 // ---------------------------------------------------------------- palette helpers
 Color tileInk(int tileColor) {
+    if (g_colorBlind) { // Okabe-Ito based: told apart by lightness and hue for deuteranopes / protanopes
+        switch (tileColor) {
+        case 0: return Color{232, 168, 0, 255};  // sarı: light golden (far lighter than the red)
+        case 1: return Color{0, 98, 190, 255};   // mavi
+        case 2: return Color{22, 22, 26, 255};   // siyah
+        case 3: return Color{214, 72, 20, 255};  // kırmızı: vermilion (a dark olive to protanopes, never black)
+        default: return Color{22, 22, 26, 255};
+        }
+    }
     switch (tileColor) {
     case 0: return pal::InkYellow;
     case 1: return pal::InkBlue;

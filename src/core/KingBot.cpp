@@ -671,10 +671,22 @@ BotAction fallbackAction(const Game& g, int seat) {
 // Bot
 // ---------------------------------------------------------------------------------------------------------
 
+// Personality (Bot::setStyle), boldness b in -1..1:
+//   contract choice: a koz game gets STYLE_KOZ * b points of credit (Usta / Kurt; Acemi a higher koz chance), and
+//   Kurt adds STYLE_RISK * b * the spread (standard deviation) of each option's simulated points;
+//   card play in penalty games: Kurt adds STYLE_PLAY_RISK * b * the spread of each candidate's rollouts (a cautious
+//   bot prefers the card with the steadier outcome). Usta's card play stays the tuned one: weighing the trick cost
+//   by only 1 -+ 0.05 moved a styled Usta by about 100 points a match (sim, 100 deals), far from "modest".
+constexpr double STYLE_KOZ = 40.0;
+constexpr double STYLE_RISK = 0.15;
+constexpr double STYLE_PLAY_RISK = 0.1;
+
 struct Bot::Impl {
     BotLevel level;
     Rng rng;
+    BotStyle style;
     Impl(BotLevel l, uint64_t seed) : level(l), rng(seed) {}
+    double bold() const { return std::clamp((double)style.boldness, -1.0, 1.0); }
 
     BotAction choose(const Game& g, int seat);
     int playUsta(const Sim& s, int seat) { return ustaCard(s, seat); }
@@ -698,7 +710,8 @@ BotAction Bot::Impl::choose(const Game& g, int seat) {
         std::vector<Contract> cezas;
         for (Contract c : allowed)
             if (c != Contract::Koz) cezas.push_back(c);
-        if (kozOk && (cezas.empty() || (longest >= 5 && rng.chance(0.7f)) || rng.chance(0.2f))) {
+        const float kb = 0.15f * (float)bold();
+        if (kozOk && (cezas.empty() || (longest >= 5 && rng.chance(0.7f + kb)) || rng.chance(0.2f + kb))) {
             a.contract = Contract::Koz;
             int bestLen = -1;
             for (int su = 0; su < 4; ++su) {
@@ -722,7 +735,7 @@ BotAction Bot::Impl::choose(const Game& g, int seat) {
             int T = -1;
             if (c == Contract::Koz) {
                 T = bestKozSuit(h);
-                adv = estimate(h, c, T) - base[(int)c];
+                adv = estimate(h, c, T) - base[(int)c] + STYLE_KOZ * bold();
             } else {
                 adv = estimate(h, c, -1) - base[(int)c];
             }
@@ -762,7 +775,7 @@ BotAction Bot::Impl::choose(const Game& g, int seat) {
         return a;
     }
     const int S = 28;
-    std::vector<double> sum(opts.size(), 0.0);
+    std::vector<double> sum(opts.size(), 0.0), sq(opts.size(), 0.0);
     const CardMask others = ALL_CARDS & ~h;
     std::vector<int> rest = cardsOf(others);
     for (int k = 0; k < S; ++k) {
@@ -780,12 +793,18 @@ BotAction Bot::Impl::choose(const Game& g, int seat) {
             Sim sm = base;
             sm.c = opts[o].c;
             sm.trump = opts[o].trump;
-            sum[o] += rollout(sm, seat);
+            const double v = rollout(sm, seat);
+            sum[o] += v;
+            sq[o] += v * v;
         }
     }
     double bestAdv = -1e18;
     for (size_t o = 0; o < opts.size(); ++o) {
-        const double adv = sum[o] / S - kKurtBaseline[(int)opts[o].c];
+        double adv = sum[o] / S - kKurtBaseline[(int)opts[o].c];
+        if (bold() != 0.0) {
+            const double mean = sum[o] / S, sd = std::sqrt(std::max(0.0, sq[o] / S - mean * mean));
+            adv += bold() * (STYLE_RISK * sd + (opts[o].c == Contract::Koz ? STYLE_KOZ : 0.0));
+        }
         if (adv > bestAdv) {
             bestAdv = adv;
             a.contract = opts[o].c;
@@ -820,7 +839,7 @@ int Bot::Impl::playKurt(const Game& g, const Sim& pub, int seat) {
     const int budget = 26000; // simulated plays per decision
     int S = budget / std::max(1, (int)cands.size() * remaining);
     S = std::max(10, std::min(60, S));
-    std::vector<double> sum(cands.size(), 0.0);
+    std::vector<double> sum(cands.size(), 0.0), sq(cands.size(), 0.0);
     const int kozChooser = pub.c == Contract::Koz ? g.chooser() : -1;
     int chooserTrumps = 0;
     for (const PlayRecord& p : g.plays())
@@ -832,7 +851,9 @@ int Bot::Impl::playKurt(const Game& g, const Sim& pub, int seat) {
         for (size_t i = 0; i < cands.size(); ++i) {
             Sim s = det;
             s.play(cands[i], false);
-            sum[i] += rollout(s, seat);
+            const double v = rollout(s, seat);
+            sum[i] += v;
+            sq[i] += v * v;
         }
         ++done;
     }
@@ -842,7 +863,11 @@ int Bot::Impl::playKurt(const Game& g, const Sim& pub, int seat) {
     for (size_t i = 0; i < cands.size(); ++i) {
         // Small preference for the Usta choice on ties (and its equivalents).
         const bool isUsta = cands[i] == usta;
-        const double v = sum[i] / done + (isUsta ? 0.5 : 0.0);
+        double v = sum[i] / done + (isUsta ? 0.5 : 0.0);
+        if (bold() != 0.0 && pub.c != Contract::Koz) {
+            const double mean = sum[i] / done;
+            v += bold() * STYLE_PLAY_RISK * std::sqrt(std::max(0.0, sq[i] / done - mean * mean));
+        }
         if (v > bv) {
             bv = v;
             best = cands[i];
@@ -858,8 +883,148 @@ Bot& Bot::operator=(Bot&&) noexcept = default;
 
 void Bot::setLevel(BotLevel level) { impl_->level = level; }
 BotLevel Bot::level() const { return impl_->level; }
+void Bot::setStyle(BotStyle style) { impl_->style = style; }
+BotStyle Bot::style() const { return impl_->style; }
 void Bot::resetForHand() {}
 void Bot::observe(const GameEvent&, const Game&) {}
+
+namespace {
+uint64_t stateSeed(const Game& g, int seat, uint64_t salt) {
+    uint64_t z = salt ^ ((uint64_t)g.handIndex() << 40) ^ ((uint64_t)seat << 32) ^ g.playedMask();
+    for (int c : g.hand(seat)) z = z * 0x9E3779B97F4A7C15ull + (uint64_t)c + 1;
+    return z ? z : 1;
+}
+
+// Means of nc options over S paired samples, and the standard error of each one's difference to the best.
+void pairedStats(const std::vector<double>& val, int nc, int S, std::vector<double>& mean, std::vector<double>& se,
+                 const std::vector<double>* offset = nullptr) {
+    mean.assign((size_t)nc, 0.0);
+    se.assign((size_t)nc, 0.0);
+    if (S <= 0) return;
+    for (int i = 0; i < nc; ++i) {
+        for (int k = 0; k < S; ++k) mean[(size_t)i] += val[(size_t)i * S + k];
+        mean[(size_t)i] = mean[(size_t)i] / S - (offset ? (*offset)[(size_t)i] : 0.0);
+    }
+    int best = 0;
+    for (int i = 1; i < nc; ++i)
+        if (mean[(size_t)i] > mean[(size_t)best]) best = i;
+    for (int i = 0; i < nc && S > 1; ++i) {
+        if (i == best) continue;
+        double m = 0, q = 0;
+        for (int k = 0; k < S; ++k) {
+            const double d = val[(size_t)i * S + k] - val[(size_t)best * S + k];
+            m += d;
+            q += d * d;
+        }
+        m /= S;
+        se[(size_t)i] = std::sqrt(std::max(0.0, (q / S - m * m) / (S - 1)));
+    }
+}
+} // namespace
+
+std::vector<CardValue> Bot::evaluateCards(const Game& g, int seat) const {
+    std::vector<CardValue> out;
+    if (g.stage() != Stage::Playing || g.current() != seat) return out;
+    const Sim pub = simFromGame(g, seat);
+    const CardMask legal = pub.legal(seat);
+    if (!legal) return out;
+    // one candidate per class of equivalent cards (as Kurt plays), every legal card mapped to its class
+    const CardMask P = penaltyTable()[(int)pub.c];
+    const CardMask gone = pub.played | pub.hand[seat];
+    std::vector<int> cands, classOf;
+    std::vector<int> cards;
+    int prev = -1;
+    for (CardMask t = legal; t; t &= t - 1) {
+        const int x = __builtin_ctzll(t);
+        bool same = false;
+        if (prev >= 0 && suitOf(prev) == suitOf(x) && ((P >> prev) & 1) == ((P >> x) & 1)) {
+            const CardMask between = belowMask(x) & aboveMask(prev);
+            same = (between & ~gone) == 0;
+        }
+        if (!same) cands.push_back(x);
+        cards.push_back(x);
+        classOf.push_back((int)cands.size() - 1);
+        prev = x;
+    }
+    const int nc = (int)cands.size();
+    const int remaining = 52 - popcount(pub.played);
+    int S = nc == 1 ? 0 : std::max(24, std::min(120, 2 * 26000 / std::max(1, nc * remaining)));
+    Rng rng(stateSeed(g, seat, 0x4196A1ull));
+    const int kozChooser = pub.c == Contract::Koz ? g.chooser() : -1;
+    int chooserTrumps = 0;
+    for (const PlayRecord& p : g.plays())
+        if (p.seat == kozChooser && suitOf(p.card) == pub.trump) ++chooserTrumps;
+    std::vector<double> val((size_t)nc * (size_t)std::max(1, S), 0.0);
+    int done = 0;
+    for (int k = 0; k < S; ++k) {
+        Sim det;
+        if (!sampleHands(pub, seat, rng, det, kozChooser, chooserTrumps)) break;
+        for (int i = 0; i < nc; ++i) {
+            Sim s = det;
+            s.play(cands[(size_t)i], false);
+            val[(size_t)i * S + k] = rollout(s, seat);
+        }
+        ++done;
+    }
+    if (done < S) { // compact to the samples taken
+        std::vector<double> v2((size_t)nc * (size_t)std::max(1, done), 0.0);
+        for (int i = 0; i < nc; ++i)
+            for (int k = 0; k < done; ++k) v2[(size_t)i * done + k] = val[(size_t)i * S + k];
+        val.swap(v2);
+        S = done;
+    }
+    std::vector<double> mean, se;
+    pairedStats(val, nc, S, mean, se);
+    for (size_t j = 0; j < cards.size(); ++j)
+        out.push_back({cards[j], mean[(size_t)classOf[j]], se[(size_t)classOf[j]]});
+    return out;
+}
+
+std::vector<ContractValue> Bot::evaluateContracts(const Game& g, int seat) const {
+    std::vector<ContractValue> out;
+    if (g.stage() != Stage::Choosing || g.chooser() != seat) return out;
+    const CardMask h = maskOf(g.hand(seat));
+    for (const ContractOption& o : g.options(seat)) {
+        if (!o.allowed) continue;
+        if (o.contract != Contract::Koz) {
+            out.push_back({o.contract, -1, 0.0, 0.0});
+            continue;
+        }
+        for (int su = 0; su < 4; ++su) out.push_back({Contract::Koz, su, 0.0, 0.0});
+    }
+    const int nc = (int)out.size();
+    if (nc <= 1) return out;
+    constexpr int S = 96;
+    std::vector<double> val((size_t)nc * S, 0.0), offset((size_t)nc, 0.0);
+    for (int i = 0; i < nc; ++i) offset[(size_t)i] = kKurtBaseline[(int)out[(size_t)i].contract];
+    Rng rng(stateSeed(g, seat, 0xC0417ull));
+    std::vector<int> rest = cardsOf(ALL_CARDS & ~h);
+    for (int k = 0; k < S; ++k) {
+        rng.shuffle(rest);
+        Sim base;
+        base.R = &g.rules();
+        base.leader = seat;
+        base.hand[seat] = h;
+        int idx = 0;
+        for (int s = 0; s < 4; ++s) {
+            if (s == seat) continue;
+            for (int j = 0; j < 13; ++j) base.hand[s] |= cardBit(rest[(size_t)idx++]);
+        }
+        for (int i = 0; i < nc; ++i) {
+            Sim sm = base;
+            sm.c = out[(size_t)i].contract;
+            sm.trump = out[(size_t)i].trump;
+            val[(size_t)i * S + k] = rollout(sm, seat);
+        }
+    }
+    std::vector<double> mean, se;
+    pairedStats(val, nc, S, mean, se, &offset);
+    for (int i = 0; i < nc; ++i) {
+        out[(size_t)i].value = mean[(size_t)i];
+        out[(size_t)i].se = se[(size_t)i];
+    }
+    return out;
+}
 
 BotAction Bot::next(const Game& g, int seat) {
     if (g.stage() == Stage::Choosing && g.chooser() == seat) return impl_->choose(g, seat);

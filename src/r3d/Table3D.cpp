@@ -488,8 +488,8 @@ void TableState::computeTargets() {
             if (id < 0) continue;
             Pose p = rackPose(human, true, i / COLS, slotRight(i % COLS));
             float lift = 0.f;
-            if (id == selected) lift = 1.f;
-            else if (id == hoverTile && press.kind == Press::None) lift = 0.75f;
+            if (id == selected || (id == kbHeld && id == kbTile())) lift = 1.f;
+            else if ((id == hoverTile && press.kind == Press::None) || id == kbTile()) lift = 0.75f;
             if (lift > 0.f) p.pos = Vector3Add(p.pos, Vector3Add(Vector3Scale(up, 0.0105f * lift), Vector3Scale(n, 0.004f * lift)));
             set(id, C_HAND + human, p);
         }
@@ -636,7 +636,7 @@ void TableState::advanceVisuals(float dt) {
             v.landT += sdt;
         }
         v.atSlot = !v.flying && isRack(v.cont) && Vector3Distance(v.pose.pos, t.pose.pos) < 0.02f;
-        const bool hot = id == selected || (id == hoverTile && press.kind == Press::None);
+        const bool hot = id == selected || (id == hoverTile && press.kind == Press::None) || id == kbTile();
         v.glow = lerpf(v.glow, hot ? 1.f : 0.f, 1.f - std::exp(-16.f * dt));
     }
 }
@@ -1065,6 +1065,7 @@ void TableState::runButton(Btn b) {
         break;
     case Btn::Menu: menuRequested = true; break;
     case Btn::AiToggle: aiToggleRequested = true; break;
+    case Btn::Hint: hintRequested = true; break;
     case Btn::ConfirmYes: {
         const int t = confirm.tile;
         confirm = Confirm{};
@@ -1078,7 +1079,7 @@ void TableState::runButton(Btn b) {
 
 void TableState::queue(Btn b) {
     sound(ui::Sfx::Button);
-    if (b == Btn::Menu || b == Btn::AiToggle) {
+    if (b == Btn::Menu || b == Btn::AiToggle || b == Btn::Hint) {
         runButton(b); // App's business (pause menu / Yapay Zeka mode): no need to wait for the table's step
         return;
     }
@@ -1097,6 +1098,7 @@ void TableState::handleInput(float dt) {
 
     hoverTile = -1;
     hoverPile = hoverLeft = false;
+    if (humanInput && !aiMode) handleKeys();
     if (confirm.active) {
         press = Press{};
         return;
@@ -1104,7 +1106,6 @@ void TableState::handleInput(float dt) {
     if (humanInput) {
         if (in.keySeries) runButton(Btn::Series);
         if (in.keyPairs) runButton(Btn::Pairs);
-        if (in.keyOpen) runButton(Btn::Open);
     }
     const Ray ray = mouseRay(m);
     if (press.kind == Press::None && !hudHover && camValid) {
@@ -1189,6 +1190,205 @@ void TableState::handleInput(float dt) {
             onDrop(p);
         } else {
             onClick(p);
+        }
+    }
+}
+
+// ================================================================ keyboard
+// The cursor walks over the istaka's tiles (←/→ in reading order, ↑/↓ between the rows); Space picks the tile up and
+// the arrows (or Shift+arrows straight away) carry it, swapping places; D draws, A / L takes the left tile, Enter
+// discards the cursor's tile (the confirm modal for a costly one), O opens / lays / finishes, G gives back / shows,
+// I cycles the table melds the tile goes on (Enter puts it there). While the keyboard is not in use, Enter is "El Aç"
+// as it always was.
+int TableState::kbTile() const {
+    if (!ui::keyboardNav() || kbSlot < 0 || kbSlot >= SLOTS || !rackInteractive()) return -1;
+    const int id = slots[kbSlot];
+    return id >= 0 && tgt[id].cont == C_HAND + human ? id : -1;
+}
+
+void TableState::kbFixCursor() {
+    if (kbSlot >= 0 && kbSlot < SLOTS && slots[kbSlot] >= 0) return;
+    // the nearest tile: same row first, then the other one
+    const int row = kbSlot >= 0 ? kbSlot / COLS : 1, col = kbSlot >= 0 ? kbSlot % COLS : 0;
+    int best = -1, bestD = 1000;
+    for (int i = 0; i < SLOTS; ++i) {
+        if (slots[i] < 0) continue;
+        const int d = std::abs(i % COLS - col) + (i / COLS == row ? 0 : 40);
+        if (d < bestD) {
+            bestD = d;
+            best = i;
+        }
+    }
+    kbSlot = best;
+}
+
+void TableState::kbMoveCursor(int dCol, int dRow) {
+    if (kbSlot < 0) return;
+    if (dCol != 0) { // reading order, wrapping around
+        for (int k = 1; k <= SLOTS; ++k) {
+            const int i = ((kbSlot + dCol * k) % SLOTS + SLOTS) % SLOTS;
+            if (slots[i] >= 0) {
+                kbSlot = i;
+                return;
+            }
+        }
+        return;
+    }
+    const int row = kbSlot / COLS + dRow, col = kbSlot % COLS;
+    if (row < 0 || row >= ROWS) return;
+    int best = -1, bestD = 1000;
+    for (int c = 0; c < COLS; ++c)
+        if (slots[row * COLS + c] >= 0 && std::abs(c - col) < bestD) {
+            bestD = std::abs(c - col);
+            best = row * COLS + c;
+        }
+    if (best >= 0) kbSlot = best;
+}
+
+bool TableState::kbCarry(int dCol, int dRow) {
+    if (kbSlot < 0 || slots[kbSlot] < 0) return false;
+    const int row = kbSlot / COLS + dRow, col = kbSlot % COLS + dCol;
+    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return false;
+    const int to = row * COLS + col;
+    std::swap(slots[kbSlot], slots[to]);
+    kbSlot = to;
+    return true;
+}
+
+void TableState::kbCycleIsle() {
+    const int tile = kbTile();
+    if (tile < 0) return;
+    std::vector<KbIsle> c;
+    const std::vector<Meld>& table = game->table();
+    for (int m = 0; m < (int)table.size(); ++m) {
+        if (!ok().isJoker(tile))
+            for (int k = 0; k < table[m].size(); ++k)
+                if (table[m].tiles[k].joker) {
+                    bool swap = false;
+                    if (isleFits(tile, m, k, &swap) && swap) {
+                        c.push_back({tile, m, k});
+                        break;
+                    }
+                }
+        if (isleFits(tile, m, -1, nullptr)) c.push_back({tile, m, -1});
+    }
+    if (c.empty()) {
+        error(table.empty() ? "Masada işlenecek per yok" : "Bu taş masadaki perlere işlenmez");
+        kbIsle = KbIsle{};
+        return;
+    }
+    if (!game->canWorkTable(human)) {
+        error(game->stage() == okey::TurnStage::NeedDraw ? "Önce taş çekmelisin"
+              : !game->player(human).opened         ? "Önce elini açmalısın"
+                                                    : "Açtığın turda işlenmez");
+        kbIsle = KbIsle{};
+        return;
+    }
+    kbIsleIdx = (kbIsle.tile == tile && kbIsleIdx >= 0) ? (kbIsleIdx + 1) % (int)c.size() : 0;
+    kbIsle = c[(size_t)kbIsleIdx];
+    sound(ui::Sfx::TileClick);
+}
+
+void TableState::handleKeys() {
+    if (!in.anyKey()) return;
+    const bool wasNav = ui::keyboardNav();
+    // the confirm modal: ←/→ choose, Enter / Space press, Backspace = Vazgeç
+    if (confirm.active) {
+        if (in.kLeft || in.kRight) {
+            confirmFocus = 1 - confirmFocus;
+            ui::noteKeyboardNav();
+        }
+        if (in.kEnter || in.kSpace) {
+            ui::noteKeyboardNav();
+            queue(confirmFocus == 0 ? Btn::ConfirmYes : Btn::ConfirmNo);
+        } else if (in.kBack) {
+            queue(Btn::ConfirmNo);
+        }
+        return;
+    }
+    if (in.keyOpen) {
+        ui::noteKeyboardNav();
+        runButton(Btn::Open);
+    }
+    if (in.kGive) {
+        ui::noteKeyboardNav();
+        runButton(Btn::GiveBack);
+    }
+    // a new tile from D / A: the cursor goes to it
+    auto takeAndFollow = [&](bool fromLeft) {
+        std::array<bool, NUM_TILES> had{};
+        for (int id : slots)
+            if (id >= 0) had[id] = true;
+        attemptDraw(fromLeft, -1, false);
+        for (int i = 0; i < SLOTS; ++i)
+            if (slots[i] >= 0 && !had[slots[i]]) kbSlot = i;
+    };
+    if (in.kDraw) {
+        ui::noteKeyboardNav();
+        if (canDrawNow()) takeAndFollow(false);
+        else if (canAct() && game->stage() != okey::TurnStage::NeedDraw) error("Bu tur taşını çektin");
+        else notYourTurn();
+    }
+    if (in.kTakeLeft) {
+        ui::noteKeyboardNav();
+        if (canTakeLeftNow()) takeAndFollow(true);
+        else if (canAct()) error(game->stage() == okey::TurnStage::NeedDraw ? "Soldaki taş alınamaz" : "Bu tur taşını çektin");
+        else notYourTurn();
+    }
+    const bool rackKeys = in.kLeft || in.kRight || in.kUp || in.kDown || in.kSpace || in.kIsle;
+    if (rackKeys) ui::noteKeyboardNav();
+    if (!rackInteractive()) {
+        if (in.kEnter) {
+            if (wasNav && myTurn()) error("Taşlar daha gelmedi");
+            else if (!wasNav) runButton(Btn::Open);
+        }
+        return;
+    }
+    if (kbHeld >= 0 && slotOfTile(kbHeld) < 0) kbHeld = -1;
+    if (kbIsle.tile >= 0 && (kbIsle.tile != kbTile() || kbIsle.meld >= (int)game->table().size())) kbIsle = KbIsle{};
+    kbFixCursor();
+    if (kbSlot < 0) return;
+    if (kbHeld >= 0) kbSlot = slotOfTile(kbHeld);
+    // ↓ from the front row on the draw stage: take from the pile (as reaching down to it)
+    if (in.kDown && kbSlot / COLS == ROWS - 1 && kbHeld < 0 && !in.kShift && canDrawNow()) {
+        takeAndFollow(false);
+        return;
+    }
+    const int dCol = in.kRight ? 1 : in.kLeft ? -1 : 0;
+    const int dRow = in.kDown ? 1 : in.kUp ? -1 : 0;
+    if (dCol != 0 || dRow != 0) {
+        kbIsle = KbIsle{};
+        if (!wasNav) { // the first key only shows the cursor
+        } else if (kbHeld >= 0 || in.kShift) {
+            if (kbCarry(dCol, dRow)) sound(ui::Sfx::TileClick);
+        } else {
+            kbMoveCursor(dCol, dRow);
+        }
+    }
+    if (in.kSpace && wasNav) {
+        kbHeld = kbHeld >= 0 ? -1 : slots[kbSlot];
+        sound(ui::Sfx::TileClick);
+    }
+    if (in.kIsle && wasNav) kbCycleIsle();
+    if (in.kEnter) {
+        if (!wasNav) { // (the mouse player's Enter: El Aç, as before)
+            runButton(Btn::Open);
+            return;
+        }
+        ui::noteKeyboardNav();
+        const int tile = slots[kbSlot];
+        if (!canAct()) {
+            notYourTurn();
+        } else if (game->stage() != okey::TurnStage::Play) {
+            error("Önce taş çekmelisin (D ortadan, A soldan)");
+        } else if (kbIsle.tile == tile && kbIsle.meld >= 0) {
+            const KbIsle k = kbIsle;
+            kbIsle = KbIsle{};
+            attemptIsle(k.tile, k.meld, k.joker, isleFront(k.tile, k.meld, true));
+        } else {
+            kbHeld = -1;
+            confirmFocus = 1;
+            attemptDiscard(tile, false);
         }
     }
 }
@@ -1322,8 +1522,9 @@ void TableState::step(float dt, bool hi) {
     if (!humanInput) {
         // a screen is up (or autoplay): its clicks are not ours. A press still in progress is dropped
         // below as "a release we never saw" and a held tile hops back to its slot.
-        in.pressed = in.down = in.released = false;
-        in.keySeries = in.keyPairs = in.keyOpen = false;
+        const Vector2 mm = in.mouse;
+        in = Input{};
+        in.mouse = mm;
     }
     if (!game) return;
     if (!started()) {
@@ -1523,7 +1724,21 @@ void Table3D::update(float dt, const Camera3D& cam, Vector2 mouse, bool humanInp
     s.in.released = IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
     s.in.keySeries = IsKeyPressed(KEY_S);
     s.in.keyPairs = IsKeyPressed(KEY_C);
-    s.in.keyOpen = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
+    s.in.keyOpen = IsKeyPressed(KEY_O);
+    s.in.kEnter = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
+    s.in.kLeft = ui::keyPressedRepeat(KEY_LEFT);
+    s.in.kRight = ui::keyPressedRepeat(KEY_RIGHT);
+    s.in.kUp = ui::keyPressedRepeat(KEY_UP);
+    s.in.kDown = ui::keyPressedRepeat(KEY_DOWN);
+    s.in.kShift = ui::shiftDown();
+    s.in.kSpace = IsKeyPressed(KEY_SPACE);
+    s.in.kBack = IsKeyPressed(KEY_BACKSPACE);
+    s.in.kDraw = IsKeyPressed(KEY_D);
+    s.in.kTakeLeft = IsKeyPressed(KEY_A) || IsKeyPressed(KEY_L);
+    s.in.kIsle = IsKeyPressed(KEY_I);
+    s.in.kGive = IsKeyPressed(KEY_G);
+    ui::updateInputMode(mouse);
+    ui::tilegfx::refresh(); // (the colour-blind tiles switched on / off)
     s.step(dt, humanInput);
     s.in.mouse = mouse; // the HUD draws with this frame's mouse
 }
@@ -1562,6 +1777,28 @@ void Table3D::setHeadAnchors(const std::array<Vector3, 4>& heads) {
 
 void Table3D::setAiMode(bool on) { impl_->setAiMode(on); }
 void Table3D::setFurnitureOnly(bool on) { impl_->furnitureOnly = on; }
+
+bool TableState::hintLive() const {
+    return game && hintTurn == game->turnNumber() && hintStage == game->stage() && !aiMode &&
+           game->handState() == okey::HandState::Playing;
+}
+
+bool Table3D::consumeHintRequest() {
+    const bool r = impl_->hintRequested;
+    impl_->hintRequested = false;
+    return r;
+}
+
+void Table3D::showHint(const std::vector<int>& tiles, bool pile, bool left, const std::string& text) {
+    TableState& s = *impl_;
+    if (!s.game) return;
+    s.hintTiles = tiles;
+    s.hintPile = pile;
+    s.hintLeft = left;
+    s.hintTurn = s.game->turnNumber();
+    s.hintStage = s.game->stage();
+    s.pushToast("hint", text, ui::pal::Highlight, 5.f);
+}
 
 bool Table3D::consumeAiToggleRequest() {
     const bool r = impl_->aiToggleRequested;
@@ -1604,7 +1841,19 @@ void input(Table3D& t, float dt, Vector2 mouse, int button, int key, bool humanI
     s->in.released = button == 3;
     s->in.keySeries = key == 'S';
     s->in.keyPairs = key == 'C';
-    s->in.keyOpen = key == '\n';
+    // '\n' is the old "Enter = El Aç" (the keyboard cursor not in use); raylib key codes for the rest
+    s->in.kEnter = key == '\n' || key == KEY_ENTER;
+    s->in.keyOpen = key == KEY_O;
+    s->in.kLeft = key == KEY_LEFT;
+    s->in.kRight = key == KEY_RIGHT;
+    s->in.kUp = key == KEY_UP;
+    s->in.kDown = key == KEY_DOWN;
+    s->in.kSpace = key == KEY_SPACE;
+    s->in.kBack = key == KEY_BACKSPACE;
+    s->in.kDraw = key == KEY_D;
+    s->in.kTakeLeft = key == KEY_A || key == KEY_L;
+    s->in.kIsle = key == KEY_I;
+    s->in.kGive = key == KEY_G;
     s->step(dt, humanInput);
     s->in.mouse = mouse;
 }
@@ -1644,8 +1893,8 @@ void pressButton(Table3D& t, int which) {
     TableState* s = stateOf(t);
     if (!s) return;
     const Btn map[] = {Btn::None, Btn::Open,       Btn::GiveBack,  Btn::Series,  Btn::Pairs,
-                       Btn::Menu, Btn::ConfirmYes, Btn::ConfirmNo, Btn::AiToggle};
-    if (which >= 1 && which <= 8) s->runButton(map[which]);
+                       Btn::Menu, Btn::ConfirmYes, Btn::ConfirmNo, Btn::AiToggle, Btn::Hint};
+    if (which >= 1 && which <= 9) s->runButton(map[which]);
 }
 
 int draggedTile(Table3D& t) {
@@ -1656,6 +1905,16 @@ bool confirmActive(Table3D& t) {
     TableState* s = stateOf(t);
     return s && s->confirm.active;
 }
+void setKeyboardSlot(Table3D& t, int slot) {
+    TableState* s = stateOf(t);
+    if (s) s->kbSlot = slot;
+}
+
+int keyboardTile(Table3D& t) {
+    TableState* s = stateOf(t);
+    return s ? s->kbTile() : -1;
+}
+
 int selectedTile(Table3D& t) {
     TableState* s = stateOf(t);
     return s ? s->selected : -1;

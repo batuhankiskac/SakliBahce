@@ -3,6 +3,7 @@
 #include "core/OkeyHand.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <numeric>
 
 namespace okey {
@@ -130,6 +131,8 @@ void Game::setPlayer(int seat, const std::string& name, bool human) {
 
 void Game::startMatch(uint64_t seed) {
     rng_.reseed(seed);
+    matchSeed_ = seed;
+    log_.clear();
     events_.clear();
     for (PlayerInfo& p : players_) {
         p.totalScore = classic() ? cfg_.okeyStartPoints : 0;
@@ -152,6 +155,7 @@ void Game::startMatch(uint64_t seed) {
 
 void Game::startNextHand() {
     if (handState_ != HandState::HandOver) return;
+    log_.push_back({LogKind::NextHand, -1});
     ++handIndex_;
     starter_ = rightOf(starter_);
     dealHand();
@@ -335,7 +339,7 @@ int Game::finishKind(int seat, int tile) const {
 // ---------------------------------------------------------------------------------------------------------
 // actions
 
-ActionResult Game::drawFromPile(int seat) {
+ActionResult Game::drawFromPileImpl(int seat) {
     ActionResult r = checkTurn(seat, TurnStage::NeedDraw);
     if (!r.ok) return r;
     if (pile_.empty()) return ActionResult::fail("Ortada çekilecek taş kalmadı");
@@ -359,7 +363,7 @@ ActionResult Game::drawFromPile(int seat) {
     return ActionResult::success();
 }
 
-ActionResult Game::takeFromLeft(int seat) {
+ActionResult Game::takeFromLeftImpl(int seat) {
     ActionResult r = checkTurn(seat, TurnStage::NeedDraw);
     if (!r.ok) return r;
     if (returnedLeftThisTurn_) return ActionResult::fail("Geri verdiğin taşı bu turda tekrar alamazsın");
@@ -383,7 +387,7 @@ ActionResult Game::takeFromLeft(int seat) {
     return ActionResult::success();
 }
 
-ActionResult Game::returnLeftTile(int seat) {
+ActionResult Game::returnLeftTileImpl(int seat) {
     ActionResult r = checkTurn(seat, stage_); // hand/seat checks only
     if (!r.ok) return r;
     if (pendingLeftTile_ < 0 || stage_ != TurnStage::Play) return ActionResult::fail("Geri verilecek taş yok");
@@ -410,7 +414,7 @@ ActionResult Game::returnLeftTile(int seat) {
     return ActionResult::success();
 }
 
-ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& groups) {
+ActionResult Game::openHandImpl(int seat, const std::vector<std::vector<int>>& groups) {
     std::vector<Meld> melds;
     const OpenCheck c = evaluate(seat, groups, false, &melds);
     if (!c.valid) return ActionResult::fail(c.error);
@@ -462,7 +466,7 @@ ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& group
     return ActionResult::success();
 }
 
-ActionResult Game::layMelds(int seat, const std::vector<std::vector<int>>& groups) {
+ActionResult Game::layMeldsImpl(int seat, const std::vector<std::vector<int>>& groups) {
     std::vector<Meld> melds;
     const OpenCheck c = evaluate(seat, groups, true, &melds);
     if (!c.valid) return ActionResult::fail(c.error);
@@ -489,7 +493,7 @@ ActionResult Game::layMelds(int seat, const std::vector<std::vector<int>>& group
     return ActionResult::success();
 }
 
-ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
+ActionResult Game::addToMeldImpl(int seat, int tile, int meldIndex, AddSide side) {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
     if (classic()) return yuzbirOnly();
@@ -522,7 +526,7 @@ ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
     return ActionResult::success();
 }
 
-ActionResult Game::swapJoker(int seat, int tile, int meldIndex) {
+ActionResult Game::swapJokerImpl(int seat, int tile, int meldIndex) {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
     if (classic()) return yuzbirOnly();
@@ -556,7 +560,7 @@ ActionResult Game::swapJoker(int seat, int tile, int meldIndex) {
     return ActionResult::success();
 }
 
-ActionResult Game::discard(int seat, int tile) {
+ActionResult Game::discardImpl(int seat, int tile) {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
     if (pendingLeftTile_ >= 0)
@@ -596,7 +600,7 @@ ActionResult Game::discard(int seat, int tile) {
     return ActionResult::success();
 }
 
-ActionResult Game::finishHand(int seat, int tile) {
+ActionResult Game::finishHandImpl(int seat, int tile) {
     if (!classic()) return ActionResult::fail("101'de el, son taşı atınca biter");
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
@@ -621,7 +625,7 @@ ActionResult Game::finishHand(int seat, int tile) {
     return ActionResult::success();
 }
 
-ActionResult Game::showIndicator(int seat) {
+ActionResult Game::showIndicatorImpl(int seat) {
     if (!classic()) return ActionResult::fail("Gösterge yalnızca okeyde gösterilir");
     if (handState_ != HandState::Playing) return ActionResult::fail("Şu an oynanan bir el yok");
     if (seat != current_) return ActionResult::fail("Sıra sende değil");
@@ -634,13 +638,13 @@ ActionResult Game::showIndicator(int seat) {
     }
     indicatorShownBy_ = seat;
     for (int s = 0; s < NUM_PLAYERS; ++s)
-        if (s != seat) players_[s].handPenalty += cfg_.okeyIndicatorPoints;
+        if (s != seat) players_[s].handPenalty += cfg_.okeyIndicatorPoints * colorMultiplier();
     GameEvent e;
     e.type = EvType::ShowIndicator;
     e.player = seat;
     e.tile = twin;
-    e.amount = cfg_.okeyIndicatorPoints;
-    const std::string pts = ": herkesten " + std::to_string(cfg_.okeyIndicatorPoints) + " puan düştü";
+    e.amount = cfg_.okeyIndicatorPoints * colorMultiplier();
+    const std::string pts = ": herkesten " + std::to_string(e.amount) + " puan düştü";
     e.text = says(seat, "göstergeyi gösterdi", "göstergeyi gösterdin") + pts;
     push(std::move(e));
     return ActionResult::success();
@@ -724,6 +728,12 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
     if (matchOver) pushMatchEnd();
 }
 
+int Game::colorMultiplier() const {
+    if (!classic() || !cfg_.okeyColorDouble || !isValidTile(okey_.indicatorId)) return 1;
+    const int c = okey_.faceColor(okey_.indicatorId);
+    return c == Red || c == Black ? 2 : 1;
+}
+
 void Game::endClassicHand(HandEndReason reason, int winner, bool finishedWithJoker, bool pairs) {
     HandResult r;
     r.reason = reason;
@@ -735,6 +745,7 @@ void Game::endClassicHand(HandEndReason reason, int winner, bool finishedWithJok
         r.finishedWithPairs = pairs;
         if (finishedWithJoker) mult *= 2;
         if (pairs) mult *= 2;
+        mult *= colorMultiplier();
     }
     r.multiplier = mult;
     bool someoneOut = false;
@@ -763,6 +774,7 @@ void Game::endClassicHand(HandEndReason reason, int winner, bool finishedWithJok
             std::string how;
             if (r.finishedWithJoker) how += "okey atarak";
             if (r.finishedWithPairs) how += std::string(how.empty() ? "" : ", ") + "çiftten";
+            if (colorMultiplier() > 1) how += std::string(how.empty() ? "" : ", ") + "renkli gösterge";
             e.text += " (" + how + ", ×" + std::to_string(mult) + ")";
         }
     } else {
@@ -977,6 +989,106 @@ void Game::addPenalty(int seat, const std::string& text, int amount) {
     e.amount = amount;
     e.text = text;
     push(std::move(e));
+}
+
+} // namespace okey
+
+// ---------------------------------------------------------------- the match's action log (save / resume)
+namespace okey {
+
+ActionResult Game::logged(ActionResult r, LoggedAction a) {
+    if (r.ok) log_.push_back(std::move(a));
+    return r;
+}
+
+ActionResult Game::drawFromPile(int seat) { return logged(drawFromPileImpl(seat), {LogKind::Draw, seat}); }
+ActionResult Game::takeFromLeft(int seat) { return logged(takeFromLeftImpl(seat), {LogKind::TakeLeft, seat}); }
+ActionResult Game::returnLeftTile(int seat) { return logged(returnLeftTileImpl(seat), {LogKind::ReturnLeft, seat}); }
+ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& groups) {
+    return logged(openHandImpl(seat, groups), {LogKind::Open, seat, -1, -1, 0, groups});
+}
+ActionResult Game::layMelds(int seat, const std::vector<std::vector<int>>& groups) {
+    return logged(layMeldsImpl(seat, groups), {LogKind::Lay, seat, -1, -1, 0, groups});
+}
+ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
+    return logged(addToMeldImpl(seat, tile, meldIndex, side), {LogKind::Add, seat, tile, meldIndex, (int)side});
+}
+ActionResult Game::swapJoker(int seat, int tile, int meldIndex) {
+    return logged(swapJokerImpl(seat, tile, meldIndex), {LogKind::Swap, seat, tile, meldIndex});
+}
+ActionResult Game::discard(int seat, int tile) { return logged(discardImpl(seat, tile), {LogKind::Discard, seat, tile}); }
+ActionResult Game::finishHand(int seat, int tile) {
+    return logged(finishHandImpl(seat, tile), {LogKind::Finish, seat, tile});
+}
+ActionResult Game::showIndicator(int seat) { return logged(showIndicatorImpl(seat), {LogKind::ShowIndicator, seat}); }
+
+bool Game::replay(const LoggedAction& a) {
+    switch (a.kind) {
+    case LogKind::Draw: return drawFromPile(a.seat).ok;
+    case LogKind::TakeLeft: return takeFromLeft(a.seat).ok;
+    case LogKind::ReturnLeft: return returnLeftTile(a.seat).ok;
+    case LogKind::Open: return openHand(a.seat, a.melds).ok;
+    case LogKind::Lay: return layMelds(a.seat, a.melds).ok;
+    case LogKind::Add: return addToMeld(a.seat, a.tile, a.meld, (AddSide)a.side).ok;
+    case LogKind::Swap: return swapJoker(a.seat, a.tile, a.meld).ok;
+    case LogKind::Discard: return discard(a.seat, a.tile).ok;
+    case LogKind::Finish: return finishHand(a.seat, a.tile).ok;
+    case LogKind::ShowIndicator: return showIndicator(a.seat).ok;
+    case LogKind::NextHand: {
+        if (handState_ != HandState::HandOver) return false;
+        startNextHand();
+        return true;
+    }
+    }
+    return false;
+}
+
+// "kind seat tile meld side | a b c | d e f" (melds after the bars)
+std::string LoggedAction::encode() const {
+    std::string s = std::to_string((int)kind) + " " + std::to_string(seat) + " " + std::to_string(tile) + " " +
+                    std::to_string(meld) + " " + std::to_string(side);
+    for (const auto& m : melds) {
+        s += " |";
+        for (int id : m) s += " " + std::to_string(id);
+    }
+    return s;
+}
+
+bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
+    out = LoggedAction();
+    std::vector<std::string> tok;
+    std::string cur;
+    for (char ch : line) {
+        if (ch == ' ') {
+            if (!cur.empty()) tok.push_back(cur);
+            cur.clear();
+        } else {
+            cur += ch;
+        }
+    }
+    if (!cur.empty()) tok.push_back(cur);
+    if (tok.size() < 5) return false;
+    auto num = [](const std::string& t, int& v) {
+        char* end = nullptr;
+        const long x = std::strtol(t.c_str(), &end, 10);
+        if (!end || *end) return false;
+        v = (int)x;
+        return true;
+    };
+    int k = 0;
+    if (!num(tok[0], k) || k < 0 || k > (int)LogKind::NextHand) return false;
+    out.kind = (LogKind)k;
+    if (!num(tok[1], out.seat) || !num(tok[2], out.tile) || !num(tok[3], out.meld) || !num(tok[4], out.side)) return false;
+    for (size_t i = 5; i < tok.size(); ++i) {
+        if (tok[i] == "|") {
+            out.melds.emplace_back();
+            continue;
+        }
+        int v = 0;
+        if (out.melds.empty() || !num(tok[i], v)) return false;
+        out.melds.back().push_back(v);
+    }
+    return true;
 }
 
 } // namespace okey

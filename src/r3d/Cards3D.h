@@ -46,6 +46,7 @@ public:
     void setTint(int card, Color c);
     void setLift(int card, float metres);
     void setGlow(int card, float amount); // a soft warm halo under the card (legal / selected)
+    void setHintGlow(int card, bool on);  // a green halo: the card the İpucu suggests
 
     void setSpeed(float s);              // animation speed (1 = normal)
     void update(float dt);
@@ -62,12 +63,14 @@ private:
         Color tint = WHITE;
         float lift = 0.f, liftCur = 0.f;
         float glow = 0.f, glowCur = 0.f;
+        bool hint = false;
     };
     std::array<Card, CARD_COUNT> cards_;
     std::array<Mesh, CARD_COUNT> meshes_{};
     std::array<Mat, CARD_COUNT> mats_{};
     Mesh halo_{};
     Mat haloMat_{};
+    Mat hintMat_{};
     Texture2D haloTex_{};
     float speed_ = 1.f;
     bool ready_ = false;

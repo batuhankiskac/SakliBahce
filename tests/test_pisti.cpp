@@ -1126,6 +1126,78 @@ void testBotSense() {
 
 } // namespace
 
+// Save / resume: the action log, written as text lines and replayed on a freshly started game with the same seed,
+// reproduces the state (checked every few plays through whole matches in all three modes).
+void samePisti(const Game& a, const Game& b) {
+    CHECK_EQ((int)a.stage(), (int)b.stage());
+    CHECK_EQ(a.handIndex(), b.handIndex());
+    CHECK_EQ(a.dealer(), b.dealer());
+    CHECK_EQ(a.current(), b.current());
+    CHECK_EQ(a.dealRound(), b.dealRound());
+    CHECK_EQ(a.tableCards(), b.tableCards());
+    CHECK_EQ(a.closedCardsForDisplay(), b.closedCardsForDisplay());
+    CHECK_EQ(a.deckCardsForDisplay(), b.deckCardsForDisplay());
+    CHECK_EQ(a.lastCapturer(), b.lastCapturer());
+    CHECK_EQ(a.actionLog().size(), b.actionLog().size());
+    for (int s = 0; s < 4; ++s) {
+        CHECK_EQ(a.hand(s), b.hand(s));
+        CHECK_EQ(a.capturedCards(s), b.capturedCards(s));
+        CHECK_EQ(a.pistiCount(s), b.pistiCount(s));
+        CHECK_EQ(a.total(s), b.total(s));
+    }
+}
+
+void testReplay() {
+    for (int mode = 0; mode < 3; ++mode) {
+        Rules r;
+        r.mode = (Mode)mode;
+        r.targetScore = 51;
+        const uint64_t seed = 110 + (uint64_t)mode;
+        Game g(r);
+        for (int s = 0; s < 4; ++s) g.setPlayer(s, s == 0 ? "Sen" : "Bot", s == 0);
+        g.startMatch(seed);
+        std::vector<Bot> bots;
+        for (int s = 0; s < 4; ++s) bots.emplace_back(BotLevel::Usta, seed * 4 + (uint64_t)s);
+        int steps = 0, replays = 0;
+        while (g.stage() != Stage::MatchOver && steps < 5000) {
+            if (g.stage() == Stage::HandOver) {
+                g.startNextHand();
+            } else {
+                const int seat = g.current();
+                const int c = bots[(size_t)seat].next(g, seat);
+                if (!g.playCard(seat, c).ok) CHECK(g.playCard(seat, fallbackCard(g, seat)).ok);
+            }
+            for (const GameEvent& e : g.drainEvents())
+                for (Bot& b : bots) b.observe(e, g);
+            ++steps;
+            if (steps % 23 == 0 || g.stage() == Stage::MatchOver || g.stage() == Stage::HandOver) {
+                Game h(r);
+                for (int s = 0; s < 4; ++s) h.setPlayer(s, s == 0 ? "Sen" : "Bot", s == 0);
+                h.startMatch(g.matchSeed());
+                bool ok = true;
+                for (const LoggedAction& la : g.actionLog()) {
+                    LoggedAction back;
+                    ok = ok && LoggedAction::decode(la.encode(), back) && h.replay(back);
+                }
+                CHECK(ok);
+                samePisti(g, h);
+                ++replays;
+            }
+        }
+        CHECK_EQ((int)g.stage(), (int)Stage::MatchOver);
+        CHECK(replays > 10);
+    }
+    LoggedAction x;
+    CHECK(!LoggedAction::decode("0 1", x));
+    CHECK(!LoggedAction::decode("5 0 0", x));
+    CHECK(LoggedAction::decode("0 2 17", x) && x.kind == LogKind::Play && x.seat == 2 && x.card == 17);
+    Game h;
+    h.startMatch(5);
+    CHECK(!h.replay({LogKind::NextHand, -1, -1}));
+    CHECK(!h.replay({LogKind::Play, (h.current() + 1) % 4, 0}));
+    CHECK(h.actionLog().empty());
+}
+
 int main() {
     testDealing();
     testOpeningJack();
@@ -1141,6 +1213,7 @@ int main() {
     testFuzz();
     testBotsLegalAndFair();
     testBotSense();
+    testReplay();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

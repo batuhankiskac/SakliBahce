@@ -1,7 +1,8 @@
 // Headless bot-vs-bot simulation for Batak.
 //
-//   batak_sim --hands N --seed S --levels a,b,c,d [--esli] [--no-dup] [--verbose] [--slow MS]
-//             [--tune SLOT:KEY=VALUE ...]
+//   batak_sim --hands N --seed S --levels a,b,c,d [--esli] [--koz-acik] [--no-dup] [--verbose] [--slow MS]
+//             [--tune SLOT:KEY=VALUE ...] [--styles | --styles-fixed]
+//   (--koz-acik: the optional rule "önce koz açılmalı" off, Rules::trumpMustBeBroken = false)
 //
 // levels: 0 = Acemi, 1 = Usta, 2 = Kurt, one per seat. By default every deal is played four times
 // (duplicate), with the level assignment rotated one seat each time, so every level holds every hand from
@@ -12,7 +13,11 @@
 // Metric: hand utility = own side's points - mean points of the other sides (eşli: own team - other team),
 // i.e. the bots' own objective; raw points are reported too. A "slot" is a position in --levels; it moves
 // around the table with the rotation, and --tune changes one Bot::debugTune knob for the slot's bot, so two
-// variants of the same level can be compared (per-slot results are paired over deals as well). Every bot action goes through applyAction; a
+// variants of the same level can be compared (per-slot results are paired over deals as well).
+// --styles gives slot k the personality of seat k (BotStyle::forSeat: 0, 1 neutral, 2 bold Kel Mahmut, 3 cautious
+// Emekli Nuri) and prints per-slot bidding stats and every slot's paired difference against slot 0 (slot 1 is a
+// neutral control); --styles-fixed ties the presets to the physical seats (as in the game) for the level
+// comparison with styles on. Every bot action goes through applyAction; a
 // rejected action is printed, counted and replaced by fallbackAction.
 //
 // Build: clang++ -std=c++17 -O2 -Wall -Wextra -Isrc src/core/Batak.cpp src/core/BatakBot.cpp
@@ -72,6 +77,12 @@ struct Acc {
     }
 };
 
+// Per persona (slot with --styles, seat with --styles-fixed).
+struct StyleStats {
+    Acc util;
+    long long hands = 0, bids = 0, bidHands = 0, maxBidSum = 0, declared = 0, made = 0, contractSum = 0, forced = 0;
+};
+
 struct LevelStats {
     Acc util, points;
     long long declared = 0, made = 0, forced = 0, forcedMade = 0;
@@ -87,10 +98,11 @@ int main(int argc, char** argv) {
     int deals = 200;
     uint64_t seed = 1;
     int levels[4] = {2, 1, 0, 1};
-    bool esli = false, dup = true, verbose = false;
+    bool esli = false, dup = true, verbose = false, kozAcik = false;
     double slowMs = -1;
     struct Tune { int slot, key; double value; };
     std::vector<Tune> tunes;
+    int styleMode = 0; // 1 --styles (by slot), 2 --styles-fixed (by seat)
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--hands") && i + 1 < argc) deals = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 10);
@@ -106,20 +118,25 @@ int main(int argc, char** argv) {
                 s = comma + 1;
             }
         } else if (!std::strcmp(argv[i], "--esli")) esli = true;
+        else if (!std::strcmp(argv[i], "--koz-acik")) kozAcik = true;
         else if (!std::strcmp(argv[i], "--no-dup")) dup = false;
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
+        else if (!std::strcmp(argv[i], "--styles")) styleMode = 1;
+        else if (!std::strcmp(argv[i], "--styles-fixed")) styleMode = 2;
         else if (!std::strcmp(argv[i], "--slow") && i + 1 < argc) slowMs = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--tune") && i + 1 < argc) {
             Tune t{};
             if (std::sscanf(argv[++i], "%d:%d=%lf", &t.slot, &t.key, &t.value) == 3) tunes.push_back(t);
         }
         else {
-            std::printf("usage: batak_sim --hands N --seed S --levels a,b,c,d [--esli] [--no-dup] [--verbose] [--slow MS]\n");
+            std::printf("usage: batak_sim --hands N --seed S --levels a,b,c,d [--esli] [--no-dup] [--verbose] [--slow MS] "
+                        "[--tune SLOT:KEY=VALUE] [--styles | --styles-fixed]\n");
             return 2;
         }
     }
 
     Rules rules = esli ? Rules::esliBatak() : Rules::tekli();
+    if (kozAcik) rules.trumpMustBeBroken = false;
     rules.targetScore = 0;
     rules.numHands = 1 << 30;
     Game g(rules);
@@ -133,6 +150,8 @@ int main(int argc, char** argv) {
     // paired: per deal, mean utility per level
     std::map<std::pair<int, int>, Acc> paired;
     Acc slotAcc[4];
+    StyleStats sty[4];
+    Acc styPaired[4];
     long long rejected = 0, handsPlayed = 0, allPass = 0, kings = 0;
     okey::Rng dealRng(seed * 7919 + 13);
     const int rotations = dup ? 4 : 1;
@@ -158,7 +177,11 @@ int main(int argc, char** argv) {
                 bots.emplace_back((Level)lv[s], seed * 1000003ull + (uint64_t)d * 31 + (uint64_t)s * 7 + 1);
                 for (const Tune& t : tunes)
                     if (t.slot == slotOf[s]) bots.back().debugTune(t.key, t.value);
+                if (styleMode) bots.back().setStyle(BotStyle::forSeat(styleMode == 1 ? slotOf[s] : s));
             }
+            int persona[4];
+            for (int s = 0; s < 4; ++s) persona[s] = styleMode == 2 ? s : slotOf[s];
+            int maxBid[4] = {0, 0, 0, 0};
             g.debugRedeal(dealer, hands);
             g.drainEvents();
             int guard = 0;
@@ -178,6 +201,10 @@ int main(int argc, char** argv) {
                 (stage == Stage::Bidding ? ls.tBid : stage == Stage::ChoosingTrump ? ls.tTrump : ls.tPlay).push_back((float)dt);
                 if (slowMs >= 0 && dt > slowMs)
                     std::printf("slow %.1f ms: level %s stage %d trick %d\n", dt, levelName(lv[ctl]), (int)stage, g.trickNumber());
+                if (stage == Stage::Bidding && a.kind == Action::Kind::Bid) {
+                    sty[persona[ctl]].bids++;
+                    maxBid[ctl] = std::max(maxBid[ctl], a.value);
+                }
                 ActionResult r = applyAction(g, seat, a);
                 if (!r.ok) {
                     ++rejected;
@@ -207,6 +234,19 @@ int main(int argc, char** argv) {
                 for (int o = 0; o < ns; ++o)
                     if (o != side) others += pts[o];
                 const double u = pts[side] - others / (ns - 1);
+                StyleStats& ss = sty[persona[s]];
+                ss.util.add(u);
+                ss.hands++;
+                if (maxBid[s]) {
+                    ss.bidHands++;
+                    ss.maxBidSum += maxBid[s];
+                }
+                if (s == hr.declarer) {
+                    ss.declared++;
+                    ss.contractSum += hr.contract;
+                    if (hr.sides[side].tricks >= hr.contract) ss.made++;
+                    if (hr.forced) ss.forced++;
+                }
                 LevelStats& ls = st[lv[s]];
                 ls.util.add(u);
                 ls.points.add(pts[side]);
@@ -234,6 +274,8 @@ int main(int argc, char** argv) {
             }
         }
         for (int k = 0; k < 4; ++k) slotAcc[k].add(slotUtil[k] / rotations);
+        if (styleMode == 1)
+            for (int k = 1; k < 4; ++k) styPaired[k].add((slotUtil[k] - slotUtil[0]) / rotations);
         for (int a = 0; a < 3; ++a)
             for (int b = a + 1; b < 3; ++b)
                 if (levelCnt[a] && levelCnt[b])
@@ -274,6 +316,28 @@ int main(int argc, char** argv) {
                 if (t.slot == k) std::printf("  [%d=%g]", t.key, t.value);
             std::printf("\n");
         }
+    }
+    if (styleMode) {
+        std::printf("\nstyles (%s): 0, 1 neutral (Hacı Rıza), 2 bold (Kel Mahmut), 3 cautious (Emekli Nuri)\n",
+                    styleMode == 1 ? "by slot" : "by seat");
+        std::printf("  %-10s %16s %9s %10s %10s %9s %8s %7s %7s\n", "style", "utility/hand", "declared%", "bids/hand",
+                    "bidding%", "avgMaxBid", "avgCont", "made%", "forced");
+        for (int p = 0; p < 4; ++p) {
+            const StyleStats& s = sty[p];
+            if (!s.hands) continue;
+            std::printf("  %d (%+.0f)     %+7.3f ± %5.3f %8.1f%% %10.2f %9.1f%% %9.2f %8.2f %6.1f%% %7lld\n", p,
+                        BotStyle::forSeat(p).boldness, s.util.mean(), s.util.se(), 100.0 * s.declared / s.hands,
+                        (double)s.bids / s.hands, 100.0 * s.bidHands / s.hands,
+                        s.bidHands ? (double)s.maxBidSum / s.bidHands : 0.0,
+                        s.declared ? (double)s.contractSum / s.declared : 0.0,
+                        s.declared ? 100.0 * s.made / s.declared : 0.0, s.forced);
+        }
+        for (int p = 1; p < 4; ++p)
+            if (styPaired[p].n > 0) {
+                const Acc& a = styPaired[p];
+                std::printf("  paired style %d - style 0: %+.3f ± %.3f utility/hand  (z = %.1f, %d deals)\n", p,
+                            a.mean(), a.se(), a.se() > 0 ? a.mean() / a.se() : 0.0, (int)a.n);
+            }
     }
     std::printf("\ndecision times (thread CPU ms): p50 / p99 / max   [max wall ms, inflated on a loaded machine]\n");
     for (int l = 0; l < 3; ++l) {

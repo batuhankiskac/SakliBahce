@@ -49,6 +49,7 @@ public:
             bots_[(size_t)s] = std::make_unique<pisti::Bot>(lv, seed * 4 + (uint64_t)s + 0x9157ull);
         }
         rng_.reseed(seed ^ 0x915711ull);
+        replay_ = false;
         resetTable();
         pending_.clear();
         captureAt_ = -1.f;
@@ -109,14 +110,16 @@ public:
         if (g_.stage() == pisti::Stage::HandOver) st = "El bitti";
         else if (g_.stage() == pisti::Stage::MatchOver) st = "Oyun bitti";
         else if (now_ < dealUntil_) st = "Kâğıtlar dağıtılıyor…";
+        else if (a == 0 && replay_) st = replaySelfStatus();
         else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
         else if (a == 0) {
             sc = ui::pal::Highlight;
             st = "Bir kâğıt at";
-            if (hints_ && hover_ >= 0) {
-                const int pp = g_.wouldPisti(hover_);
+            const int look = hover_ >= 0 ? hover_ : (ui::keyboardNav() ? kbCard_ : -1); // (the mouse's or the keyboard's)
+            if (hints_ && look >= 0) {
+                const int pp = g_.wouldPisti(look);
                 if (pp > 0) st = "Pişti! +" + std::to_string(pp);
-                else if (g_.wouldCapture(hover_)) st = "Bununla yerdekileri alırsın";
+                else if (g_.wouldCapture(look)) st = "Bununla yerdekileri alırsın";
             }
         } else if (a > 0) {
             st = names_[(size_t)a] + " düşünüyor…";
@@ -128,9 +131,59 @@ public:
             parts.push_back({"  \xC2\xB7  ", Color{226, 216, 196, 120}});
             parts.push_back({"Puan: " + std::to_string(g_.total(side)), Color{238, 198, 112, 255}});
         }
-        hud_.status(st, sc, a == 0 && !aiSeat, parts, aiSeat);
-        hud_.buttons(mouse, {}, {}, {}, aiSeat);
+        hud_.status(st, sc, a == 0 && !aiSeat && !replay_, parts, aiSeat && !replay_);
+        drawButtons(mouse, aiSeat);
         hud_.toasts();
+    }
+
+    bool humanHandScore(int& score) const override {
+        const pisti::HandResult& r = g_.lastHandResult();
+        const int side = g_.sideOf(0);
+        if (r.handIndex < 0 || side < 0) return false;
+        score = r.side[(size_t)side].total;
+        return true;
+    }
+
+    bool saveState(std::vector<std::string>& lines) const override {
+        lines.clear();
+        for (const pisti::LoggedAction& a : g_.actionLog()) lines.push_back(a.encode());
+        return true;
+    }
+    bool restoreState(const std::vector<std::string>& lines) override {
+        bool ok = true;
+        for (const std::string& l : lines) {
+            pisti::LoggedAction a;
+            if (!pisti::LoggedAction::decode(l, a) || !g_.replay(a)) {
+                ok = false;
+                break;
+            }
+            // nothing is animated, but the bots' memory, the sheet's history and the pişti counts follow the events
+            for (const pisti::GameEvent& e : g_.drainEvents()) {
+                for (auto& b : bots_)
+                    if (b) b->observe(e, g_);
+                if (e.type == pisti::EvType::HandStart) {
+                    for (auto& b : bots_)
+                        if (b) b->resetForHand();
+                } else if (e.type == pisti::EvType::Pisti && e.seat >= 0 && e.seat < 4) {
+                    const int sd = g_.sideOf(e.seat);
+                    if (sd >= 0) ++pistis_[(size_t)sd];
+                } else if (e.type == pisti::EvType::HandEnd) {
+                    const pisti::HandResult& r = g_.lastHandResult();
+                    std::array<int, 4> row{};
+                    for (int s = 0; s < g_.numSides(); ++s) row[(size_t)s] = r.side[(size_t)s].total;
+                    history_.push_back(row);
+                }
+            }
+        }
+        g_.drainEvents();
+        pending_.clear();
+        captureCards_.clear();
+        captureSeat_ = -1;
+        captureAt_ = -1.f;
+        dealer_ = g_.dealer();
+        log_.clear();
+        restoreView();
+        return ok;
     }
 
     ui::SheetModel sheet(bool aiMode) const override {
@@ -212,6 +265,17 @@ public:
     }
 
 protected:
+    int replayLine(const std::string& line) override {
+        pisti::LoggedAction a;
+        if (!pisti::LoggedAction::decode(line, a)) return -1;
+        if (a.kind == pisti::LogKind::NextHand) {
+            if (g_.stage() == pisti::Stage::HandOver) return 0;     // the sheet is up: App deals the next hand
+            return g_.stage() == pisti::Stage::MatchOver ? -1 : 1; // (already dealt)
+        }
+        if (!g_.replay(a)) return -1;
+        pumpEngine();
+        return 1;
+    }
     void pumpEngine() override {
         bool dealt = false;
         for (const pisti::GameEvent& e : g_.drainEvents()) {
@@ -307,6 +371,23 @@ protected:
     void botStep(int seat) override {
         int c = bots_[(size_t)seat]->next(g_, seat);
         if (!g_.playCard(seat, c).ok) g_.playCard(seat, pisti::fallbackCard(g_, seat));
+    }
+    size_t decisionStamp() const override { return g_.actionLog().size(); }
+    bool computeHint(Hint& h) override {
+        if (actor() != 0 || !bots_[0]) return false;
+        const int c = bots_[0]->next(g_, 0);
+        if (c < 0) return false;
+        h.card = c;
+        h.text = "İpucu: " + kart::cardAccusativeTR(c) + " oyna";
+        const int pp = g_.wouldPisti(c);
+        if (pp > 0) h.text += " (pişti! +" + std::to_string(pp) + ")";
+        else if (g_.wouldCapture(c)) h.text += " (yerdekileri alır)";
+        return true;
+    }
+    std::array<std::vector<int>, 4> wonPiles() const override {
+        std::array<std::vector<int>, 4> w;
+        for (int s = 0; s < 4; ++s) w[(size_t)s] = g_.capturedCards(s);
+        return w;
     }
     bool extraBusy() const override { return captureAt_ >= 0.f; }
     void layoutExtra() override {

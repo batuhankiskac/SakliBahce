@@ -104,6 +104,25 @@ void uiBeginFrame();
 void uiEndFrame();
 void requestHandCursor();
 
+// ---------------------------------------------------------------- accessibility (Ayarlar: Büyük yazı, Renk körü modu)
+// HUD text scale: 1 normal, 1.25 "Büyük yazı". The table HUDs (Table3D, GameHud) and the speech bubbles read it.
+void setHudTextScale(float s);
+float hudTextScale();
+// Colour-blind mode: tileInk() and the highlights use deuteranopia/protanopia-safe colours and shapes. The tile and
+// card textures follow tilegfx::setColorBlind / cardgfx::setFourColour.
+void setColorBlind(bool on);
+bool colorBlind();
+
+// ---------------------------------------------------------------- keyboard navigation
+// "The keyboard was used last": shows key-help strips and focus rings. A module that acts on a navigation key calls
+// noteKeyboardNav(); updateInputMode(mouse) (each frame, by the games' update) ends it when the mouse moves or clicks.
+bool keyboardNav();
+void noteKeyboardNav();
+void updateInputMode(Vector2 mouse);
+// IsKeyPressed, or held long enough to repeat (arrows).
+bool keyPressedRepeat(int key);
+bool shiftDown();
+
 // ---------------------------------------------------------------- math helpers
 float clamp01(float t);
 float easeOutCubic(float t);

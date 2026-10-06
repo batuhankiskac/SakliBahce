@@ -45,6 +45,9 @@ public:
     // istaka is re-arranged into the groups the AI is going for (series or pairs) whenever tiles come or go.
     void setAiMode(bool on);
     bool consumeAiToggleRequest();          // "Yapay Zeka" button pressed (true once)
+    bool consumeHintRequest();              // "İpucu" button pressed (true once): App answers with showHint
+    // Glows the tiles of the suggested move (rack tiles, the pile, the left discard) until the turn moves on, and says it.
+    void showHint(const std::vector<int>& tiles, bool pile, bool left, const std::string& text);
     // The other games (tavla, the card games) sit at the same table: only the table and its felt are drawn —
     // no istakas, tiles or okey stand.
     void setFurnitureOnly(bool on);

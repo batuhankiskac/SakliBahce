@@ -3,6 +3,7 @@
 #include "core/Tavla.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace tavla {
@@ -404,6 +405,20 @@ std::string diceName(int d1, int d2) {
     return kNames[a][b];
 }
 
+std::string stepNotation(int p, const Step& s) {
+    const std::string from = s.from == BAR ? std::string("bar") : std::to_string(pointNumber(p, s.from));
+    const std::string to = s.to == OFF ? std::string("çıktı") : std::to_string(pointNumber(p, s.to));
+    return from + "/" + to + (s.hit ? "*" : "");
+}
+
+std::string turnNotation(const TurnRecord& t) {
+    if (t.d1 == 0) return t.note;
+    std::string out = diceStr(t.d1, t.d2) + " " + diceName(t.d1, t.d2) + ":";
+    if (t.steps.empty()) return out + " oynayamadı";
+    for (const Step& s : t.steps) out += " " + stepNotation(t.player, s);
+    return out;
+}
+
 int Dice::leftCount() const {
     int c = 0;
     for (int i = 0; i < n; ++i) c += used[i] ? 0 : 1;
@@ -443,6 +458,8 @@ void Game::startMatch(uint64_t seed) {
     turnNumber_ = 0;
     matchWinner_ = -1;
     lastWinner_ = -1;
+    crawfordUsed_ = false;
+    actions_.clear();
     lastResult_ = GameResult();
     GameEvent e;
     e.type = EvType::MatchStart;
@@ -454,6 +471,7 @@ void Game::startMatch(uint64_t seed) {
 
 void Game::startNextGame() {
     if (stage_ != Stage::GameOver) return;
+    logged(ActionResult::success(), ActKind::NextGame, -1);
     ++gameIndex_;
     beginGame();
 }
@@ -466,10 +484,21 @@ void Game::beginGame() {
     openingDice_ = {0, 0};
     turnMax_ = 0;
     forcedDie_ = 0;
+    log_.clear();
+    gameTurn_ = 0;
+    cubeValue_ = 1;
+    cubeOwner_ = -1;
+    // Crawford: the first game after someone reaches matchPoints - 1 is played without the cube
+    crawford_ = false;
+    if (rules_.doubling && !crawfordUsed_ && gameIndex_ > 0 &&
+        (players_[0].score == rules_.matchPoints - 1 || players_[1].score == rules_.matchPoints - 1)) {
+        crawford_ = true;
+        crawfordUsed_ = true;
+    }
     GameEvent e;
     e.type = EvType::GameStart;
     e.amount = gameIndex_;
-    const std::string head = std::to_string(gameIndex_ + 1) + ". oyun";
+    const std::string head = std::to_string(gameIndex_ + 1) + ". oyun" + (crawford_ ? " (Crawford: katlama yok)" : "");
     if (gameIndex_ > 0 && rules_.winnerStarts && lastWinner_ >= 0) {
         const int w = lastWinner_;
         e.player = w;
@@ -509,9 +538,10 @@ void Game::startTurn(int p) {
     turnMax_ = 0;
     forcedDie_ = 0;
     ++turnNumber_;
+    ++gameTurn_;
 }
 
-ActionResult Game::rollOpening() {
+ActionResult Game::rollOpeningImpl() {
     if (stage_ != Stage::OpeningRoll) return ActionResult::fail("Şimdi başlangıç zarı atılmaz");
     const std::pair<int, int> d = throwDice();
     openingDice_ = {d.first, d.second};
@@ -554,10 +584,11 @@ ActionResult Game::rollOpening() {
     return ActionResult::success();
 }
 
-ActionResult Game::roll(int p) {
+ActionResult Game::rollImpl(int p) {
     if (stage_ == Stage::OpeningRoll) return ActionResult::fail("Önce başlangıç zarları atılmalı");
     if (stage_ == Stage::GameOver || stage_ == Stage::MatchOver || stage_ == Stage::NotStarted)
         return ActionResult::fail("Oyun bitti");
+    if (stage_ == Stage::DoubleOffered) return ActionResult::fail("Önce katlamaya cevap verilmeli");
     if (p != current_) return ActionResult::fail("Sıra sende değil");
     if (stage_ != Stage::NeedRoll) return ActionResult::fail("Zarı zaten attın, şimdi pullarını oyna");
     const std::pair<int, int> d = throwDice();
@@ -693,6 +724,8 @@ std::vector<Play> Game::allTurnPlays() const {
     Game tmp = *this;
     tmp.rules_.confirmTurn = true;
     tmp.events_.clear();
+    tmp.actions_.clear();
+    tmp.logActions_ = false;
     std::vector<Step> path;
     SeenSet seen;
     seen.reset();
@@ -706,6 +739,7 @@ ActionResult Game::checkMoving(int p) const {
     if (stage_ == Stage::OpeningRoll) return ActionResult::fail("Önce başlangıç zarları atılmalı");
     if (stage_ == Stage::GameOver || stage_ == Stage::MatchOver || stage_ == Stage::NotStarted)
         return ActionResult::fail("Oyun bitti");
+    if (stage_ == Stage::DoubleOffered) return ActionResult::fail("Önce katlamaya cevap verilmeli");
     if (p != current_) return ActionResult::fail("Sıra sende değil");
     if (stage_ == Stage::NeedRoll) return ActionResult::fail("Önce zar atmalısın");
     return ActionResult::success();
@@ -747,6 +781,11 @@ std::string Game::stepError(int from, int to) const {
 ActionResult Game::applyStep(int p, int from, int to) { return applyStep(p, from, to, 0); }
 
 ActionResult Game::applyStep(int p, int from, int to, int die) {
+    int used = 0;
+    return logged(applyStepImpl(p, from, to, die, used), ActKind::Step, p, from, to, used);
+}
+
+ActionResult Game::applyStepImpl(int p, int from, int to, int die, int& used) {
     const ActionResult chk = checkMoving(p);
     if (!chk.ok) return chk;
     const std::vector<Step> steps = legalSteps();
@@ -765,6 +804,7 @@ ActionResult Game::applyStep(int p, int from, int to, int die) {
         return ActionResult::fail(stepError(from, to));
     }
     const Step s = *pick;
+    used = s.die;
     history_.push_back(Snapshot{pos_, dice_});
     applyRaw(pos_, p, s);
     for (int i = 0; i < dice_.n; ++i) {
@@ -828,6 +868,7 @@ ActionResult Game::applyStep(int p, int from, int to, int die) {
         push(b);
     }
     if (pos_.off[p] == kCheckers) {
+        recordTurn();
         endGame(p);
         return ActionResult::success();
     }
@@ -840,7 +881,7 @@ void Game::afterStep() {
     if (legalSteps().empty()) finishTurn();
 }
 
-ActionResult Game::undoStep(int p) {
+ActionResult Game::undoStepImpl(int p) {
     const ActionResult chk = checkMoving(p);
     if (!chk.ok) return chk;
     if (history_.empty()) return ActionResult::fail("Geri alınacak hamle yok");
@@ -861,7 +902,7 @@ ActionResult Game::undoStep(int p) {
     return ActionResult::success();
 }
 
-ActionResult Game::endTurn(int p) {
+ActionResult Game::endTurnImpl(int p) {
     const ActionResult chk = checkMoving(p);
     if (!chk.ok) return chk;
     if (!legalSteps().empty()) return ActionResult::fail("Daha oynaman gereken zar var");
@@ -878,25 +919,102 @@ void Game::finishTurn() {
     e.amount = next;
     e.text = players_[next].human ? std::string("Sıra sende") : "Sıra " + locative(nameOf(next));
     push(e);
+    recordTurn();
     startTurn(next);
 }
 
-void Game::endGame(int winner) {
+void Game::recordTurn() {
+    TurnRecord t;
+    t.player = current_;
+    t.d1 = dice_.d1;
+    t.d2 = dice_.d2;
+    t.steps = turnSteps_;
+    if (t.d1 > 0) log_.push_back(std::move(t));
+}
+
+bool Game::canDouble(int p) const {
+    return rules_.doubling && stage_ == Stage::NeedRoll && p == current_ && (cubeOwner_ < 0 || cubeOwner_ == p) &&
+           !crawford_ && gameTurn_ >= 2 && cubeValue_ < 64;
+}
+
+ActionResult Game::offerDoubleImpl(int p) {
+    if (!rules_.doubling) return ActionResult::fail("Bu masada katlama yok");
+    if (stage_ == Stage::GameOver || stage_ == Stage::MatchOver || stage_ == Stage::NotStarted)
+        return ActionResult::fail("Oyun bitti");
+    if (stage_ == Stage::OpeningRoll) return ActionResult::fail("Önce başlangıç zarları atılmalı");
+    if (stage_ == Stage::DoubleOffered) return ActionResult::fail("Katlama zaten teklif edildi");
+    if (p != current_) return ActionResult::fail("Sıra sende değil");
+    if (stage_ != Stage::NeedRoll) return ActionResult::fail("Katlama ancak zar atmadan önce teklif edilir");
+    if (crawford_) return ActionResult::fail("Crawford oyununda katlama yapılmaz");
+    if (cubeOwner_ >= 0 && cubeOwner_ != p) return ActionResult::fail("Katlama zarı rakibinde; sadece o katlayabilir");
+    if (gameTurn_ < 2) return ActionResult::fail("İlk hamleden önce katlanmaz");
+    if (cubeValue_ >= 64) return ActionResult::fail("Katlama zarı en yüksek değerde");
+    stage_ = Stage::DoubleOffered;
+    GameEvent e;
+    e.type = EvType::DoubleOffer;
+    e.player = p;
+    e.amount = cubeValue_ * 2;
+    e.text = says(p, "katladı: ", "katladın: ") + std::to_string(cubeValue_ * 2);
+    push(e);
+    TurnRecord t;
+    t.player = p;
+    t.note = "katladı: " + std::to_string(cubeValue_ * 2);
+    log_.push_back(t);
+    return ActionResult::success();
+}
+
+ActionResult Game::acceptDoubleImpl(int p) {
+    if (stage_ != Stage::DoubleOffered) return ActionResult::fail("Cevap verilecek bir katlama yok");
+    if (p != responder()) return ActionResult::fail("Katlamayı sen teklif ettin; cevap rakibinden");
+    cubeValue_ *= 2;
+    cubeOwner_ = p;
+    stage_ = Stage::NeedRoll;
+    GameEvent e;
+    e.type = EvType::DoubleTake;
+    e.player = p;
+    e.amount = cubeValue_;
+    e.text = says(p, "katlamayı kabul etti", "katlamayı kabul ettin");
+    push(e);
+    if (!log_.empty() && log_.back().d1 == 0) log_.back().note += ", kabul";
+    return ActionResult::success();
+}
+
+ActionResult Game::declineDoubleImpl(int p) {
+    if (stage_ != Stage::DoubleOffered) return ActionResult::fail("Cevap verilecek bir katlama yok");
+    if (p != responder()) return ActionResult::fail("Katlamayı sen teklif ettin; cevap rakibinden");
+    GameEvent e;
+    e.type = EvType::DoubleDrop;
+    e.player = p;
+    e.amount = cubeValue_;
+    e.text = says(p, "pes etti", "pes ettin");
+    push(e);
+    if (!log_.empty() && log_.back().d1 == 0) log_.back().note += ", pes";
+    endGame(current_, true);
+    return ActionResult::success();
+}
+
+void Game::endGame(int winner, bool dropped) {
     const int loser = 1 - winner;
     GameResult r;
     r.winner = winner;
     r.gameIndex = gameIndex_;
-    r.mars = pos_.off[loser] == 0;
-    bool inWinnerHome = false;
-    for (int i = homeLo(winner); i < homeLo(winner) + 6; ++i) inWinnerHome = inWinnerHome || ownAt(pos_, loser, i) > 0;
-    r.katmerli = r.mars && (pos_.bar[loser] > 0 || inWinnerHome);
-    r.points = r.mars ? ((r.katmerli && rules_.katmerliMars) ? 3 : 2) : 1;
+    r.cube = cubeValue_;
+    r.dropped = dropped;
+    if (!dropped) {
+        r.mars = pos_.off[loser] == 0;
+        bool inWinnerHome = false;
+        for (int i = homeLo(winner); i < homeLo(winner) + 6; ++i) inWinnerHome = inWinnerHome || ownAt(pos_, loser, i) > 0;
+        r.katmerli = r.mars && (pos_.bar[loser] > 0 || inWinnerHome);
+    }
+    r.base = r.mars ? ((r.katmerli && rules_.katmerliMars) ? 3 : 2) : 1;
+    r.points = r.base * r.cube;
     lastResult_ = r;
     lastWinner_ = winner;
     players_[winner].score += r.points;
     stage_ = Stage::GameOver;
     dice_ = Dice();
     history_.clear();
+    turnSteps_.clear();
 
     GameEvent e;
     e.type = EvType::GameEnd;
@@ -904,9 +1022,14 @@ void Game::endGame(int winner) {
     e.amount = r.points;
     e.mars = r.mars;
     e.katmerli = r.katmerli;
-    const std::string pts = " (+" + std::to_string(r.points) + ")";
+    std::string pts = " (+" + std::to_string(r.points) + ")";
+    if (r.cube > 1)
+        pts = r.base > 1 ? " (" + std::to_string(r.base) + " × " + std::to_string(r.cube) + " = +" + std::to_string(r.points) + ")"
+                         : " (+" + std::to_string(r.points) + ", katlama " + std::to_string(r.cube) + ")";
     const bool sen = players_[winner].human;
-    if (r.mars && r.katmerli)
+    if (dropped)
+        e.text = (sen ? nameOf(loser) + " pes etti, oyunu aldın" : nameOf(winner) + " oyunu aldı") + pts;
+    else if (r.mars && r.katmerli)
         e.text = (sen ? std::string("Katmerli mars ettin!") : nameOf(winner) + " katmerli mars etti!") + pts;
     else if (r.mars)
         e.text = (sen ? std::string("Mars ettin!") : nameOf(winner) + " mars etti!") + pts;
@@ -925,6 +1048,83 @@ void Game::endGame(int winner) {
         m.text = (sen ? std::string("Maçı kazandın!") : "Maçı " + nameOf(winner) + " kazandı") + sc;
         push(m);
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// the action log (save / resume)
+
+ActionResult Game::rollOpening() { return logged(rollOpeningImpl(), ActKind::OpeningRoll, -1); }
+ActionResult Game::roll(int p) { return logged(rollImpl(p), ActKind::Roll, p); }
+ActionResult Game::undoStep(int p) { return logged(undoStepImpl(p), ActKind::Undo, p); }
+ActionResult Game::endTurn(int p) { return logged(endTurnImpl(p), ActKind::EndTurn, p); }
+ActionResult Game::offerDouble(int p) { return logged(offerDoubleImpl(p), ActKind::Double, p); }
+ActionResult Game::acceptDouble(int p) { return logged(acceptDoubleImpl(p), ActKind::Take, p); }
+ActionResult Game::declineDouble(int p) { return logged(declineDoubleImpl(p), ActKind::Drop, p); }
+
+ActionResult Game::logged(ActionResult r, ActKind k, int p, int from, int to, int die) {
+    if (r.ok && logActions_) {
+        LoggedAction a;
+        a.kind = k;
+        a.player = p;
+        a.from = from;
+        a.to = to;
+        a.die = die;
+        actions_.push_back(a);
+    }
+    return r;
+}
+
+bool Game::replay(const LoggedAction& a) {
+    switch (a.kind) {
+    case ActKind::OpeningRoll: return rollOpening().ok;
+    case ActKind::Roll: return roll(a.player).ok;
+    case ActKind::Step: return applyStep(a.player, a.from, a.to, a.die).ok;
+    case ActKind::Undo: return undoStep(a.player).ok;
+    case ActKind::EndTurn: return endTurn(a.player).ok;
+    case ActKind::Double: return offerDouble(a.player).ok;
+    case ActKind::Take: return acceptDouble(a.player).ok;
+    case ActKind::Drop: return declineDouble(a.player).ok;
+    case ActKind::NextGame:
+        if (stage_ != Stage::GameOver) return false;
+        startNextGame();
+        return true;
+    }
+    return false;
+}
+
+std::string LoggedAction::encode() const {
+    std::string s = std::to_string((int)kind) + " " + std::to_string(player);
+    if (kind == ActKind::Step) s += " " + std::to_string(from) + " " + std::to_string(to) + " " + std::to_string(die);
+    return s;
+}
+
+bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
+    out = LoggedAction();
+    std::vector<int> v;
+    size_t i = 0;
+    while (i < line.size()) {
+        while (i < line.size() && line[i] == ' ') ++i;
+        if (i >= line.size()) break;
+        size_t j = i;
+        if (line[j] == '-') ++j;
+        const size_t digits = j;
+        while (j < line.size() && line[j] >= '0' && line[j] <= '9') ++j;
+        if (j == digits || (j < line.size() && line[j] != ' ')) return false;
+        v.push_back(std::atoi(line.substr(i, j - i).c_str()));
+        i = j;
+    }
+    if (v.size() < 2 || v[0] < 0 || v[0] > (int)ActKind::NextGame) return false;
+    out.kind = (ActKind)v[0];
+    out.player = v[1];
+    if (out.kind == ActKind::Step) {
+        if (v.size() != 5) return false;
+        out.from = v[2];
+        out.to = v[3];
+        out.die = v[4];
+    } else if (v.size() != 2) {
+        return false;
+    }
+    return out.player >= -1 && out.player <= 1;
 }
 
 std::vector<GameEvent> Game::drainEvents() {
@@ -951,6 +1151,7 @@ void Game::debugSetTurn(int p, Stage s) {
     turnMax_ = 0;
     forcedDie_ = 0;
     ++turnNumber_;
+    gameTurn_ = std::max(gameTurn_ + 1, 2); // a later turn of the game: doubling is allowed
 }
 
 void Game::debugSetDice(int d1, int d2) {

@@ -7,6 +7,7 @@
 //   RoomCanvas.cpp dynamic canvases (scoreboard, TV football) and the TV match simulation
 //   RoomWeather.cpp rainy nights (drops on the glass, rain outside), passers-by on the street
 //   RoomCat.cpp    the kahvehane cat: procedural rig, naps, walks, jumps onto an empty chair
+//   RoomDaylight.cpp time of day & season: daylight, sun shafts, the stove's season, snow and autumn leaves
 #include "core/Rng.h"
 #include "r3d/Room.h"
 #include "r3d/World.h"
@@ -196,7 +197,9 @@ Texture2D genVarnishTexture(uint32_t seed);   // subtle streaks for varnished be
 // Quarter-sawn boards: fine straight grain along u, faint medullary flecks, gentle colour drift (tileable).
 Texture2D genBoardTexture(int size, Color light, Color dark, uint32_t seed);
 void drawArtAtlas(RenderTexture2D& rt, uint32_t seed);
-void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed);
+// `phase` w3d::DayPhase (0 sabah .. 3 gece), `season` w3d::Season (0 ilkbahar .. 3 kış): the street by day or by
+// night, snow on the roofs and the road in winter, fallen leaves in autumn, flowers on the balconies in spring.
+void drawStreetCanvas(RenderTexture2D& rt, uint32_t seed, int phase = 3, int season = 2);
 void drawLetteringCanvas(RenderTexture2D& rt);
 
 }  // namespace rm
@@ -239,6 +242,7 @@ struct Room::Impl {
         Vector3 anchor{}, bulb{};
         Color color{255, 190, 120, 255};
         float intensity = 1.f, range = 4.f;
+        float power = 1.f;             // 0 switched off (an empty table's lamp by day), eases
         float level = 1.f, dip = 0.f, phase = 0.f, swingAmp = 0.f, faulty = 0.f;
         bool key = false, small = false;
         Matrix xf = MatrixIdentity();  // swing transform (world)
@@ -359,7 +363,8 @@ struct Room::Impl {
     // may still be reading from the last frame stalls the pipeline for a whole frame
     RenderTexture2D cvDrops[2]{};
     int dropsFront = 0;
-    RenderTexture2D cvWalkers{};  // passer-by silhouettes, 4 walk frames per figure (static)
+    RenderTexture2D cvWalkers{};  // passer-by silhouettes, 4 walk frames per figure (redrawn in colour by day)
+    bool walkersDay = false;
     Texture2D texStreak{};        // rain streaks for the upright billboards outside
     Texture2D texDropSprite{};    // one raindrop, stamped onto the drops canvas
     Mat mDrops;
@@ -399,6 +404,41 @@ struct Room::Impl {
     float walkerT = 6.f;
     bool carSoundDone = false;
 
+    // ---- time of day & season (RoomDaylight.cpp)
+    int dayMode = 0, seasonMode = 0;   // ui::Settings modes (0 otomatik)
+    int phase = 3, seasonNow = 2;      // resolved (w3d::DayPhase / w3d::Season)
+    bool lookInit = false;
+    float lookCheckT = 0.f;
+    int streetPhase = -1, streetSeason = -1;  // what the street canvas shows now
+    float dayK = 0.f;      // 0 night .. 1 full daylight (smoothed)
+    float duskK = 0.f;     // evening: low golden light
+    float sunK = 0.f;      // sun shafts through the windows
+    float stoveLit = 1.f;  // the soba burns (winter, cold nights)
+    float fanSpeed = 2.3f; // rad/s
+    float condenseK = 1.f; // mist on the glass
+    Color sunColor{255, 220, 170, 255};
+    float rainSeedU = 0.f, rainSeedI = 0.f;  // tonight's weather from the seed: chance and strength
+    float rainTarget = 0.f, snowTarget = 0.f, snow = 0.f, leafK = 0.f;
+    Mesh sunShaft{}, sunPatch{};       // rebuilt when the sun moves (phase / season)
+    Mat mSunShaft, mSunPatch, mStoveSlot;
+    Mesh stoveSlot{};
+    Vector3 stoveTop{}, kettleSpout{};
+    float kettleAcc = 0.f, stoveSmokeAcc = 0.f;
+    struct Flake {
+        Vector3 p;
+        float speed, sway, phase, size;
+        int kind;  // snow: sprite variant; leaves: colour index
+    };
+    std::vector<Flake> flakes, leaves;
+    Texture2D texFlake{}, texLeaf{};
+    void initDaylight();
+    void evalLook(bool force);
+    void updateDaylight(float dt);
+    void buildSun();
+    void submitDaylight(Renderer& r);
+    void freeDaylight(Renderer& r);
+    void placeFlake(Flake& f, okey::Rng& rng, bool anywhereY, bool leaf);
+
     // ---- the kahvehane cat (RoomCat.cpp)
     rm::Cat* cat = nullptr;
     int catChair = -1;  // the chair the cat is on: the chair-scrape animation leaves it alone
@@ -418,6 +458,7 @@ struct Room::Impl {
     void simDrops(DropSlot& s, float dt);
     void placeStreak(Streak& s, okey::Rng& rng, bool anywhereY);
     void drawDrops();
+    void refreshWalkers();  // the passer-by atlas follows day / night
 
     // RoomBuild.cpp
     void planWalls();

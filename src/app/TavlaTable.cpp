@@ -9,6 +9,7 @@
 #include "r3d/World.h"
 
 #include <algorithm>
+#include <cstdio> // DBGREPLAY
 #include <memory>
 
 namespace app {
@@ -26,6 +27,16 @@ const char* const kWatchHit[3][2] = {
     {"Bizim zamanımızda böyle açık bırakılmazdı.", "Hıh, açık pul gördü mü vurur."},
 };
 const char* const kMarsLines[] = {"Mars! Çift yazın!", "Bu mars tarihe geçer!", "Mars oldun, çaylar senden!"};
+const char* const kMarsLost[] = {"Mars mı? Bu zarlarla kim olsa olurdu!", "Hakem, maç satılmış!", "Bir daha, bir daha!"};
+const char* const kWatchMars[] = {"Vay vay vay, mars! Ellerine sağlık.", "Mars yediyse çayları o ısmarlar, adet böyle."};
+const char* const kMahmutOffer[] = {"Katlıyorum! Yürek var mı?", "Hadi bakalım, iki katı!", "Katladım, korkan kaçsın!"};
+const char* const kMahmutTake[] = {"Alırım! Mahmut kaçmaz!", "Kabul, oyun daha bitmedi!", "Korkmam, at zarını!"};
+const char* const kMahmutDrop[] = {"Tamam tamam, bu el senin.", "Pes, ama rövanş var!", "Bu oyunu verdim, maçı vermem."};
+const char* const kMahmutSeesDrop[] = {"Kaçtın ha! Bilirdim.", "Pes etti! Tribünler ayakta!"};
+const char* const kMahmutSeesTake[] = {"Aldın ha? Pişman olacaksın!", "Cesaretine hayran kaldım abi."};
+
+// The buttons of the column, whatever order they are shown in this frame.
+enum Btn { B_DOUBLE, B_ROLL, B_UNDO, B_HINT, B_HISTORY };
 
 class TavlaTable final : public TableGame {
 public:
@@ -41,6 +52,8 @@ public:
     void startMatch(const ui::Settings& st, const std::array<std::string, 4>& names, uint64_t seed) override {
         tavla::Rules r;
         r.matchPoints = std::clamp(st.tavlaPoints, 1, 15);
+        r.doubling = st.tavlaDoubling;
+        r.katmerliMars = st.tavlaKatmerli;
         g_ = tavla::Game(r);
         names_ = names;
         g_.setPlayer(0, names[0], true);
@@ -48,10 +61,15 @@ public:
         bots_[0] = std::make_unique<tavla::Bot>(tavla::BotLevel::Hard, seed * 2 + 0x7A1ull);
         bots_[1] = std::make_unique<tavla::Bot>((tavla::BotLevel)std::clamp(level_, 0, 2), seed * 2 + 0x7A2ull);
         rng_.reseed(seed ^ 0x7A7Aull);
+        replay_ = false;
         hud_.clearToasts();
+        hud_.clearBanner();
         results_.clear();
         selected_ = -1;
+        marsWarned_ = false;
+        hint_ = Hint();
         board_.hideDice();
+        board_.setCube(false, 1, -1, 0);
         g_.startMatch(seed);
         syncBoard(true);
         pump();
@@ -67,6 +85,10 @@ public:
 
     void update(float dt, const Camera3D& cam, Vector2 mouse, bool humanInput, bool aiSeat) override {
         (void)cam;
+        if (replay_) { // maç tekrarı: our seat plays its saved moves like a bot's, nobody takes input
+            humanInput = false;
+            aiSeat = true;
+        }
         aiSeat_ = aiSeat;
         now_ += dt;
         hud_.update(dt);
@@ -80,14 +102,33 @@ public:
                 ++i;
             }
         }
+        ui::updateInputMode(mouse);
+        const bool hudKeys = hud_.keyboard(humanInput);
         for (const r3d::GameHud::Click& c : hud_.takeClicks()) {
-            if (c.id == r3d::GameHud::AI_ID) aiReq_ = true;
+            if (c.id == r3d::GameHud::AI_ID) aiReq_ = aiReq_ || !replay_;
             else if (c.id == r3d::GameHud::MENU_ID) menuReq_ = true;
-            else if (humanInput && !aiSeat) onButton(c.id);
+            else if (c.id >= 0 && c.id < (int)btnIds_.size() && btnIds_[(size_t)c.id] == B_HISTORY) histOpen_ = !histOpen_;
+            else if (c.id == r3d::GameHud::PANEL_ID && humanInput && !aiSeat) answerDouble(true);
+            else if (c.id == r3d::GameHud::PANEL_ID + 1 && humanInput && !aiSeat) answerDouble(false);
+            else if (humanInput && !aiSeat && c.id >= 0 && c.id < (int)btnIds_.size()) onButton(btnIds_[(size_t)c.id]);
         }
         const bool myMove = humanInput && !aiSeat && humanToAct();
-        if (myMove && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER)) && canRoll()) roll();
-        if (myMove && IsKeyPressed(KEY_BACKSPACE) && g_.canUndo() && g_.current() == 0) undo();
+        const bool enter = IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
+        if (myMove && !hudKeys && (enter || IsKeyPressed(KEY_R)) && canRoll()) {
+            ui::noteKeyboardNav();
+            roll();
+        } else if (myMove && !hudKeys) {
+            keyboardMove(enter);
+        }
+        if (myMove && (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressed(KEY_U)) && g_.canUndo() && g_.current() == 0) {
+            ui::noteKeyboardNav();
+            undo();
+        }
+        if (myMove && IsKeyPressed(KEY_K) && canOfferDouble()) {
+            ui::noteKeyboardNav();
+            onButton(B_DOUBLE);
+        }
+        if (myMove && IsKeyPressed(KEY_H) && canHint()) showHint();
         // pointing at the board
         hover_ = -1;
         if (humanInput && !aiSeat && ctx_.renderer && !hud_.mouseOverHud()) {
@@ -98,14 +139,16 @@ public:
             }
         }
         // bots (Mahmut, and our seat in the Yapay Zeka mode)
-        if (!board_.animating() && !over()) {
+        if (!replay_ && !board_.animating() && !over()) {
             const int p = actorPlayer();
             if (p >= 0 && (p == 1 || aiSeat)) {
                 if (botPlayer_ != p || botTurn_ != g_.turnNumber() || botStage_ != (int)g_.stage()) {
                     botPlayer_ = p;
                     botTurn_ = g_.turnNumber();
                     botStage_ = (int)g_.stage();
-                    botWait_ = (g_.stage() == tavla::Stage::Moving ? (g_.turnSteps().empty() ? 0.7f : 0.45f) : 0.8f) / speed_;
+                    botWait_ = (g_.stage() == tavla::Stage::Moving ? (g_.turnSteps().empty() ? 0.7f : 0.45f)
+                                : g_.stage() == tavla::Stage::DoubleOffered ? 1.4f // thinking it over
+                                                                            : 0.8f) / speed_;
                 }
                 botWait_ -= dt;
                 if (botWait_ <= 0.f) {
@@ -133,15 +176,44 @@ public:
         } else {
             selected_ = -1;
         }
-        board_.setHighlights(targets, sources, selected_);
+        // an İpucu: the first step of Kurt's play lit while nothing else is chosen (until the board changes)
+        if (hint_.from != -2 && (hint_.turn != g_.turnNumber() || hint_.steps != (int)g_.turnSteps().size() ||
+                                 g_.stage() != tavla::Stage::Moving))
+            hint_ = Hint();
+        if (hint_.from != -2 && selected_ < 0 && humanToAct() && !aiSeat) {
+            board_.setHighlights({hint_.to}, {hint_.from}, hint_.from);
+        } else {
+            board_.setHighlights(targets, sources, selected_);
+        }
+        if (std::find(targets.begin(), targets.end(), kbTarget_) == targets.end()) kbTarget_ = targets.empty() ? -1 : targets[0];
+        board_.setKeyFocus(ui::keyboardNav() && selected_ >= 0 ? kbTarget_ : -1);
         const tavla::Dice& d = g_.dice();
         if (d.n > 0) board_.setDiceUsed(d.used, d.n, d.isDouble());
+        syncCube();
+        { static bool dbgDone = false; // DBGREPLAY
+          if (matchOver() && !dbgDone) { dbgDone = true; std::string t; for (auto& l : scoreLines()) t += l + " | "; std::fprintf(stderr, "[dbg] final%s: %s (%zu actions)\n", replay_ ? " (replay)" : "", t.c_str(), g_.actionLog().size()); } }
+        // the mars threat, said once per game when it begins
+        const int mt = marsThreat();
+        if (mt >= 0 && !marsWarned_) {
+            marsWarned_ = true;
+            hud_.toast(mt == 0 ? "Mars tehlikesi! Bir pul toplamadan bitirirse mars olursun" : names_[OPP_SEAT] + " mars tehlikesinde!",
+                       mt == 0 ? ui::pal::Bad : ui::pal::Highlight, 3.f);
+            if (mt == 1) say(OPP_SEAT, "Dur dur, bir pul toplayayım da mars olmayayım!");
+            else if (rng_.chance(0.5f)) say(rng_.chance(0.5f) ? 1 : 3, "Aman ha, mars kapıda!");
+        }
     }
 
     void submit(r3d::Renderer& r) override { board_.submit(r); }
+    // DBGREPLAY
+
 
     void drawHUD(const r3d::Renderer& r, Vector2 mouse, bool aiSeat) override {
         hud_.beginFrame();
+        const bool aiTag = aiSeat && !replay_; // (the "Yapay Zeka" look; in a replay our seat is just its player)
+        const bool sen = replay_ && names_[0] == "Sen"; // (the default name: "Sıra sende", not "Sen oynuyor")
+        const std::string me = replay_ ? names_[0] : std::string("Yapay zeka");
+        aiSeat = aiSeat || replay_;            // no decisions of the player's here
+        const bool cube = g_.rules().doubling;
         std::array<Vector3, 4> heads{};
         std::array<r3d::GameHud::Plate, 4> plates{};
         for (int s = 1; s < 4; ++s) heads[(size_t)s] = ctx_.characters ? ctx_.characters->headPosition(s) : Vector3{};
@@ -152,6 +224,7 @@ public:
         p.value = std::to_string(g_.score(1));
         p.turn = g_.current() == 1 && !over();
         if (hints_ && g_.stage() != tavla::Stage::NotStarted) p.badges.push_back({"Pip " + std::to_string(g_.pipCount(1)), Color{70, 60, 50, 255}});
+        if (cube && g_.cubeOwner() == 1) p.badges.push_back({"Katlama " + std::to_string(g_.cubeValue()), Color{96, 52, 120, 255}});
         if (g_.barCount(1) > 0) p.badges.push_back({"Kırık " + std::to_string(g_.barCount(1)), Color{168, 42, 34, 255}});
         if (g_.offCount(1) > 0) p.badges.push_back({"Toplanan " + std::to_string(g_.offCount(1)), Color{52, 110, 64, 255}});
         hud_.plates(r, heads, plates);
@@ -164,10 +237,17 @@ public:
         else if (g_.stage() == tavla::Stage::OpeningRoll) {
             st = aiSeat ? "Başlangıç zarı atılıyor…" : "Kim başlayacak? Zarı at";
             sc = ui::pal::Highlight;
-        } else if (g_.current() == 0 && aiSeat) st = "Yapay zeka oynuyor…";
+        } else if (g_.stage() == tavla::Stage::DoubleOffered) {
+            if (g_.responder() == 1) st = names_[OPP_SEAT] + " düşünüyor…";
+            else if (aiSeat) st = sen ? std::string("Katlama sende") : me + " katlamayı düşünüyor…";
+            else {
+                st = "Katlamayı kabul ediyor musun?";
+                sc = ui::pal::Highlight;
+            }
+        } else if (g_.current() == 0 && aiSeat) st = sen ? std::string("Sıra sende") : me + (g_.stage() == tavla::Stage::NeedRoll ? " zarını atıyor…" : " oynuyor…");
         else if (g_.current() == 0) {
             sc = ui::pal::Highlight;
-            if (g_.stage() == tavla::Stage::NeedRoll) st = "Sıra sende: zarı at";
+            if (g_.stage() == tavla::Stage::NeedRoll) st = g_.canDouble(0) ? "Sıra sende: zarı at ya da katla" : "Sıra sende: zarı at";
             else {
                 std::string left;
                 for (int v : d.left()) left += (left.empty() ? "" : "-") + std::to_string(v);
@@ -178,18 +258,90 @@ public:
             st = names_[OPP_SEAT] + (g_.stage() == tavla::Stage::NeedRoll ? " zarını atıyor…" : " oynuyor…");
         }
         std::vector<std::pair<std::string, Color>> parts;
+        const Color sep{226, 216, 196, 120};
+        const int mt = marsThreat();
+        if (mt >= 0) {
+            parts.push_back({"Mars tehlikesi!", mt == 0 ? Color{240, 96, 80, 255} : Color{246, 200, 90, 255}});
+            parts.push_back({"  \xC2\xB7  ", sep});
+        }
         if (hints_ && g_.stage() != tavla::Stage::NotStarted && g_.stage() != tavla::Stage::OpeningRoll) {
             parts.push_back({"Pip " + std::to_string(g_.pipCount(0)) + " / " + std::to_string(g_.pipCount(1)), Color{226, 216, 196, 255}});
-            parts.push_back({"  \xC2\xB7  ", Color{226, 216, 196, 120}});
+            parts.push_back({"  \xC2\xB7  ", sep});
+        }
+        if (cube && g_.stage() != tavla::Stage::NotStarted) {
+            std::string c = "Katlama " + std::to_string(g_.cubeValue());
+            if (g_.crawfordGame()) c = "Crawford: katlama yok";
+            else if (g_.cubeOwner() == 0) c += " (sende)";
+            else if (g_.cubeOwner() == 1) c += " (" + names_[OPP_SEAT] + ")";
+            else c += " (ortada)";
+            parts.push_back({c, Color{206, 176, 232, 255}});
+            parts.push_back({"  \xC2\xB7  ", sep});
         }
         parts.push_back({"Sayı " + std::to_string(g_.score(0)) + " - " + std::to_string(g_.score(1)) + " (" +
                              std::to_string(g_.matchPoints()) + "'e)",
                          Color{238, 198, 112, 255}});
-        hud_.status(st, sc, humanToAct() && !aiSeat, parts, aiSeat);
+        hud_.status(st, sc, humanToAct() && !aiSeat, parts, aiTag);
+
+        // the button column: Katla (only while the player may double), Zar At, Geri Al, Hamleler
         const bool canR = !aiSeat && canRoll();
         const bool canU = !aiSeat && g_.canUndo() && g_.current() == 0;
-        hud_.buttons(mouse, {"Zar At", "Geri Al"}, {canR, canU}, {canR, false}, aiSeat);
+        const bool canD = !aiSeat && canOfferDouble();
+        std::vector<std::string> labels;
+        std::vector<bool> en, glow;
+        btnIds_.clear();
+        auto add = [&](int id, const char* label, bool e, bool gl) {
+            btnIds_.push_back(id);
+            labels.push_back(label);
+            en.push_back(e);
+            glow.push_back(gl);
+        };
+        if (canD) add(B_DOUBLE, "Katla", true, false);
+        add(B_ROLL, "Zar At", canR, canR);
+        add(B_UNDO, "Geri Al", canU, false);
+        add(B_HINT, "\xC4\xB0pucu", !aiSeat && canHint(), false);
+        add(B_HISTORY, "Hamleler", true, false);
+        hud_.buttons(mouse, labels, en, glow, aiTag);
+
+        // Mahmut's offer waits for the player's answer
+        if (g_.stage() == tavla::Stage::DoubleOffered && g_.responder() == 0 && !aiSeat && !board_.animating()) {
+            const int v = g_.cubeValue();
+            std::vector<r3d::GameHud::PanelButton> b(2);
+            b[0].label = "Kabul Et";
+            b[0].hint = "oyun " + std::to_string(2 * v) + " katına";
+            b[1].label = "Pes Et";
+            b[1].hint = names_[OPP_SEAT] + "'a " + std::to_string(v) + " sayı";
+            hud_.panel(mouse, names_[OPP_SEAT] + " katlamak istiyor (" + std::to_string(v) + " \xC2\xBB " + std::to_string(2 * v) + ")",
+                       "Kabul edersen katlama zarı senin olur, pes edersen oyun biter", b, 2, 190.f, 150.f);
+        }
+        if (histOpen_) hud_.listPanel(mouse, "Hamleler \xC2\xB7 " + std::to_string(g_.gameIndex() + 1) + ". oyun", historyLines(aiTag));
+        {
+            std::string help = "Tab düğmeler  ·  Y yapay zeka  ·  Esc menü";
+            if (replay_) help = "Maç tekrarı  ·  Esc menü";
+            else if (hud_.buttonFocused()) help = "Tab / Shift+Tab düğme seç  ·  Enter / Boşluk bas  ·  Oklar tahtaya dön  ·  Esc menü";
+            else if (hud_.panelShown()) help = "Sol / Sağ seç  ·  Enter / Boşluk onayla  ·  H ipucu  ·  Esc menü";
+            else if (!aiSeat && humanToAct() && canRoll())
+                help = std::string("R / Enter zar at") + (canD ? "  ·  K katla" : "") + "  ·  H ipucu  ·  1-" +
+                       std::to_string(labels.size()) + " düğmeler  ·  Esc menü";
+            else if (!aiSeat && humanToAct() && g_.stage() == tavla::Stage::Moving)
+                help = "Sol / Sağ pul seç  ·  Yukarı / Aşağı nereye  ·  Enter / Boşluk oyna  ·  U / Geri tuşu geri al  ·  H ipucu  ·  Esc menü";
+            hud_.keyHelp(help);
+        }
         hud_.toasts();
+        // (tools/tables_check takes a picture of each of these once)
+        phase_.clear();
+        if (!board_.animating() && ui::keyboardNav() && !aiSeat && humanToAct() && g_.stage() == tavla::Stage::Moving &&
+            selected_ >= 0)
+            phase_ = "klavye_hamle";
+        else if (!board_.animating()) {
+            if (g_.stage() == tavla::Stage::DoubleOffered && g_.responder() == 0) phase_ = "teklif";
+            else if (g_.stage() == tavla::Stage::DoubleOffered) phase_ = "katladin";
+            else if (g_.lastResult().mars && over()) phase_ = "mars";
+            else if (marsThreat() >= 0) phase_ = "mars_tehlikesi";
+            else if (canD) phase_ = "katla";
+            else if (cube && g_.cubeOwner() >= 0 && g_.cubeValue() >= 4) phase_ = "kup4";
+            else if (cube && g_.cubeOwner() >= 0) phase_ = g_.cubeOwner() == 0 ? "kup_sende" : "kup_mahmut";
+            else if (histOpen_ && g_.gameLog().size() >= 12) phase_ = "hamleler";
+        }
     }
 
     bool handOver() const override { return over(); }
@@ -219,13 +371,101 @@ public:
     }
     void toast(const std::string& text, Color c, float seconds) override { hud_.toast(text, c, seconds); }
     std::string lastLogLine() const override { return log_; }
+
+    // ---- save / resume: the engine's action log, one line each ----
+    bool saveState(std::vector<std::string>& lines) const override {
+        if (g_.stage() == tavla::Stage::NotStarted) return false;
+        lines.clear();
+        for (const tavla::LoggedAction& a : g_.actionLog()) lines.push_back(a.encode());
+        return true;
+    }
+    // Right after startMatch with the saved seed: every action again, nothing animated, the board snapped there.
+    bool restoreState(const std::vector<std::string>& lines) override {
+        for (const std::string& line : lines) {
+            tavla::LoggedAction a;
+            if (!tavla::LoggedAction::decode(line, a) || !g_.replay(a)) return false;
+            for (const tavla::GameEvent& e : g_.drainEvents()) {
+                if (e.type == tavla::EvType::GameEnd) {
+                    results_.push_back(g_.lastResult());
+                    log_ = e.text + " | " + std::to_string(g_.score(0)) + "-" + std::to_string(g_.score(1));
+                }
+            }
+        }
+        for (auto& b : bots_)
+            if (b) b->resetForGame();
+        hud_.clearToasts();
+        hud_.clearBanner();
+        sfxAt_.clear();
+        selected_ = -1;
+        hint_ = Hint();
+        marsWarned_ = marsThreat() >= 0;
+        botStage_ = -1;
+        syncBoard(true);
+        const tavla::Dice& d = g_.dice();
+        if (d.n > 0) {
+            board_.placeDice(g_.current(), d.d1, d.d2);
+            board_.setDiceUsed(d.used, d.n, d.isDouble());
+        } else {
+            board_.hideDice();
+        }
+        board_.setCube(false, 1, -1, 0);
+        syncCube(); // (appears in place)
+        hud_.toast(std::to_string(g_.gameIndex() + 1) + ". oyundan devam: sayı " + std::to_string(g_.score(0)) + " - " +
+                       std::to_string(g_.score(1)),
+                   ui::pal::Highlight, 3.f);
+        return true;
+    }
+    // ---- maç tekrarı: the saved lines one by one, each with its usual animation (dice show the logged roll) ----
+    bool setReplayMode(bool on) override {
+        replay_ = on;
+        if (on) aiSeat_ = true;
+        selected_ = hover_ = kbTarget_ = -1;
+        hint_ = Hint();
+        botStage_ = -1;
+        return true;
+    }
+    int replayStep(const std::string& line) override {
+        if (!replay_) return -1;
+        tavla::LoggedAction a;
+        if (!tavla::LoggedAction::decode(line, a)) return -1;
+        if (a.kind == tavla::ActKind::NextGame) {
+            if (g_.stage() == tavla::Stage::GameOver) return 0;     // the sheet is up: App starts the next game
+            return g_.stage() == tavla::Stage::MatchOver ? -1 : 1; // (already started)
+        }
+        if (board_.animating()) return 0;
+        if (!g_.replay(a)) return -1;
+        pump();
+        return 1;
+    }
+    bool humanHandScore(int& score) const override {
+        if (!over() || g_.lastResult().winner != 0) return false;
+        score = g_.lastResult().points;
+        return true;
+    }
     bool debugHumanClick(const r3d::Renderer& r, Vector2& out) const override {
         if (board_.animating() || !humanToAct()) return false;
-        if (canRoll()) {
+        auto button = [&](int id) {
             const std::vector<Rectangle>& b = hud_.buttonRects();
-            if (b.empty()) return false;
-            out = {b[0].x + b[0].width * 0.5f, b[0].y + b[0].height * 0.5f};
+            for (size_t i = 0; i < btnIds_.size() && i < b.size(); ++i)
+                if (btnIds_[i] == id) {
+                    out = {b[i].x + b[i].width * 0.5f, b[i].y + b[i].height * 0.5f};
+                    return true;
+                }
+            return false;
+        };
+        // Mahmut's offer: take it unless far behind in the race
+        if (g_.stage() == tavla::Stage::DoubleOffered) {
+            const std::vector<Rectangle>& pr = hud_.panelRects();
+            if (pr.size() < 2) return false;
+            const Rectangle& b = pr[g_.pipCount(0) - g_.pipCount(1) > 40 ? 1 : 0];
+            out = {b.x + b.width * 0.5f, b.y + b.height * 0.5f};
             return true;
+        }
+        if (canRoll()) {
+            // once in a while look at the moves (the list stays open), double when well ahead, else roll
+            if (!histOpen_ && g_.turnNumber() >= 8 && g_.stage() == tavla::Stage::NeedRoll && button(B_HISTORY)) return true;
+            if (canOfferDouble() && g_.pipCount(1) - g_.pipCount(0) >= 12 && button(B_DOUBLE)) return true;
+            return button(B_ROLL);
         }
         if (g_.stage() != tavla::Stage::Moving || g_.current() != 0) return false;
         const std::vector<tavla::Step> steps = g_.legalSteps();
@@ -249,6 +489,8 @@ public:
         return r.projectToVirtual(w, out);
     }
 
+    std::string debugPhase() const override { return phase_; }
+
     std::string scoreTitle() const override {
         if (g_.stage() == tavla::Stage::NotStarted) return "";
         return "Tavla \xC2\xB7 " + std::to_string(g_.matchPoints()) + " sayı";
@@ -267,19 +509,25 @@ public:
         if (!results_.empty()) {
             const tavla::GameResult& r = results_.back();
             const std::string w = r.winner == 0 ? (aiMode ? std::string("Yapay zeka") : std::string("Sen")) : names_[OPP_SEAT];
-            m.headline = r.winner == 0 && !aiMode ? std::string(r.mars ? "Mars yaptın!" : "Oyunu aldın!")
-                                                  : w + (r.mars ? " mars yaptı!" : " oyunu aldı.");
-            m.tagline = r.mars ? "mars: " + std::to_string(r.points) + " sayı" : "1 sayı";
+            const bool sen = r.winner == 0 && !aiMode;
+            if (r.dropped) m.headline = r.winner == 0 ? names_[OPP_SEAT] + " pes etti, oyun " + (aiMode ? std::string("yapay zekanın!") : std::string("senin!"))
+                                                      : (aiMode ? std::string("Yapay zeka pes etti.") : std::string("Pes ettin, oyun Mahmut'un."));
+            else if (r.mars) m.headline = sen ? std::string(r.katmerli ? "Katmerli mars yaptın!" : "Mars yaptın!")
+                                              : w + (r.katmerli ? " katmerli mars yaptı!" : " mars yaptı!");
+            else m.headline = sen ? std::string("Oyunu aldın!") : w + " oyunu aldı.";
+            m.tagline = resultText(r);
             m.taglineRed = r.mars;
             m.starCol = r.winner;
             m.rowLabels = {"Sonuç", "Bu oyun"};
-            m.cells = {{r.winner == 0 ? (r.mars ? "Mars!" : "Kazandı") : "", r.winner == 1 ? (r.mars ? "Mars!" : "Kazandı") : ""},
+            const std::string won = r.mars ? (r.katmerli ? "Katmerli mars!" : "Mars!") : "Kazandı";
+            const std::string lost = r.dropped ? "Pes etti" : "";
+            m.cells = {{r.winner == 0 ? won : lost, r.winner == 1 ? won : lost},
                        {r.winner == 0 ? "+" + std::to_string(r.points) : "", r.winner == 1 ? "+" + std::to_string(r.points) : ""}};
-            m.red = {{r.mars && r.winner == 0, r.mars && r.winner == 1}, {false, false}};
+            m.red = {{r.mars && r.winner == 0, r.mars && r.winner == 1}, {r.mars && r.winner == 0, r.mars && r.winner == 1}};
         }
         for (size_t i = 0; i < results_.size(); ++i) {
             const tavla::GameResult& r = results_[i];
-            m.historyLabels.push_back(std::to_string(i + 1) + ". oyun" + (r.mars ? " (mars)" : ""));
+            m.historyLabels.push_back(std::to_string(i + 1) + ". oyun" + (r.mars || r.dropped || r.cube > 1 ? ": " + resultText(r) : ""));
             m.history.push_back({r.winner == 0 ? "+" + std::to_string(r.points) : "", r.winner == 1 ? "+" + std::to_string(r.points) : ""});
         }
         m.totalLabel = "Sayı";
@@ -311,10 +559,112 @@ public:
     }
 
 private:
+    // "Mars (2 sayı)", "Mars ×4 = 8 sayı", "Katlama ×2 = 2 sayı", "Pes etti, 4 sayı", "1 sayı"
+    static std::string resultText(const tavla::GameResult& r) {
+        const std::string pts = std::to_string(r.points) + " sayı";
+        const std::string x = " \xC3\x97" + std::to_string(r.cube) + " = ";
+        if (r.dropped) return "Pes etti, " + pts;
+        if (r.mars) {
+            const std::string what = r.katmerli ? "Katmerli mars" : "Mars";
+            return r.cube > 1 ? what + x + pts : what + " (" + pts + ")";
+        }
+        return r.cube > 1 ? "Katlama" + x + pts : pts;
+    }
+    // The player threatened with a mars (nothing borne off while the other is bearing off), -1 none.
+    int marsThreat() const {
+        if (over() || g_.stage() == tavla::Stage::NotStarted || g_.stage() == tavla::Stage::OpeningRoll) return -1;
+        for (int l = 0; l < 2; ++l)
+            if (g_.offCount(l) == 0 && g_.offCount(1 - l) > 0) return l;
+        return -1;
+    }
+    bool canOfferDouble() const { return !board_.animating() && g_.canDouble(0); }
+
+    // ---- İpucu: what Kurt would do in the player's place ----
+    struct Hint {
+        int from = -2, to = -2; // the first step of the suggested play (-2: none shown)
+        int turn = -1, steps = -1;
+    };
+    bool canHint() const {
+        if (board_.animating() || !humanToAct()) return false;
+        switch (g_.stage()) {
+        case tavla::Stage::NeedRoll: return g_.current() == 0;
+        case tavla::Stage::Moving: return g_.current() == 0 && !g_.legalSteps().empty();
+        case tavla::Stage::DoubleOffered: return g_.responder() == 0;
+        default: return false;
+        }
+    }
+    void showHint() {
+        tavla::Bot kurt(tavla::BotLevel::Hard, 0x1B0CEull);
+        std::string text;
+        if (g_.stage() == tavla::Stage::DoubleOffered) {
+            text = kurt.next(g_, 0).kind == tavla::BotAction::Kind::Take ? "kabul et" : "pes et";
+        } else if (g_.stage() == tavla::Stage::NeedRoll) {
+            text = kurt.next(g_, 0).kind == tavla::BotAction::Kind::Double ? "katla" : "zarı at";
+        } else {
+            // the whole play for these dice, played out on a copy
+            tavla::Game t = g_;
+            std::vector<tavla::Step> play;
+            for (int guard = 0; guard < 8 && t.stage() == tavla::Stage::Moving && t.current() == 0; ++guard) {
+                const tavla::BotAction a = kurt.next(t, 0);
+                if (a.kind != tavla::BotAction::Kind::Step) break;
+                const std::vector<tavla::Step> legal = t.legalSteps();
+                tavla::Step st{a.from, a.to, a.die, false};
+                for (const tavla::Step& l : legal)
+                    if (l.from == a.from && l.to == a.to && l.die == a.die) st = l;
+                if (!t.applyStep(0, a.from, a.to, a.die).ok) break;
+                play.push_back(st);
+            }
+            for (const tavla::Step& st : play) text += (text.empty() ? "" : " ") + tavla::stepNotation(0, st);
+            if (!play.empty()) {
+                hint_.from = play[0].from;
+                hint_.to = play[0].to;
+                hint_.turn = g_.turnNumber();
+                hint_.steps = (int)g_.turnSteps().size();
+                selected_ = -1;
+            }
+        }
+        if (text.empty()) return;
+        hud_.toast("\xC4\xB0pucu: " + text, Color{150, 220, 160, 255}, 4.f);
+        sound(ui::Sfx::Button);
+    }
+    void syncCube() {
+        board_.setCube(g_.rules().doubling, g_.cubeValue(), g_.cubeOwner(),
+                       g_.stage() == tavla::Stage::DoubleOffered ? 2 * g_.cubeValue() : 0);
+    }
+    void answerDouble(bool take) {
+        if (g_.responder() != 0 || board_.animating()) return;
+        const tavla::ActionResult r = take ? g_.acceptDouble(0) : g_.declineDouble(0);
+        if (!r.ok) hud_.toast(r.error, ui::pal::Bad, 2.4f);
+        pump();
+    }
+    // The move list: numbered lines, "Sen 6-5 şeşbeş: 24/18 18/13*", the turn in progress last.
+    std::vector<std::pair<std::string, Color>> historyLines(bool aiSeat) const {
+        std::vector<std::pair<std::string, Color>> out;
+        const Color mine{255, 204, 92, 255}, his{206, 198, 182, 225}; // the player's lines tinted gold
+        auto who = [&](int p) { return p == 0 ? (aiSeat ? std::string("Yapay zeka") : names_[0]) : names_[OPP_SEAT]; };
+        int n = 0;
+        auto line = [&](const tavla::TurnRecord& t) {
+            out.push_back({std::to_string(++n) + ". " + who(t.player) + "  " + tavla::turnNotation(t), t.player == 0 ? mine : his});
+        };
+        for (const tavla::TurnRecord& t : g_.gameLog()) line(t);
+        if (g_.stage() == tavla::Stage::Moving && g_.dice().n > 0) {
+            tavla::TurnRecord t;
+            t.player = g_.current();
+            t.d1 = g_.dice().d1;
+            t.d2 = g_.dice().d2;
+            t.steps = g_.turnSteps();
+            line(t);
+            if (t.steps.empty()) out.back().first = std::to_string(n) + ". " + who(t.player) + "  " +
+                                                    std::to_string(std::max(t.d1, t.d2)) + "-" + std::to_string(std::min(t.d1, t.d2)) +
+                                                    " " + tavla::diceName(t.d1, t.d2) + ": …";
+        }
+        return out;
+    }
     bool over() const { return g_.stage() == tavla::Stage::GameOver || g_.stage() == tavla::Stage::MatchOver; }
     int actorPlayer() const {
         switch (g_.stage()) {
         case tavla::Stage::OpeningRoll: return 0; // the player throws the opening dice (the AI in the Yapay Zeka mode)
+        case tavla::Stage::DoubleOffered: return g_.responder();
         case tavla::Stage::NeedRoll:
         case tavla::Stage::Moving: return g_.current();
         default: return -1;
@@ -337,8 +687,78 @@ private:
         pump();
     }
     void onButton(int id) {
-        if (id == 0 && canRoll()) roll();
-        else if (id == 1 && g_.canUndo() && g_.current() == 0) undo();
+        if (id == B_ROLL && canRoll()) roll();
+        else if (id == B_UNDO && g_.canUndo() && g_.current() == 0) undo();
+        else if (id == B_HINT && canHint()) showHint();
+        else if (id == B_DOUBLE && canOfferDouble()) {
+            const tavla::ActionResult r = g_.offerDouble(0);
+            if (!r.ok) hud_.toast(r.error, ui::pal::Bad, 2.4f);
+            pump();
+        }
+    }
+    // The keyboard on the board: ←/→ choose among the points with a playable checker (left to right as the player sees
+    // the board), ↑/↓ among the places the chosen one can go, Enter / Space plays it. The first key only shows the cursor.
+    void keyboardMove(bool enter) {
+        if (g_.stage() != tavla::Stage::Moving || g_.current() != 0 || board_.animating()) return;
+        const std::vector<tavla::Step> steps = g_.legalSteps();
+        if (steps.empty()) return;
+        auto screenX = [&](int p) {
+            if (p == r3d::Tavla3D::BAR) return 0.f;
+            if (p == r3d::Tavla3D::OFF) return 10.f;
+            return board_.pointWorld(p, 0).x;
+        };
+        std::vector<int> sources;
+        for (const tavla::Step& st : steps)
+            if (std::find(sources.begin(), sources.end(), st.from) == sources.end()) sources.push_back(st.from);
+        std::sort(sources.begin(), sources.end(), [&](int a, int b) { return screenX(a) < screenX(b); });
+        auto targetsOf = [&](int from) {
+            std::vector<int> t;
+            for (const tavla::Step& st : steps)
+                if (st.from == from && std::find(t.begin(), t.end(), st.to) == t.end()) t.push_back(st.to);
+            std::sort(t.begin(), t.end(), [&](int a, int b) { return screenX(a) < screenX(b); });
+            return t;
+        };
+        const bool wasNav = ui::keyboardNav();
+        const bool lr = ui::keyPressedRepeat(KEY_LEFT) || ui::keyPressedRepeat(KEY_RIGHT);
+        const bool ud = ui::keyPressedRepeat(KEY_UP) || ui::keyPressedRepeat(KEY_DOWN);
+        if (!lr && !ud && !enter) return;
+        ui::noteKeyboardNav();
+        auto it = std::find(sources.begin(), sources.end(), selected_);
+        if (it == sources.end()) { // nothing chosen yet: the İpucu's checker, or the rightmost one
+            int pick = sources.back();
+            if (hint_.from != -2 && std::find(sources.begin(), sources.end(), hint_.from) != sources.end()) pick = hint_.from;
+            selected_ = pick;
+            const std::vector<int> t = targetsOf(selected_);
+            kbTarget_ = hint_.from == selected_ && std::find(t.begin(), t.end(), hint_.to) != t.end() ? hint_.to : t.front();
+            sound(ui::Sfx::TileClick);
+            return;
+        }
+        if (lr && wasNav) {
+            const int n = (int)sources.size();
+            int i = (int)(it - sources.begin());
+            i = (i + (ui::keyPressedRepeat(KEY_RIGHT) ? 1 : -1) + n) % n;
+            selected_ = sources[(size_t)i];
+            kbTarget_ = targetsOf(selected_).front();
+            sound(ui::Sfx::TileClick);
+        }
+        std::vector<int> t = targetsOf(selected_);
+        auto ti = std::find(t.begin(), t.end(), kbTarget_);
+        if (ti == t.end()) {
+            kbTarget_ = t.front();
+            ti = t.begin();
+        }
+        if (ud && wasNav) {
+            const int n = (int)t.size();
+            int i = (int)(ti - t.begin());
+            i = (i + (ui::keyPressedRepeat(KEY_UP) ? 1 : -1) + n) % n;
+            kbTarget_ = t[(size_t)i];
+            sound(ui::Sfx::TileClick);
+        }
+        if (enter && wasNav) {
+            const int to = kbTarget_;
+            kbTarget_ = -1;
+            clickPoint(to);
+        }
     }
     void clickPoint(int idx) {
         const std::vector<tavla::Step> steps = g_.legalSteps();
@@ -392,8 +812,32 @@ private:
             using E = tavla::EvType;
             const bool bot = e.player == 1 || (e.player == 0 && aiSeat_);
             switch (e.type) {
-            case E::MatchStart:
-            case E::GameStart: hud_.toast(e.text, ui::pal::Highlight, 2.6f); break;
+            case E::MatchStart: hud_.toast(e.text, ui::pal::Highlight, 2.6f); break;
+            case E::GameStart:
+                hud_.toast(e.text, ui::pal::Highlight, 2.6f);
+                marsWarned_ = false;
+                break;
+            case E::DoubleOffer:
+                hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : Color{206, 176, 232, 255}, 2.6f);
+                sound(ui::Sfx::TileClick);
+                if (e.player == 1) {
+                    say(OPP_SEAT, kMahmutOffer[rng_.range(3)], true);
+                    if (ctx_.characters) ctx_.characters->reach(OPP_SEAT, {0.f, w3d::TABLE_Y, 0.f}, 0);
+                } else if (rng_.chance(0.5f)) {
+                    say(rng_.chance(0.5f) ? 1 : 3, "Oo, katladı! Masa ısınıyor.");
+                }
+                break;
+            case E::DoubleTake:
+                hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : ui::pal::TextLight, 2.4f);
+                sfxAt_.push_back({now_ + 0.6f / speed_, ui::Sfx::Checker});
+                if (e.player == 1) say(OPP_SEAT, kMahmutTake[rng_.range(3)], true);
+                else if (rng_.chance(0.6f)) say(OPP_SEAT, kMahmutSeesTake[rng_.range(2)]);
+                break;
+            case E::DoubleDrop:
+                hud_.toast(e.text, e.player == 0 ? ui::pal::Bad : ui::pal::Highlight, 3.f);
+                if (e.player == 1) say(OPP_SEAT, kMahmutDrop[rng_.range(3)], true);
+                else say(OPP_SEAT, kMahmutSeesDrop[rng_.range(2)], true);
+                break;
             case E::OpeningRoll:
                 board_.throwDice(0, e.d1, e.d2, true, 0.f);
                 sound(ui::Sfx::DiceThrow);
@@ -428,14 +872,23 @@ private:
                 break;
             case E::BearOff: sound(ui::Sfx::Checker); break;
             case E::NoMove: hud_.toast(e.text, ui::pal::TextLight, 2.6f); break;
-            case E::GameEnd:
+            case E::GameEnd: {
                 hud_.toast(e.text, ui::pal::Highlight, 4.f);
-                results_.push_back(g_.lastResult());
+                const tavla::GameResult& res = g_.lastResult();
+                results_.push_back(res);
                 log_ = e.text + " | " + std::to_string(g_.score(0)) + "-" + std::to_string(g_.score(1));
-                if (g_.lastResult().mars) say(e.player == 1 ? OPP_SEAT : (rng_.chance(0.5f) ? 1 : 3), kMarsLines[rng_.range(3)], true);
+                if (res.mars) {
+                    // a mars is an event in the kahvehane: the big word, the line, everyone has something to say
+                    hud_.banner(res.katmerli ? "KATMERLİ MARS!" : "MARS!", resultText(res), Color{255, 206, 84, 255}, 3.2f);
+                    say(e.player == 1 ? OPP_SEAT : (rng_.chance(0.5f) ? 1 : 3), kMarsLines[rng_.range(3)], true);
+                    if (e.player == 0) say(OPP_SEAT, kMarsLost[rng_.range(3)]);
+                    else say(rng_.chance(0.5f) ? 1 : 3, kWatchMars[rng_.range(2)]);
+                    sound(ui::Sfx::TileSlam);
+                }
                 if (ctx_.characters) ctx_.characters->react(OPP_SEAT, e.player == 1 ? 1 : 2, {0.f, w3d::TABLE_Y, 0.f});
                 sound(e.player == 0 ? ui::Sfx::Win : ui::Sfx::Lose);
                 break;
+            }
             case E::MatchEnd: hud_.toast(e.text, ui::pal::Highlight, 5.f); break;
             default: break;
             }
@@ -458,7 +911,13 @@ private:
     float speed_ = 1.f, now_ = 0.f, botWait_ = 0.f;
     int botPlayer_ = -1, botTurn_ = -1, botStage_ = -1;
     int selected_ = -1, hover_ = -1;
+    int kbTarget_ = -1; // the keyboard's chosen place for the selected checker
+    std::vector<int> btnIds_; // what each button of this frame's column does (Btn)
     bool hints_ = true, aiSeat_ = false, built_ = false, menuReq_ = false, aiReq_ = false;
+    bool replay_ = false; // maç tekrarı (setReplayMode)
+    bool histOpen_ = false, marsWarned_ = false;
+    Hint hint_;
+    std::string phase_;
 };
 
 } // namespace

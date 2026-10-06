@@ -39,10 +39,13 @@ void pill(Rectangle r, Color fill, Color line) {
 }
 
 constexpr float BTN_W = 124.f, BTN_H = 46.f, BTN_GAP = 9.f, EDGE = 18.f;
-constexpr float STATUS_Y = 877.f;
-// Newest toast just above the status line, over the istaka's front board (older ones stack upward): never
-// over an opponent's face or the table centre, and right where the player is already looking.
-constexpr float TOAST_Y = STATUS_Y - 36.f;
+constexpr float STATUS_Y0 = 877.f;
+// Büyük yazı: every HUD size times S(); the status line grows upward from the bottom edge.
+float S() { return ui::hudTextScale(); }
+float statusY() { return STATUS_Y0 - 13.f * (S() - 1.f); }
+float helpY() { return statusY() - 13.f * S() - 17.f * S(); }
+// Newest toast just above the status line (or the key-help strip), over the istaka's front board (older ones stack
+// upward): never over an opponent's face or the table centre, and right where the player is already looking.
 
 // Code points of a UTF-8 name (stray bytes pass through as they are).
 std::vector<unsigned> codePoints(const std::string& s) {
@@ -116,9 +119,10 @@ std::string nameGenitive(const std::string& name) {
 
 std::array<Rectangle, NUM_BUTTONS> TableState::buttonRects() const {
     std::array<Rectangle, NUM_BUTTONS> r{};
-    const float x = ui::VW - EDGE - BTN_W;
-    const float y0 = ui::VH - EDGE - (float)NUM_BUTTONS * BTN_H - (float)(NUM_BUTTONS - 1) * BTN_GAP;
-    for (int i = 0; i < NUM_BUTTONS; ++i) r[i] = {x, y0 + (float)i * (BTN_H + BTN_GAP), BTN_W, BTN_H};
+    const float bw = BTN_W * S(), bh = BTN_H * S();
+    const float x = ui::VW - EDGE - bw;
+    const float y0 = ui::VH - EDGE - (float)NUM_BUTTONS * bh - (float)(NUM_BUTTONS - 1) * BTN_GAP;
+    for (int i = 0; i < NUM_BUTTONS; ++i) r[i] = {x, y0 + (float)i * (bh + BTN_GAP), bw, bh};
     return r;
 }
 
@@ -147,8 +151,10 @@ void TableState::drawNameplates(const Renderer& r) {
         const float rad = std::clamp(std::fabs(he.x - hc.x), 16.f, 140.f);
         const okey::PlayerInfo& p = game->player(seat);
         const bool turn = playing() && game->current() == seat && !dealing();
-        float ns = 17.f;
-        const std::string name = fitText(FontId::UiBold, p.name, 150.f, ns, 12.f);
+        const float sc = S();
+        float ns = 17.f * sc;
+        const std::string name = fitText(FontId::UiBold, p.name, 150.f * sc, ns, 12.f);
+        const float lfs = 12.f * sc, vfs = 15.f * sc, bfs = 12.f * sc;
         // the match total, labelled so it is never read as the opening value
         const std::string totLbl = "Toplam ", tot = std::to_string(p.totalScore);
         std::vector<std::pair<std::string, Color>> badges;
@@ -158,12 +164,12 @@ void TableState::drawNameplates(const Renderer& r) {
         }
         if (p.handPenalty > 0) badges.push_back({"+" + std::to_string(p.handPenalty), rgba(168, 42, 34)});
         const float nameW = ui::measureText(FontId::UiBold, name, ns).x;
-        const float totLblW = ui::measureText(FontId::Ui, totLbl, 12.f).x;
-        const float totW = totLblW + ui::measureText(FontId::UiBold, tot, 15.f).x;
+        const float totLblW = ui::measureText(FontId::Ui, totLbl, lfs).x;
+        const float totW = totLblW + ui::measureText(FontId::UiBold, tot, vfs).x;
         float bw = 0.f;
-        for (auto& b : badges) bw += ui::measureText(FontId::UiBold, b.first, 12.f).x + 14.f + 4.f;
+        for (auto& b : badges) bw += ui::measureText(FontId::UiBold, b.first, bfs).x + 14.f + 4.f;
         const float w = std::max({nameW + totW + 34.f, bw + 12.f, 96.f});
-        const float h = badges.empty() ? 28.f : 46.f;
+        const float h = (badges.empty() ? 28.f : 46.f) * sc;
         const float side = hc.x > ui::VW * 0.5f + 150.f ? -1.f : 1.f; // a centred head: right (the scoreboard is left)
         Vector2 c{hc.x + side * (rad + 14.f + w * 0.5f), hc.y - rad * 0.15f};
         c.x = std::clamp(c.x, w * 0.5f + 8.f, ui::VW - w * 0.5f - 8.f);
@@ -177,17 +183,17 @@ void TableState::drawNameplates(const Renderer& r) {
         ui::tilegfx::roundedGradV(rc, 10, rgba(58, 36, 20, 228), rgba(30, 18, 10, 228));
         ui::tilegfx::roundedLines(rc, 10, turn ? 2.f : 1.2f, turn ? pal::Highlight : fadeC(pal::Brass, 0.55f));
         // name left, total right
-        const float ty = rc.y + 14.f;
+        const float ty = rc.y + 14.f * sc;
         ui::drawText(FontId::UiBold, name, {rc.x + 10.f, ty - ns * 0.56f}, ns, turn ? pal::Highlight : pal::TextLight);
-        ui::drawText(FontId::Ui, totLbl, {rc.x + rc.width - 10.f - totW, ty - 12.f * 0.56f + 1.f}, 12.f, fadeC(pal::Brass, 0.7f));
-        ui::drawText(FontId::UiBold, tot, {rc.x + rc.width - 10.f - totW + totLblW, ty - 15.f * 0.56f}, 15.f, pal::Brass);
+        ui::drawText(FontId::Ui, totLbl, {rc.x + rc.width - 10.f - totW, ty - lfs * 0.56f + 1.f}, lfs, fadeC(pal::Brass, 0.7f));
+        ui::drawText(FontId::UiBold, tot, {rc.x + rc.width - 10.f - totW + totLblW, ty - vfs * 0.56f}, vfs, pal::Brass);
         if (!badges.empty()) {
             float x = c.x - (bw - 4.f) * 0.5f;
             for (auto& b : badges) {
-                const float bwi = ui::measureText(FontId::UiBold, b.first, 12.f).x + 14.f;
-                const Rectangle br{x, rc.y + 26.f, bwi, 15.f};
-                ui::tilegfx::roundedRect(br, 7.5f, b.second);
-                ui::drawTextCentered(FontId::UiBold, b.first, {br.x + br.width * 0.5f, br.y + 7.5f}, 12.f, rgba(250, 244, 230));
+                const float bwi = ui::measureText(FontId::UiBold, b.first, bfs).x + 14.f;
+                const Rectangle br{x, rc.y + 26.f * sc, bwi, 15.f * sc};
+                ui::tilegfx::roundedRect(br, 7.5f * sc, b.second);
+                ui::drawTextCentered(FontId::UiBold, b.first, {br.x + br.width * 0.5f, br.y + 7.5f * sc}, bfs, rgba(250, 244, 230));
                 x += bwi + 4.f;
             }
         }
@@ -212,19 +218,21 @@ void TableState::drawPileLabel(const Renderer& r) {
         const bool low = n <= 8;
         const float pulse = low ? 0.75f + 0.25f * std::sin(now * 6.f) : 1.f;
         const std::string cnt = std::to_string(n) + " taş";
-        const Vector2 m = ui::measureText(FontId::UiBold, cnt, 15);
-        pill({c.x - m.x * 0.5f - 9, c.y - 10, m.x + 18, 20}, rgba(10, 24, 16, 185), rgba(255, 255, 255, 30));
-        ui::drawTextCentered(FontId::UiBold, cnt, {c.x, c.y}, 15, low ? fadeC(pal::Bad, pulse) : pal::TextLight);
+        const float fs = 15.f * S();
+        const Vector2 m = ui::measureText(FontId::UiBold, cnt, fs);
+        pill({c.x - m.x * 0.5f - 9, c.y - 10 * S(), m.x + 18, 20 * S()}, rgba(10, 24, 16, 185), rgba(255, 255, 255, 30));
+        ui::drawTextCentered(FontId::UiBold, cnt, {c.x, c.y}, fs, low ? fadeC(pal::Bad, pulse) : pal::TextLight);
     }
     if (r.projectToVirtual({w3d::INDICATOR_POS.x, w3d::TABLE_Y, w3d::INDICATOR_POS.z + 0.066f}, c)) {
         // "Okey" + a small drawing of this hand's wild tile
         const std::string lbl = "Okey";
-        const Vector2 m = ui::measureText(FontId::UiBold, lbl, 14);
-        const float tw = 17.f, th = ui::tilegfx::heightFor(tw);
+        const float fs = 14.f * S();
+        const Vector2 m = ui::measureText(FontId::UiBold, lbl, fs);
+        const float tw = 17.f * S(), th = ui::tilegfx::heightFor(tw);
         const float w = m.x + tw + 26.f;
-        const Rectangle rc{c.x - w * 0.5f, c.y - 13.f, w, 26.f};
+        const Rectangle rc{c.x - w * 0.5f, c.y - 13.f * S(), w, 26.f * S()};
         pill(rc, rgba(10, 24, 16, 185), rgba(255, 255, 255, 30));
-        ui::drawText(FontId::UiBold, lbl, {rc.x + 10.f, c.y - m.y * 0.5f}, 14, pal::Brass);
+        ui::drawText(FontId::UiBold, lbl, {rc.x + 10.f, c.y - m.y * 0.5f}, fs, pal::Brass);
         ui::tilegfx::Fx fx;
         fx.shadow = false;
         fx.okeyBadge = true;
@@ -346,43 +354,45 @@ void TableState::drawStatus() {
         }
     }
     if (st.empty() && parts.empty()) return;
-    const float fs = 17.f;
+    const float s = S(), sy = statusY();
+    const float fs = 17.f * s, pfs = 16.f * s;
     const float stW = st.empty() ? 0.f : ui::measureText(FontId::UiBold, st, fs).x + (myTurn() ? 16.f : 0.f);
     float ctW = 0.f;
-    for (auto& p : parts) ctW += ui::measureText(FontId::UiBold, p.first, 16.f).x;
+    for (auto& p : parts) ctW += ui::measureText(FontId::UiBold, p.first, pfs).x;
     const float sep = (!st.empty() && !parts.empty()) ? 25.f : 0.f;
     // the Yapay Zeka mode wears a small lit tag at the front of the line
     const char* tag = "YAPAY ZEKA";
-    const float tagFs = 12.f, tagSp = 1.f;
+    const float tagFs = 12.f * s, tagSp = 1.f;
     const float tagW = aiMode ? ui::measureText(FontId::UiBold, tag, tagFs, tagSp).x + 16.f : 0.f;
     const float w = stW + ctW + sep + 30.f + (aiMode ? tagW + 8.f : 0.f);
-    const Rectangle rc{std::round(ui::VW * 0.5f - w * 0.5f), STATUS_Y - 13.f, std::round(w), 26.f};
+    const float h = 26.f * s;
+    const Rectangle rc{std::round(ui::VW * 0.5f - w * 0.5f), std::round(sy - h * 0.5f), std::round(w), std::round(h)};
     pill(rc, rgba(14, 9, 5, 200), fadeC(sc, myTurn() ? 0.5f : 0.22f));
     float x = rc.x + 15.f;
     if (aiMode) {
-        const Rectangle tr{std::round(x - 8.f), STATUS_Y - 8.f, std::round(tagW), 16.f};
-        ui::tilegfx::roundedRect(tr, 8.f, rgba(38, 104, 58, 235));
-        ui::tilegfx::roundedLines(tr, 8.f, 1.f, rgba(150, 236, 150, 200));
-        ui::drawTextCentered(FontId::UiBold, tag, {tr.x + tr.width * 0.5f, STATUS_Y}, tagFs, rgba(214, 255, 214), tagSp);
+        const Rectangle tr{std::round(x - 8.f), std::round(sy - 8.f * s), std::round(tagW), std::round(16.f * s)};
+        ui::tilegfx::roundedRect(tr, 8.f * s, rgba(38, 104, 58, 235));
+        ui::tilegfx::roundedLines(tr, 8.f * s, 1.f, rgba(150, 236, 150, 200));
+        ui::drawTextCentered(FontId::UiBold, tag, {tr.x + tr.width * 0.5f, sy}, tagFs, rgba(214, 255, 214), tagSp);
         x = tr.x + tr.width + 10.f;
     }
     if (!st.empty()) {
         if (myTurn()) {
-            DrawCircleV({x + 4.f, STATUS_Y}, 3.8f, fadeC(sc, 0.6f + 0.4f * std::sin(now * 5.f)));
+            DrawCircleV({x + 4.f, sy}, 3.8f * s, fadeC(sc, 0.6f + 0.4f * std::sin(now * 5.f)));
             x += 16.f;
         }
         const Vector2 m = ui::measureText(FontId::UiBold, st, fs);
-        ui::drawText(FontId::UiBold, st, {x, STATUS_Y - m.y * 0.5f}, fs, sc);
+        ui::drawText(FontId::UiBold, st, {x, sy - m.y * 0.5f}, fs, sc);
         x += m.x;
     }
     if (!parts.empty()) {
         if (sep > 0.f) {
-            DrawRectangleRec({x + 12.f, STATUS_Y - 8.f, 1.f, 16.f}, rgba(255, 255, 255, 50));
+            DrawRectangleRec({x + 12.f, sy - 8.f * s, 1.f, 16.f * s}, rgba(255, 255, 255, 50));
             x += sep;
         }
         for (auto& p : parts) {
-            const Vector2 m = ui::measureText(FontId::UiBold, p.first, 16.f);
-            ui::drawText(FontId::UiBold, p.first, {x, STATUS_Y - m.y * 0.5f}, 16.f, p.second);
+            const Vector2 m = ui::measureText(FontId::UiBold, p.first, pfs);
+            ui::drawText(FontId::UiBold, p.first, {x, sy - m.y * 0.5f}, pfs, p.second);
             x += m.x;
         }
     }
@@ -403,21 +413,30 @@ void TableState::drawButtons() {
         ui::tilegfx::drawSoftBox({r.x + r.width / 2, r.y + r.height / 2}, r.width + 16, r.height + 22, 0.f, fadeC(pal::Good, a));
     }
     const char* openLabel = classic() ? "Bitir" : me.opened ? "Per Aç" : "El Aç";
-    if (ui::drawButton(rc[0], openLabel, m, openOk, ui::ButtonStyle::Wood, 21)) queue(Btn::Open);
+    const float s = S();
+    if (ui::drawButton(rc[0], openLabel, m, openOk, ui::ButtonStyle::Wood, 21 * s)) queue(Btn::Open);
     const bool giveOk = canAct() && (classic() ? game->indicatorTwin(human) >= 0 : game->pendingLeftTile() >= 0);
-    if (ui::drawButton(rc[1], classic() ? "Göster" : "Geri Ver", m, giveOk, ui::ButtonStyle::Wood, 20)) queue(Btn::GiveBack);
+    if (ui::drawButton(rc[1], classic() ? "Göster" : "Geri Ver", m, giveOk, ui::ButtonStyle::Wood, 20 * s)) queue(Btn::GiveBack);
     const bool arrOk = rackInteractive() && !me.hand.empty();
-    if (ui::drawButton(rc[2], "Seri Diz", m, arrOk, ui::ButtonStyle::Wood, 20)) queue(Btn::Series);
-    if (ui::drawButton(rc[3], "Çift Diz", m, arrOk, ui::ButtonStyle::Wood, 20)) queue(Btn::Pairs);
+    if (ui::drawButton(rc[2], "Seri Diz", m, arrOk, ui::ButtonStyle::Wood, 20 * s)) queue(Btn::Series);
+    if (ui::drawButton(rc[3], "Çift Diz", m, arrOk, ui::ButtonStyle::Wood, 20 * s)) queue(Btn::Pairs);
+    if (ui::drawButton(rc[4], "İpucu", m, canAct() && !aiMode && !dealing(), ui::ButtonStyle::Wood, 20 * s)) queue(Btn::Hint);
+    // the keys, small in the corners while the keyboard is in use
+    if (ui::keyboardNav() && humanInput && !aiMode) {
+        const char* keys[5] = {"O", "G", "S", "C", "H"};
+        for (int i = 0; i < 5; ++i)
+            ui::drawText(FontId::UiBold, keys[i], {rc[i].x + 7.f, rc[i].y + 4.f}, 12.f * s, fadeC(rgba(170, 220, 255), 0.85f));
+        ui::drawText(FontId::UiBold, "Y", {rc[5].x + 7.f, rc[5].y + 4.f}, 12.f * s, fadeC(rgba(170, 220, 255), 0.85f));
+    }
     // "Yapay Zeka": lit (a warm halo, a gilt rim and a green lamp) while the AI plays this seat
     {
-        const Rectangle r = rc[4];
+        const Rectangle r = rc[5];
         if (aiMode) {
             const float a = 0.45f + 0.25f * std::sin(now * 2.6f);
             ui::tilegfx::drawSoftBox({r.x + r.width / 2, r.y + r.height / 2}, r.width + 16, r.height + 22, 0.f,
                                      fadeC(pal::Highlight, a));
         }
-        if (ui::drawButton(r, "Yapay Zeka", m, true, ui::ButtonStyle::Wood, 19)) queue(Btn::AiToggle);
+        if (ui::drawButton(r, "Yapay Zeka", m, true, ui::ButtonStyle::Wood, 19 * s)) queue(Btn::AiToggle);
         const Vector2 lamp{r.x + r.width - 10.f, r.y + 9.f};
         if (aiMode) {
             ui::tilegfx::roundedLines({r.x + 2, r.y + 2, r.width - 4, r.height - 6}, 10.f, 2.f, fadeC(pal::Highlight, 0.9f));
@@ -429,32 +448,34 @@ void TableState::drawButtons() {
             DrawCircleLinesV(lamp, 4.f, fadeC(pal::Brass, 0.35f));
         }
     }
-    if (ui::drawButton(rc[5], "Menü", m, true, ui::ButtonStyle::Wood, 20)) queue(Btn::Menu);
+    if (ui::drawButton(rc[6], "Menü", m, true, ui::ButtonStyle::Wood, 20 * s)) queue(Btn::Menu);
 }
 
 // ---------------------------------------------------------------- toasts
 void TableState::drawToasts() {
+    const float s = S();
     const float cx = ui::VW * 0.5f;
     const int n = (int)toasts.size();
     const int first = std::max(0, n - 2);
-    float y = TOAST_Y - (float)(n - first - 1) * 30.f;
+    const float th = 26.f * s, step = th + 4.f;
+    const bool help = !keyHelpText().empty();
+    float y = (help ? helpY() - 11.f * s : statusY() - 13.f * s) - 10.f - th * 0.5f - (float)(n - first - 1) * step;
     for (int i = first; i < n; ++i) {
         const Toast& t = toasts[i];
         const float a = std::min(ui::clamp01(t.age / 0.18f), ui::clamp01((t.dur - t.age) / 0.45f));
-        const float size = 17.f;
-        float fs = size;
-        const std::string text = fitText(FontId::UiBold, t.text, 620.f, fs, 14.f);
+        float fs = 17.f * s;
+        const std::string text = fitText(FontId::UiBold, t.text, 620.f * s, fs, 14.f);
         const Vector2 m = ui::measureText(FontId::UiBold, text, fs);
         const float w = m.x + 32.f;
         const float slide = (1.f - ui::easeOutCubic(ui::clamp01(t.age / 0.25f))) * 8.f;
-        const Rectangle r{std::round(cx - w / 2), std::round(y - 13 + slide), std::round(w), 26};
+        const Rectangle r{std::round(cx - w / 2), std::round(y - th * 0.5f + slide), std::round(w), std::round(th)};
         if (a > 0.01f) {
-            ui::tilegfx::roundedRect({r.x + 2, r.y + 3, r.width, r.height}, 13, fadeC(rgba(0, 0, 0, 100), a));
-            ui::tilegfx::roundedRect(r, 13, fadeC(rgba(22, 14, 8, 232), a));
-            ui::tilegfx::roundedLines(r, 13, 1.3f, fadeC(t.color, 0.55f * a));
-            ui::drawTextCentered(FontId::UiBold, text, {cx, r.y + 13}, fs, fadeC(t.color, a));
+            ui::tilegfx::roundedRect({r.x + 2, r.y + 3, r.width, r.height}, th * 0.5f, fadeC(rgba(0, 0, 0, 100), a));
+            ui::tilegfx::roundedRect(r, th * 0.5f, fadeC(rgba(22, 14, 8, 232), a));
+            ui::tilegfx::roundedLines(r, th * 0.5f, 1.3f, fadeC(t.color, 0.55f * a));
+            ui::drawTextCentered(FontId::UiBold, text, {cx, r.y + th * 0.5f}, fs, fadeC(t.color, a));
         }
-        y += 30.f;
+        y += step;
     }
 }
 
@@ -466,9 +487,24 @@ void TableState::drawDragHints(const Renderer& r) {
         const Vector3 d = w3d::DISCARD_POS[human];
         if (r.projectToVirtual({d.x, w3d::TABLE_Y, d.z + 0.05f}, c)) {
             const float a = aim.overDiscard ? 1.f : 0.55f + 0.25f * std::sin(now * 4.f);
-            const Vector2 m = ui::measureText(FontId::UiBold, "At", 16);
-            pill({c.x - m.x * 0.5f - 10, c.y - 10, m.x + 20, 21}, fadeC(rgba(14, 9, 5, 210), a), fadeC(pal::Highlight, 0.6f * a));
-            ui::drawTextCentered(FontId::UiBold, "At", c, 16, fadeC(pal::Highlight, a));
+            const float fs = 16.f * S();
+            const Vector2 m = ui::measureText(FontId::UiBold, "At", fs);
+            pill({c.x - m.x * 0.5f - 10, c.y - 10 * S(), m.x + 20, 21 * S()}, fadeC(rgba(14, 9, 5, 210), a), fadeC(pal::Highlight, 0.6f * a));
+            ui::drawTextCentered(FontId::UiBold, "At", c, fs, fadeC(pal::Highlight, a));
+        }
+    }
+    // the keyboard's işle target: a tag over the meld ("İşle · Enter")
+    if (kbIsle.meld >= 0 && kbIsle.tile == kbTile() && kbIsle.meld < (int)boxes.size()) {
+        const MeldBox& b = boxes[kbIsle.meld];
+        Vector2 c;
+        if (r.projectToVirtual({(b.x0 + b.x1) * 0.5f, w3d::TABLE_Y, b.z0 - 0.012f}, c)) {
+            const std::string t = kbIsle.joker >= 0 ? "Okeyi al  ·  Enter" : "İşle  ·  Enter  (I: başka per)";
+            const float fs = 15.f * S();
+            const Vector2 m = ui::measureText(FontId::UiBold, t, fs);
+            const Color col = ui::colorBlind() ? rgba(140, 200, 255) : pal::Good;
+            const Rectangle rc{std::round(c.x - m.x * 0.5f - 10.f), std::round(c.y - 22.f * S()), std::round(m.x + 20.f), 21.f * S()};
+            pill(rc, rgba(14, 9, 5, 225), fadeC(col, 0.75f));
+            ui::drawTextCentered(FontId::UiBold, t, {rc.x + rc.width * 0.5f, rc.y + rc.height * 0.5f}, fs, col);
         }
     }
     if (!press.dragging) return;
@@ -491,13 +527,14 @@ void TableState::drawDragHints(const Renderer& r) {
         } else if (!swap && game->table()[aim.meld].kind == okey::MeldKind::Run) {
             s = isleFront(id, aim.meld, aim.meldFront) ? "Başa işle" : "Sona işle";
         }
-        const Vector2 m = ui::measureText(FontId::UiBold, s, 15);
+        const float fs = 15.f * S();
+        const Vector2 m = ui::measureText(FontId::UiBold, s, fs);
         const float w = m.x + 20.f;
         float x = in.mouse.x + 30.f;
         if (x + w > ui::VW - 160.f) x = in.mouse.x - 30.f - w;
-        const Rectangle rc{std::round(x), std::round(in.mouse.y + 6.f), std::round(w), 21.f};
+        const Rectangle rc{std::round(x), std::round(in.mouse.y + 6.f), std::round(w), 21.f * S()};
         pill(rc, rgba(14, 9, 5, 225), fadeC(col, 0.75f));
-        ui::drawTextCentered(FontId::UiBold, s, {rc.x + rc.width * 0.5f, rc.y + 10.5f}, 15, col);
+        ui::drawTextCentered(FontId::UiBold, s, {rc.x + rc.width * 0.5f, rc.y + rc.height * 0.5f}, fs, col);
     }
     // insertion caret between two istaka tiles
     if (aim.overRack && aim.slot >= 0 && (press.kind == Press::RackTile || press.kind == Press::Pile || press.kind == Press::Left)) {
@@ -522,20 +559,29 @@ void TableState::drawDragHints(const Renderer& r) {
 void TableState::drawConfirm() {
     if (!confirm.active) return;
     const float a = ui::easeOutCubic(ui::clamp01(confirm.t / 0.2f));
+    const float s = S();
     ui::drawDim(0.5f * a);
-    const Rectangle r{800 - 250, 330 + (1.f - a) * 20.f, 500, 210};
+    const float w = 500.f * s, h = 210.f * s;
+    const Rectangle r{800 - w * 0.5f, 435 - h * 0.5f + (1.f - a) * 20.f, w, h};
     ui::drawPanel(r, ui::PanelStyle::Wood);
-    ui::drawTextCentered(FontId::Sign, "Dikkat!", {r.x + r.width / 2, r.y + 42}, 32, pal::Brass);
+    ui::drawTextCentered(FontId::Sign, "Dikkat!", {r.x + r.width / 2, r.y + 42 * s}, 32 * s, pal::Brass);
     if (okey::isValidTile(confirm.tile)) {
         ui::tilegfx::Fx fx;
-        ui::tilegfx::drawTile(confirm.tile, ok(), {r.x + 62, r.y + 108}, 44, -6.f, fx);
+        ui::tilegfx::drawTile(confirm.tile, ok(), {r.x + 62 * s, r.y + 108 * s}, 44 * s, -6.f, fx);
     }
-    ui::drawTextWrapped(FontId::UiBold, confirm.text, {r.x + 104, r.y + 78, r.width - 130, 70}, 20, pal::TextLight, 2);
+    ui::drawTextWrapped(FontId::UiBold, confirm.text, {r.x + 104 * s, r.y + 78 * s, r.width - 130 * s, 70 * s}, 20 * s,
+                        pal::TextLight, 2);
     const Vector2 m = in.mouse;
-    if (ui::drawButton({r.x + r.width / 2 - 170, r.y + 150, 150, 42}, "Evet, at", m, humanInput, ui::ButtonStyle::Wood, 20))
-        queue(Btn::ConfirmYes);
-    if (ui::drawButton({r.x + r.width / 2 + 20, r.y + 150, 150, 42}, "Vazgeç", m, true, ui::ButtonStyle::Wood, 20))
-        queue(Btn::ConfirmNo);
+    const Rectangle yes{r.x + r.width / 2 - 170 * s, r.y + 150 * s, 150 * s, 42 * s};
+    const Rectangle no{r.x + r.width / 2 + 20 * s, r.y + 150 * s, 150 * s, 42 * s};
+    if (ui::drawButton(yes, "Evet, at", m, humanInput, ui::ButtonStyle::Wood, 20 * s)) queue(Btn::ConfirmYes);
+    if (ui::drawButton(no, "Vazgeç", m, true, ui::ButtonStyle::Wood, 20 * s)) queue(Btn::ConfirmNo);
+    if (ui::keyboardNav()) { // the keyboard's choice (←/→, Enter)
+        const Rectangle f = confirmFocus == 0 ? yes : no;
+        const float pa = 0.75f + 0.25f * std::sin(now * 6.f);
+        ui::tilegfx::roundedLines({f.x - 5, f.y - 5, f.width + 10, f.height + 10}, 13.f, 3.f, fadeC(rgba(120, 210, 255), pa));
+        ui::tilegfx::roundedLines({f.x - 2, f.y - 2, f.width + 4, f.height + 4}, 11.f, 1.5f, fadeC(WHITE, 0.8f * pa));
+    }
 }
 
 // ---------------------------------------------------------------- hover peek (far melds / discard piles)
@@ -585,10 +631,11 @@ void TableState::drawPeek(const Renderer& r) {
     }
     if (ids.empty()) return;
     const float a = ui::easeOutCubic(ui::clamp01((peekT - dwell) / 0.18f));
-    const float tw = 34.f, th = ui::tilegfx::heightFor(tw), gap = 3.f;
+    const float sc = S();
+    const float tw = 34.f * sc, th = ui::tilegfx::heightFor(tw), gap = 3.f;
     const float rowW = (float)ids.size() * (tw + gap) - gap;
-    const Vector2 tm = ui::measureText(FontId::UiBold, title, 15.f);
-    const float w = std::max(rowW, tm.x) + 24.f, h = th + 40.f;
+    const Vector2 tm = ui::measureText(FontId::UiBold, title, 15.f * sc);
+    const float w = std::max(rowW, tm.x) + 24.f, h = th + 40.f * sc;
     const Vector2 m = in.mouse;
     float x = m.x + 22.f, y = m.y - h - 16.f;
     if (x + w > ui::VW - 150.f) x = m.x - w - 22.f;
@@ -598,7 +645,7 @@ void TableState::drawPeek(const Renderer& r) {
     ui::tilegfx::roundedRect({rc.x + 2, rc.y + 4, rc.width, rc.height}, 10, fadeC(rgba(0, 0, 0, 110), a));
     ui::tilegfx::roundedGradV(rc, 10, fadeC(rgba(52, 34, 20, 238), a), fadeC(rgba(28, 18, 10, 238), a));
     ui::tilegfx::roundedLines(rc, 10, 1.3f, fadeC(pal::Brass, 0.6f * a));
-    ui::drawText(FontId::UiBold, title, {rc.x + 12.f, rc.y + 8.f}, 15.f, fadeC(pal::TextLight, a));
+    ui::drawText(FontId::UiBold, title, {rc.x + 12.f, rc.y + 8.f}, 15.f * sc, fadeC(pal::TextLight, a));
     float tx = rc.x + 12.f + (w - 24.f - rowW) * 0.5f + tw * 0.5f;
     for (int i = 0; i < (int)ids.size(); ++i) {
         ui::tilegfx::Fx fx;
@@ -607,9 +654,44 @@ void TableState::drawPeek(const Renderer& r) {
             fx.outline = 1.f;
             fx.outlineColor = pal::Highlight;
         }
-        ui::tilegfx::drawTile(ids[i], ok(), {tx, rc.y + 30.f + th * 0.5f}, tw, 0.f, fx);
+        ui::tilegfx::drawTile(ids[i], ok(), {tx, rc.y + 30.f * sc + th * 0.5f}, tw, 0.f, fx);
         tx += tw + gap;
     }
+}
+
+// ---------------------------------------------------------------- key help (while the keyboard is in use)
+std::string TableState::keyHelpText() const {
+    if (!ui::keyboardNav() || !humanInput || aiMode || !playing() || dealing()) return "";
+    if (confirm.active) return "Sol / Sağ seç  ·  Enter onayla  ·  Geri tuşu vazgeç";
+    const std::string rack = "Oklar seç  ·  Boşluk / Shift taşı";
+    if (!myTurn()) return rack + "  ·  S seri · C çift diz  ·  Y yapay zeka  ·  Esc menü";
+    if (game->stage() == okey::TurnStage::NeedDraw) {
+        std::string t = rack + "  ·  D ortadan çek";
+        if (game->canTakeFromLeft(human)) t += "  ·  A soldan al";
+        return t + "  ·  S / C diz  ·  H ipucu  ·  Esc menü";
+    }
+    if (classic()) {
+        std::string t = rack + "  ·  Enter at  ·  O bitir";
+        if (game->indicatorTwin(human) >= 0) t += "  ·  G göster";
+        return t + "  ·  S / C diz  ·  H ipucu";
+    }
+    std::string t = rack + "  ·  Enter at  ·  O " + (game->player(human).opened ? "per aç" : "el aç");
+    if (!game->table().empty()) t += "  ·  I işle";
+    if (game->pendingLeftTile() >= 0) t += "  ·  G geri ver";
+    return t + "  ·  S / C diz  ·  H ipucu";
+}
+
+void TableState::drawKeyHelp() {
+    const std::string text = keyHelpText();
+    if (text.empty()) return;
+    const float s = S();
+    float fs = 14.f * s;
+    const std::string t = fitText(FontId::UiBold, text, ui::VW - 420.f, fs, 11.f);
+    const Vector2 m = ui::measureText(FontId::UiBold, t, fs);
+    const float h = 22.f * s, y = helpY();
+    const Rectangle r{std::round(ui::VW * 0.5f - m.x * 0.5f - 14.f), std::round(y - h * 0.5f), std::round(m.x + 28.f), std::round(h)};
+    pill(r, rgba(10, 22, 34, 215), rgba(120, 210, 255, 150));
+    ui::drawTextCentered(FontId::UiBold, t, {ui::VW * 0.5f, r.y + h * 0.5f}, fs, rgba(200, 236, 255));
 }
 
 void TableState::drawHUD(const Renderer& r) {
@@ -621,6 +703,7 @@ void TableState::drawHUD(const Renderer& r) {
     drawDragHints(r);
     drawStatus();
     drawButtons();
+    drawKeyHelp();
     drawToasts();
     drawPeek(r);
     drawConfirm();

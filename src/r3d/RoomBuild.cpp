@@ -1178,9 +1178,13 @@ void Room::Impl::buildStoveTvFan(Builders& B) {
         B.paintCast.setTransform(D);
         B.paintCast.roundedBox({-0.21f, 0.38f, 0.f}, {0.03f, 0.17f, 0.2f}, 0.01f, 2, Color{50, 46, 44, 255});
         B.paintCast.resetTransform();
-        B.bulbs.setTransform(D);
-        B.bulbs.box({-0.227f, 0.335f, 0.f}, {0.004f, 0.025f, 0.13f}, Color{255, 120, 40, 255});
-        B.bulbs.resetTransform();
+        {  // the slot glows while the stove burns (its own mesh: Room::Impl::stoveLit dims it out of season)
+            MeshBuilder sl;
+            sl.setTransform(D);
+            sl.box({-0.227f, 0.335f, 0.f}, {0.004f, 0.025f, 0.13f}, WHITE);
+            sl.resetTransform();
+            stoveSlot = sl.build(true);
+        }
         B.brass.capsule(at({-0.23f, 0.42f, 0.06f}), at({-0.25f, 0.42f, 0.06f}), 0.008f, 6, Color{190, 150, 80, 255});
         stoveGlowPos = at({-0.26f, 0.34f, 0.f});
         // pipe: straight up, elbow, into the wall
@@ -1193,6 +1197,8 @@ void Room::Impl::buildStoveTvFan(Builders& B) {
         // a copper kettle warming on top (güğüm)
         std::vector<Vector2> kettle{{0.f, 0.f}, {0.07f, 0.f}, {0.085f, 0.04f}, {0.08f, 0.11f}, {0.05f, 0.15f}, {0.035f, 0.2f}, {0.04f, 0.21f}, {0.f, 0.21f}};
         latheAt(B.brass, at({0.02f, 0.735f, -0.1f}), kettle, 20, false, false, Color{190, 100, 60, 255}, nullptr, 0.f, 0.8f);
+        kettleSpout = at({0.02f, 0.735f + 0.175f, -0.1f});
+        stoveTop = {p.x, 0.74f, p.z};
     }
     // --- CRT television on a corner bracket, back-left corner, facing the room
     {

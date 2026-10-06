@@ -218,6 +218,7 @@ void Cast::updatePatron(Patron& p, BgTable& t, float dt) {
         p.nodPitch += 0.05f * std::sin(time * 9.f + (float)(p.seed % 31u)) * p.talk;
         p.nodYaw += 0.04f * std::sin(time * 5.f + (float)(p.seed % 17u)) * p.talk;
     }
+    patronReact(p, dt);  // a big moment at our table (CharactersLife.cpp)
     // arm tracks
     for (int a = 0; a < 2; ++a) {
         Arm& A = p.arm[a];
@@ -236,7 +237,7 @@ void Cast::updatePatron(Patron& p, BgTable& t, float dt) {
 void Cast::updateCrowd(float dt) {
     for (size_t ti = 0; ti < bgTables.size(); ++ti) {
         BgTable& T = bgTables[ti];
-        if (T.patrons.empty()) continue;
+        if (T.patrons.empty() || !patrons[T.patrons[0]].present) continue;  // nobody at this table at this hour
         T.timer -= dt;
         const Vector3 c{T.c.x, BY, T.c.z};
         auto P = [&](int i) -> Patron& { return patrons[T.patrons[(size_t)i % T.patrons.size()]]; };
@@ -495,11 +496,18 @@ void Cast::updateCayci(float dt) {
         faceTarget = Vector3Add(b.pos, {0, 0, -1.f});
         hasFaceTarget = true;
         if (!titleMode || true) {
-            if ((b.nextOurs <= 0.f || (b.called && b.nextOurs < 40.f)) && b.timer <= 0.f) {
+            if (b.roundQueued && b.timer <= 0.f) {  // "Çaylar benden!": our table, then everybody
+                planTrip(true, -1);
+                b.roundQueued = false;
+                b.roundBg.clear();
+                for (int t = 0; t < (int)bgTables.size(); ++t)
+                    if (!bgTables[(size_t)t].patrons.empty() && patrons[bgTables[(size_t)t].patrons[0]].present) b.roundBg.push_back(t);
+                b.nextOurs = rng.f(70.f, 100.f);
+            } else if ((b.nextOurs <= 0.f || (b.called && b.nextOurs < 40.f)) && b.timer <= 0.f) {
                 planTrip(true, -1);
                 b.nextOurs = rng.f(60.f, 90.f);
             } else if (b.nextBg <= 0.f && b.timer <= 0.f) {
-                planTrip(false, rng.i(4));
+                planTrip(false, pickBgTable());
                 b.nextBg = rng.f(26.f, 48.f);
             }
         }
@@ -608,14 +616,21 @@ void Cast::updateCayci(float dt) {
             b.serveT = 0.f;
             ++b.serveIdx;
             if (b.serveIdx >= (int)b.tour.size()) {
+                banter.teaServed();
+                sfx(ui::Sfx::TeaClink);
+                if (!b.roundBg.empty()) {  // the round goes on to the other tables
+                    const int next = b.roundBg.front();
+                    b.roundBg.erase(b.roundBg.begin());
+                    b.roundReply = true;
+                    planTrip(false, next);
+                    return;
+                }
                 std::vector<int> nodes = shortestPath(nearestNode(b.pos), 0);
                 b.path.clear();
                 for (int n : nodes) b.path.push_back({kNodes[n].x, 0.f, kNodes[n].z});
                 b.pathI = 1;
                 b.plan = 0;
                 b.state = 1;
-                banter.teaServed();
-                sfx(ui::Sfx::TeaClink);
             } else {
                 b.state = 1;
             }
@@ -666,6 +681,8 @@ void Cast::updateCayci(float dt) {
             if (b.serveT > 0.58f && b.serveT - dt <= 0.58f) {
                 g.level = gi == 3 ? 0.9f : rng.f(0.86f, 0.95f);  // the fresh glass from the tray
                 g.steamAcc = 0.7f;
+                teaServed.push_back(gi);
+                if (teaServed.size() > 8) teaServed.pop_front();
             }
             if (b.serveT > 1.5f) nextStop();
             break;
@@ -699,14 +716,28 @@ void Cast::updateCayci(float dt) {
             A.track.nextKey = 1;
             b.serveStep = 1;
             sfx(ui::Sfx::GlassSet);
+            // a round on somebody: the men at this table thank him
+            if (!titleMode && b.roundReply && crowdLineCd <= 0.f && !T.patrons.empty()) {
+                static const char* const kThanks[] = {"Sağ ol!", "Eksik olma!", "Sağlığına!", "Bereket versin!", "Eline sağlık!"};
+                const Patron& tp = patrons[T.patrons[(size_t)rng.i((int)T.patrons.size())]];
+                crowdLines.push_back({kThanks[rng.i(5)], xfPoint(tp.headW, {0, 0.12f, 0})});
+                crowdLineCd = 1.5f;
+            }
         }
         if (b.serveT > 1.9f) {
-            std::vector<int> nodes = shortestPath(nearestNode(b.pos), 0);
-            b.path.clear();
-            for (int n : nodes) b.path.push_back({kNodes[n].x, 0.f, kNodes[n].z});
-            b.pathI = 1;
-            b.plan = 0;
-            b.state = 1;
+            if (!b.roundBg.empty()) {  // on to the next table of the round
+                const int next = b.roundBg.front();
+                b.roundBg.erase(b.roundBg.begin());
+                planTrip(false, next);
+            } else {
+                b.roundReply = false;
+                std::vector<int> nodes = shortestPath(nearestNode(b.pos), 0);
+                b.path.clear();
+                for (int n : nodes) b.path.push_back({kNodes[n].x, 0.f, kNodes[n].z});
+                b.pathI = 1;
+                b.plan = 0;
+                b.state = 1;
+            }
         }
     }
     if (b.state == 0) {

@@ -22,11 +22,11 @@ kuralları kendi "Nasıl Oynanır?" sayfasındadır (Kurallar), ayarları da Aya
 |---|---|---|
 | **101** | üç rakip | Per aç, 101'i geç, elini bitir; düşük puan kazanır. Katlamalı oyun ve yandan açma cezası ayarlardan. |
 | **Eşli 101** | Kel Mahmut ortağın | Biriniz bitirince ötekinin eli silinir; takım toplamı düşük olan kazanır. |
-| **Okey** | üç rakip | 14 taşı per ya da yedi çifte diz, 15.'yi atıp bit (12-13-1 geçerli). Herkes 20 puanla başlar, bitiş 2, okey atarak ya da çiftten 4, gösterge 1 düşer; sıfıra inen olunca oyun biter. |
-| **Tavla** | Kel Mahmut | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. Hacı Rıza ile Emekli Nuri seyredip laf atar. |
+| **Okey** | üç rakip | 14 taşı per ya da yedi çifte diz, 15.'yi atıp bit (12-13-1 geçerli). Herkes 20 puanla başlar, bitiş 2, okey atarak ya da çiftten 4, gösterge 1 düşer; sıfıra inen olunca oyun biter. İsteğe bağlı renkli okey (kırmızı/siyah gösterge ×2). |
+| **Tavla** | Kel Mahmut | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. İsteğe bağlı katlama zarı ve katmerli mars; Hamleler paneli. Hacı Rıza ile Emekli Nuri seyredip laf atar. |
 | **Pişti** | dört kişi, eşli ya da Mahmut'la ikili | Aynı kâğıt ya da vale yerdekileri alır; tek kâğıda pişti 10, valeye vale 20. 101 ya da 151'e. |
-| **Batak** | tekli ya da eşli | İhaleli batak: ihaleyi al, kozu söyle; tutamazsan batarsın. 31, 51 ya da 71'e. |
-| **King** | üç rakip | 20 el: her oyuncu 2 koz, 3 ceza seçer (el almaz, kupa almaz, erkek almaz, kız almaz, rıfkı, son iki). |
+| **Batak** | tekli ya da eşli | İhaleli batak: ihaleyi al, kozu söyle; tutamazsan batarsın. 31, 51 ya da 71'e. "Önce koz açılmalı" kuralı ayarlardan. |
+| **King** | üç rakip | 20 el: her oyuncu 2 koz, 3 ceza seçer (el almaz, kupa almaz, erkek almaz, kız almaz, rıfkı, son iki). Kısa King: 12 el, 1 koz 2 ceza. |
 
 Rakiplerin üç seviyesi (Acemi, Usta, Kurt) her oyunda vardır. Botlar yalnızca masada görülebilenleri bilir;
 Kurt kart oyunlarında görmediği kâğıtları olası dağılımlarla örnekleyip el sonuna kadar oynayarak (Monte Carlo),
@@ -135,6 +135,35 @@ Mod her açılışta kapalı başlar; `--ai` ile oyunu doğrudan bu modda bir ma
 
 Kuralların tamamı oyunun içinde **Kurallar** ekranında örneklerle anlatılır.
 
+## Kahvehane Defteri, İpucu, Rehber, Devam Et
+
+- **İstatistik** (giriş ekranı): her oyun için maç, galibiyet, el, en uzun seri ve rekor el; galibiyetlerle
+  kazanılan bir **rütbe** (Yeni Gelen'den Efsane'ye). Yapay zekanın oynadığı maçlar deftere yazılmaz.
+- **İpucu** düğmesi (ya da **H**): Kurt'un senin yerinde ne yapacağını masada gösterir.
+- **Oyun rehberi**: her oyunun ilk maçında kısa bir anlatım; Ayarlar'dan kapatılır, yeniden açınca hepsi tekrar gelir.
+- **Devam Et**: yarım bırakılan maç (menüye dönünce, oyunu kapatınca) kaydedilir; giriş ekranından kaldığın yerden
+  sürer. Yeni maç başlatınca eski kayıt silinir. Kayıt `~/Library/Application Support/SakliBahce/kayit.txt`.
+
+- **Tekrarlar** (İstatistik ekranında): biten son 20 maç saklanır; **İzle** maçı baştan oynatır (Boşluk durdurur,
+  sol / sağ ok hızı değiştirir), **Analiz** o maçın hatalarını gösterir.
+- **Hatalarım**: maç bitince Kurt maçı baştan oynayıp en pahalı üç hatanı söyler ("Kırmızı 12'yi attın, Hacı Rıza
+  onu alıp açtı. Kurt Sarı 3'ü atardı").
+- **Hafıza**: müdavimler seni hatırlar: uzun süre gelmeyince, rövanş isterken, marsı ya da okeyle bitişi anarken,
+  rütbe atlayınca laf atarlar (`hafiza.txt`).
+- **Konuşma sesleri**: konuşma balonlarına her karakterin kendi sesiyle bir mırıltı eşlik eder (Ayarlar → Görünüm · Ses).
+
+- **Vakit ve mevsim** (Ayarlar → Görünüm · Ses): sabah güneşi, öğle, akşam, gece; ilkbahar çiçekleri, yaz, sonbahar
+  yaprakları, kışın kar ve atkılar. "Otomatik" bilgisayarın saatine ve tarihine uyar.
+- **Seyirciler ve çay ocağı**: uzun bir maçta kapıdan girenler Kel Mahmut'un arkasında durup izler; büyük bir bitişte
+  ya da marsta öteki masalar "Vay be!" diye bağırır. Maçı kazanan herkese çay ısmarlar, çırak tepsiyle dolaşır.
+
+### Klavye ve erişilebilirlik
+
+Her oyun yalnızca klavyeyle oynanabilir: okeyde ok tuşları ıstakada gezer, **Boşluk** taşı alıp taşır, **D** desteden
+çeker, **A** soldakini alır, **Enter** atar, **O** el açar, **I** taşın işleneceği peri bulur. Kâğıt oyunlarında oklar ve
+Enter, düğmeler için Tab ya da 1–9; tavlada oklar pul ve hedef seçer, **R** zar atar, **U** geri alır. Ayarlar'da
+**Renk körü modu** (taşlarda renk başına bir şekil, dört renkli deste) ve **Büyük yazı** var.
+
 ## Rakipler
 
 | Koltuk | Oyuncu | |
@@ -142,6 +171,10 @@ Kuralların tamamı oyunun içinde **Kurallar** ekranında örneklerle anlatıl�
 | sağ | **Hacı Rıza** | kasketli, gri bıyıklı, tespihli; sakin, ata sözleriyle konuşur |
 | karşı | **Kel Mahmut** | iri, kara bıyıklı, çizgili gömlekli; sigara içer, gürültülü bir futbol sevdalısı |
 | sol | **Emekli Nuri** | ak saçlı, gözlüklü, hırkalı; oralet içer, "bizim zamanımızda…" diye söylenir |
+
+Her birinin kendi oyun tarzı var: **Kel Mahmut** atak oynar (soldan taşı kolay alır, batakta yüksek söyler, King'de
+kozu erken seçer), **Emekli Nuri** temkinlidir (sağına taş vermekten kaçınır, ihaleye zor girer), **Hacı Rıza** ise
+dengelidir.
 
 Zorluk **Ayarlar**'dan seçilir: **Acemi**, **Usta** ya da **Kurt**. Botlar hileye başvurmaz: yalnızca masada
 görülebilen taşları ve kendi ellerini bilirler. Usta ile Kurt, henüz açmamış sağdaki oyuncuya yüksek taş
@@ -163,6 +196,9 @@ ayarlarına dokunmaz.
 | `--hands N` | el sayısı (1–11) |
 | `--level L` | rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt |
 | `--ai` | Yapay Zeka modunda bir maçla başla (oyunda **Y** ile aç/kapa) |
+| `--resume` | kayıtlı yarım maça doğrudan devam et |
+| `--watch` | en son biten maçın tekrarını izle |
+| `--analyze` | en son biten maçın "Hatalarım" ekranını aç |
 | `--katlamali` | katlamalı oyun: her açan, öncekinden en az 1 fazlasıyla açar (yalnızca o oturum için) |
 | `--game G` | oyun: `101`, `esli`, `okey`, `tavla`, `pisti`, `batak` ya da `king` |
 | `--set K=V` | bir ayar, `ayarlar.txt` anahtarlarıyla (ör. `--set batakesli=1`, `--set pistimasa=2`, `--set tavla=3`) |
@@ -175,7 +211,7 @@ ayarlarına dokunmaz.
 | `--screenshot DOSYA` | `--max-frames` ile: son karede pencerenin görüntüsünü PNG olarak kaydet (`--state title`, `game`, `rules` ya da `settings` ile başlangıç ekranı seçilir) |
 | `--snapshot DOSYA` | gizli pencerede 1600×900 tek bir kare çizip PNG olarak kaydet ve çık |
 | `--frames N` | (`--snapshot` ile) görüntüden önce simüle edilecek kare sayısı |
-| `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules`, `settings` ya da `games` |
+| `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules`, `settings`, `games` ya da `stats` |
 | `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` |
 | `--help` | yardım |
 

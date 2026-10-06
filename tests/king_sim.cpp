@@ -1,9 +1,11 @@
 // Headless bot-vs-bot simulation for King.
 //
 //   king_sim --games N --seed S --levels a,b,c,d [--duplicate] [--rotate] [--verbose] [--slow MS]
+//            [--styles | --styles-fixed] [--king12]
 //   king_sim --baselines N [--seed S]
 //
-// levels: 0 = Acemi, 1 = Usta, 2 = Kurt, one per seat. A game is a full match (20 hands). --rotate shifts the
+// levels: 0 = Acemi, 1 = Usta, 2 = Kurt, one per seat. A game is a full match (20 hands; --king12: the short King,
+// 12 hands, each player 1 koz and 2 cezas, whose sum is not zero). --rotate shifts the
 // level assignment by one seat every match. --duplicate (implies rotation) plays every deal sequence four
 // times, once per rotation, so each level holds every seat's cards; the level comparison is then also
 // reported as a paired difference per deal (mean ± standard error), which removes most of the luck.
@@ -11,6 +13,10 @@
 // fallbackAction. Every match must sum to zero (default numbers) and finish all hands.
 // --baselines N: mean points of the chooser (seat 0) for each contract over N random deals, all Usta
 // (the numbers behind kKurtBaseline in KingBot.cpp).
+// --styles gives slot k (the k-th entry of --levels, moving with the rotation) the personality of seat k
+// (BotStyle::forSeat: 0, 1 neutral, 2 bold Kel Mahmut, 3 cautious Emekli Nuri) and prints per-slot contract and
+// card-play stats and, with --duplicate, every slot's paired difference against slot 0 (slot 1 is a neutral
+// control); --styles-fixed ties the presets to the physical seats (as in the game) for the level comparison.
 //
 // Build: clang++ -std=c++17 -O2 -Wall -Wextra -Isrc src/core/King.cpp src/core/KingBot.cpp tests/king_sim.cpp
 //        -o build/king/king_sim
@@ -61,6 +67,14 @@ struct LevelStats {
     std::array<double, NUM_CONTRACTS> chosenPts{}; // chooser's points in the contracts it chose
 };
 
+// Per persona (slot with --styles, seat with --styles-fixed).
+struct StyleStats {
+    long long seatMatches = 0, choices = 0, koz = 0, kozOrderSum = 0, kozEarly = 0;
+    double scoreSum = 0, scoreSq = 0;
+    long long cezaHands = 0, cezaTricks = 0, cezaPts = 0, kozHands = 0, kozTricks = 0;
+    long long chooserPts = 0;
+};
+
 struct Totals {
     long long matches = 0, hands = 0, rejected = 0, nonZeroSum = 0, unfinished = 0, earlyEnds = 0;
 };
@@ -70,13 +84,26 @@ struct MatchResult {
     bool ok = true;
 };
 
+bool gKing12 = false; // --king12
+
+Rules matchRules() {
+    Rules r;
+    if (gKing12) {
+        r.kozPerPlayer = 1;
+        r.cezaPerPlayer = 2;
+    }
+    return r;
+}
+
 MatchResult playMatch(uint64_t seed, const std::array<int, 4>& lv, std::array<LevelStats, 3>& st, Totals& tot,
-                      bool verbose, double slowMs) {
-    Game g;
+                      bool verbose, double slowMs, const int* persona = nullptr, StyleStats* sty = nullptr) {
+    Game g(matchRules());
     static const char* const names[4] = {"Bot0", "Bot1", "Bot2", "Bot3"};
     for (int s = 0; s < 4; ++s) g.setPlayer(s, names[s], false);
     std::array<Bot, 4> bots = {Bot((BotLevel)lv[0], seed * 4 + 1), Bot((BotLevel)lv[1], seed * 4 + 2),
                                Bot((BotLevel)lv[2], seed * 4 + 3), Bot((BotLevel)lv[3], seed * 4 + 4)};
+    if (persona)
+        for (int s = 0; s < 4; ++s) bots[s].setStyle(BotStyle::forSeat(persona[s]));
     g.startMatch(seed);
     int guard = 0;
     while (g.stage() != Stage::MatchOver && guard++ < 5000) {
@@ -130,7 +157,7 @@ MatchResult playMatch(uint64_t seed, const std::array<int, 4>& lv, std::array<Le
         res.total[s] = g.total(s);
         sum += g.total(s);
     }
-    if (sum != 0) ++tot.nonZeroSum;
+    if (sum != 0 && !gKing12) ++tot.nonZeroSum;
     ++tot.matches;
     // last hand's chooser stats
     if (!g.sheet().empty()) {
@@ -148,6 +175,37 @@ MatchResult playMatch(uint64_t seed, const std::array<int, 4>& lv, std::array<Le
         ls.scoreSum += res.total[s];
         ls.scoreSq += (double)res.total[s] * res.total[s];
         if (res.total[s] == best) ls.matchWins += 1.0 / nb;
+    }
+    if (persona && sty) {
+        int nth[4] = {0, 0, 0, 0};
+        for (const HandRecord& r : g.sheet()) {
+            StyleStats& cs = sty[persona[r.chooser]];
+            ++nth[r.chooser];
+            ++cs.choices;
+            cs.chooserPts += r.points[r.chooser];
+            if (r.contract == Contract::Koz) {
+                ++cs.koz;
+                cs.kozOrderSum += nth[r.chooser];
+                if (nth[r.chooser] <= 2) ++cs.kozEarly;
+            }
+            for (int s = 0; s < 4; ++s) {
+                StyleStats& ss = sty[persona[s]];
+                if (r.contract == Contract::Koz) {
+                    ++ss.kozHands;
+                    ss.kozTricks += r.tricks[s];
+                } else {
+                    ++ss.cezaHands;
+                    ss.cezaTricks += r.tricks[s];
+                    ss.cezaPts += r.points[s];
+                }
+            }
+        }
+        for (int s = 0; s < 4; ++s) {
+            StyleStats& ss = sty[persona[s]];
+            ++ss.seatMatches;
+            ss.scoreSum += res.total[s];
+            ss.scoreSq += (double)res.total[s] * res.total[s];
+        }
     }
     if (verbose)
         std::printf("match %llu: %d %d %d %d\n", (unsigned long long)seed, res.total[0], res.total[1], res.total[2],
@@ -210,6 +268,7 @@ int main(int argc, char** argv) {
     bool duplicate = false, rotate = false, verbose = false;
     double slowMs = 0;
     int baselines = 0;
+    int styleMode = 0; // 1 --styles (by slot), 2 --styles-fixed (by seat)
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto val = [&]() -> const char* { return i + 1 < argc ? argv[++i] : ""; };
@@ -225,6 +284,9 @@ int main(int argc, char** argv) {
         else if (a == "--verbose") verbose = true;
         else if (a == "--slow") slowMs = std::atof(val());
         else if (a == "--baselines") baselines = std::atoi(val());
+        else if (a == "--styles") styleMode = 1;
+        else if (a == "--styles-fixed") styleMode = 2;
+        else if (a == "--king12") gKing12 = true;
         else {
             std::printf("unknown option %s\n", a.c_str());
             return 2;
@@ -237,22 +299,32 @@ int main(int argc, char** argv) {
     // Paired per-deal level means (duplicate mode).
     std::vector<std::array<double, 3>> dealMean;
     std::vector<std::array<int, 3>> dealCnt;
+    StyleStats sty[4];
+    std::vector<std::array<double, 4>> dealStyle; // per deal: mean total per persona
     const double t0 = nowMs();
     for (int gi = 0; gi < games; ++gi) {
         const uint64_t ms = seed * 1000003ull + (uint64_t)gi;
         const int rots = duplicate ? 4 : 1;
         std::array<double, 3> m{};
         std::array<int, 3> c{};
+        std::array<double, 4> ps{};
         for (int r = 0; r < rots; ++r) {
             const int shift = duplicate ? r : (rotate ? gi % 4 : 0);
             std::array<int, 4> lv;
-            for (int s = 0; s < 4; ++s) lv[s] = levels[(s + shift) % 4];
-            const MatchResult res = playMatch(ms, lv, st, tot, verbose, slowMs);
+            int persona[4];
+            for (int s = 0; s < 4; ++s) {
+                lv[s] = levels[(s + shift) % 4];
+                persona[s] = styleMode == 1 ? (s + shift) % 4 : s;
+            }
+            const MatchResult res =
+                playMatch(ms, lv, st, tot, verbose, slowMs, styleMode ? persona : nullptr, styleMode ? sty : nullptr);
             for (int s = 0; s < 4; ++s) {
                 m[lv[s]] += res.total[s];
                 ++c[lv[s]];
+                ps[persona[s]] += res.total[s] / (double)rots;
             }
         }
+        dealStyle.push_back(ps);
         dealMean.push_back(m);
         dealCnt.push_back(c);
     }
@@ -309,6 +381,34 @@ int main(int argc, char** argv) {
             std::printf(" %s %lld/%.0f;", contractNameTR((Contract)c), s.chosen[c],
                         s.chosen[c] ? s.chosenPts[c] / s.chosen[c] : 0.0);
         std::printf("\n");
+    }
+    if (styleMode) {
+        std::printf("\nStyles (%s): 0, 1 neutral (Hacı Rıza), 2 bold (Kel Mahmut), 3 cautious (Emekli Nuri)\n",
+                    styleMode == 1 ? "by slot" : "by seat");
+        std::printf("  %-8s %16s %7s %10s %10s %13s %13s %11s\n", "style", "match total", "koz%", "kozOrder",
+                    "kozIn1-2", "cezaTrk/hand", "cezaPts/hand", "kozTrk/hand");
+        for (int p = 0; p < 4; ++p) {
+            const StyleStats& s = sty[p];
+            if (!s.seatMatches) continue;
+            const double n = (double)s.seatMatches, mean = s.scoreSum / n;
+            const double se = std::sqrt(std::max(0.0, s.scoreSq / n - mean * mean) / n);
+            std::printf("  %d (%+.0f) %9.1f ± %5.1f %6.1f%% %10.2f %9.1f%% %13.3f %13.1f %11.3f\n", p,
+                        BotStyle::forSeat(p).boldness, mean, se, s.choices ? 100.0 * s.koz / s.choices : 0.0,
+                        s.koz ? (double)s.kozOrderSum / s.koz : 0.0, s.koz ? 100.0 * s.kozEarly / s.koz : 0.0,
+                        s.cezaHands ? (double)s.cezaTricks / s.cezaHands : 0.0,
+                        s.cezaHands ? (double)s.cezaPts / s.cezaHands : 0.0,
+                        s.kozHands ? (double)s.kozTricks / s.kozHands : 0.0);
+        }
+        if (styleMode == 1 && duplicate && dealStyle.size() > 1)
+            for (int p = 1; p < 4; ++p) {
+                double m = 0, q = 0;
+                for (const auto& d : dealStyle) m += d[p] - d[0];
+                m /= dealStyle.size();
+                for (const auto& d : dealStyle) q += (d[p] - d[0] - m) * (d[p] - d[0] - m);
+                const double se = std::sqrt(q / (dealStyle.size() - 1) / dealStyle.size());
+                std::printf("  paired style %d - style 0: %8.1f ± %6.1f per match  (z = %.1f, %zu deals)\n", p, m, se,
+                            se > 0 ? m / se : 0.0, dealStyle.size());
+            }
     }
     return (tot.rejected || tot.unfinished || tot.nonZeroSum) ? 1 : 0;
 }

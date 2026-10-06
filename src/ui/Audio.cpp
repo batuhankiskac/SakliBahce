@@ -47,6 +47,8 @@ void soak(int sampleRate, unsigned long long seed, double seconds, double out[12
 // A recording (assets/music) through the radio's speaker chain at the level the game plays it (stereo,
 // what reaches the device at full master volume); false if the file can't be decoded.
 bool renderRecord(const char* path, int sampleRate, double seconds, std::vector<float>& stereoOut);
+double renderVoice(int sampleRate, int voice, const std::string& text, unsigned long long seed, bool chunked,
+                   std::vector<float>& stereoOut);
 } // namespace audio_dev
 
 namespace {
@@ -2421,6 +2423,686 @@ void RadioGen::render(float* out, int frames) {
 }
 
 // ------------------------------------------------------------------------------------------------
+// Voices: the regulars' murmur when a speech bubble appears
+// ------------------------------------------------------------------------------------------------
+//
+// No recordings, no TTS: a little formant synthesiser "says" the bubble's Turkish text as friendly gibberish (the
+// Animal Crossing idea, slower and softer). The text is parsed into syllables: every vowel (a e ı i o ö u ü) is a
+// voiced blip with that vowel's formants, the consonant before it its onset (stops: a closure and a tiny burst;
+// fricatives: soft band-passed hiss; sonorants: a hummed transition), word gaps and punctuation become pauses, and
+// the sentence shape drives the pitch: statements fall, questions rise at the end, exclamations are punchier (and rise
+// for the excitable ones). Each voice has its own pitch, speed, breathiness, nasality, creak and habits.
+// The whole line is rendered on the main thread into a preallocated slot (no allocation, < 1 ms) and the audio
+// thread only mixes finished slots (lock-free hand-over through an atomic state), panned by seat.
+
+constexpr float kVoiceMaxSeconds = 2.5f;   // a murmur never runs longer (the bubble stays longer: that's fine)
+constexpr float kVoiceTail = 0.12f;        // room for the filters to ring out
+constexpr int kVoiceSlots = 5;
+constexpr int kVoiceMaxSyl = 96;
+// Level: the voiced parts sit at this RMS (mono, before panning and master); peaks stay below kVoicePeak. The full
+// ambience bed runs at about -30 dBFS RMS; after the seat's pan and distance a murmur lands 1..4 dB under it
+// (audio_dev::renderVoice measures it).
+constexpr float kVoiceRmsDb = -28.f;
+constexpr float kVoicePeak = 0.30f;
+
+struct VoiceProfile {
+    float f0;         // base pitch (Hz)
+    float range;      // depth of the pitch contour
+    float syl;        // base syllable length (s)
+    float formant;    // vocal tract scale (formant frequencies)
+    float tilt;       // source low-pass (Hz): soft (low) .. bright (high)
+    float breath;     // aspiration mixed into the voicing
+    float nasal;      // 0..1 nasal murmur + anti-resonance
+    float gainDb;     // relative level
+    float vibCents;   // slow pitch wobble (an old voice)
+    float fry;        // creak at phrase ends (subharmonic) 0..1
+    float sigh;       // chance of a sigh after the line
+    float exclRise;   // pitch rise at the end of an exclamation (negative-ish ones fall)
+    float attack;     // vowel attack (s)
+    float wordGap;    // pause between words (s)
+    float pauseScale; // commas / full stops
+    float lp;         // final low-pass (Hz)
+    float shimmer;    // amplitude roughness (grumble)
+};
+
+// [0] unused, 1 Hacı Rıza, 2 Kel Mahmut, 3 Emekli Nuri, 4 a patron (the crowd), 5 the çaycı (çırak)
+const VoiceProfile kVoiceProfiles[6] = {
+    {},
+    // Rıza: low, slow, soft, a little breathy, an old man's gentle wobble
+    {100.f, .75f, .145f, .93f, 560.f, .20f, 0.f, -1.0f, 16.f, .22f, .12f, .05f, .032f, .075f, 1.25f, 4300.f, .03f},
+    // Mahmut: higher, fast, bright and loud; exclamations shoot up
+    {140.f, 1.35f, .088f, 1.0f, 1250.f, .05f, 0.f, 1.8f, 0.f, 0.f, 0.f, .32f, .007f, .03f, .8f, 6200.f, .02f},
+    // Nuri: mid, nasal, grumbly, slow; creaks at the ends and sighs
+    {120.f, .6f, .128f, .97f, 820.f, .10f, .85f, 0.f, 7.f, .5f, .5f, .06f, .016f, .06f, 1.15f, 5000.f, .14f},
+    // a patron across the room: muffled and quiet
+    {116.f, .9f, .1f, 1.f, 720.f, .12f, 0.f, -8.f, 0.f, .1f, 0.f, .1f, .012f, .05f, 1.f, 2600.f, .04f},
+    // the çaycı: a young voice, quick and bright
+    {196.f, 1.2f, .082f, 1.14f, 1500.f, .08f, 0.f, -2.f, 0.f, 0.f, 0.f, .22f, .008f, .035f, .85f, 6500.f, .02f},
+};
+
+enum : uint8_t { VC_None = 0, VC_Stop, VC_Fric, VC_Son, VC_H };
+enum : uint8_t { VS_Statement = 0, VS_Question, VS_Exclaim, VS_Trail };
+enum : uint8_t { VF_WordEnd = 1, VF_SentEnd = 2, VF_Hum = 4, VF_Pause = 8, VF_Sigh = 16 };
+
+// One planned event: a syllable, a pause or a sigh.
+struct VSyl {
+    uint8_t flags = 0;
+    uint8_t vowel = 0;              // kVowels index
+    uint8_t onset = VC_None, coda = VC_None;
+    char32_t onCh = 0, codaCh = 0;
+    uint8_t sent = VS_Statement;
+    uint8_t longV = 0;              // repeated vowel letters ("Gooool")
+    float dur = 0.f;                // seconds
+    float f0a = 1.f, f0b = 1.f;     // pitch multipliers at the start / end
+    float amp = 1.f;
+};
+
+struct VoicePlan {
+    std::array<VSyl, kVoiceMaxSyl> s;
+    int n = 0;
+    float total = 0.f;
+};
+
+// UTF-8 -> lower-case Turkish code points, one at a time.
+char32_t nextCodepoint(const std::string& t, size_t& i) {
+    const unsigned char c = (unsigned char)t[i];
+    char32_t cp = c;
+    int n = 1;
+    if (c >= 0xF0 && i + 3 < t.size()) {
+        cp = ((c & 7u) << 18) | (((unsigned char)t[i + 1] & 63u) << 12) | (((unsigned char)t[i + 2] & 63u) << 6) |
+             ((unsigned char)t[i + 3] & 63u);
+        n = 4;
+    } else if (c >= 0xE0 && i + 2 < t.size()) {
+        cp = ((c & 15u) << 12) | (((unsigned char)t[i + 1] & 63u) << 6) | ((unsigned char)t[i + 2] & 63u);
+        n = 3;
+    } else if (c >= 0xC0 && i + 1 < t.size()) {
+        cp = ((c & 31u) << 6) | ((unsigned char)t[i + 1] & 63u);
+        n = 2;
+    }
+    i += (size_t)n;
+    switch (cp) {
+    case U'I': return U'ı';
+    case U'İ': return U'i';
+    case U'Ç': return U'ç';
+    case U'Ğ': return U'ğ';
+    case U'Ö': return U'ö';
+    case U'Ş': return U'ş';
+    case U'Ü': return U'ü';
+    case U'â': case U'Â': return U'a';
+    case U'î': case U'Î': return U'i';
+    case U'û': case U'Û': return U'u';
+    default: break;
+    }
+    if (cp >= U'A' && cp <= U'Z') cp += 32;
+    return cp;
+}
+
+int vowelIndex(char32_t c) {
+    switch (c) {
+    case U'a': return 0;
+    case U'e': return 1;
+    case U'ı': return 2;
+    case U'i': return 3;
+    case U'o': return 4;
+    case U'ö': return 5;
+    case U'u': return 6;
+    case U'ü': return 7;
+    default: return -1;
+    }
+}
+
+uint8_t consonantClass(char32_t c) {
+    switch (c) {
+    case U'b': case U'c': case U'ç': case U'd': case U'g': case U'k': case U'p': case U't': case U'q': return VC_Stop;
+    case U'f': case U'j': case U's': case U'ş': case U'v': case U'z': case U'x': case U'w': return VC_Fric;
+    case U'h': return VC_H;
+    case U'l': case U'm': case U'n': case U'r': case U'y': return VC_Son;
+    default: return VC_None;
+    }
+}
+
+const char* digitWord(char32_t d) {
+    static const char* const k[10] = {"sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"};
+    return (d >= U'0' && d <= U'9') ? k[d - U'0'] : "";
+}
+
+// Text -> syllables and pauses, with durations and the pitch contour.
+void planSpeech(const std::string& text, const VoiceProfile& vp, okey::Rng& rng, VoicePlan& P) {
+    P.n = 0;
+    P.total = 0.f;
+    // ---- 1. letters -> syllables (onset = the consonant just before the vowel, the rest close the previous one)
+    char32_t pend[4] = {};
+    int np = 0, wordStart = 0, sentStart = 0;
+    bool inWord = false;
+    auto push = [&](const VSyl& v) {
+        if (P.n < kVoiceMaxSyl) P.s[(size_t)P.n++] = v;
+    };
+    auto endWord = [&]() {
+        if (!inWord) return;
+        inWord = false;
+        if (P.n > wordStart) {
+            VSyl& last = P.s[(size_t)(P.n - 1)];
+            if (np > 0 && last.coda == VC_None) {
+                last.coda = consonantClass(pend[0]);
+                last.codaCh = pend[0];
+            }
+            last.flags |= VF_WordEnd;
+        } else if (np > 0) { // no vowel at all ("Hmm", "Şşt"): a hummed syllable
+            VSyl v;
+            v.flags = VF_Hum | VF_WordEnd;
+            v.vowel = 2;
+            v.onset = consonantClass(pend[0]);
+            v.onCh = pend[0];
+            push(v);
+        }
+        np = 0;
+    };
+    auto pause = [&](float seconds) {
+        if (P.n == 0) return;
+        VSyl& last = P.s[(size_t)(P.n - 1)];
+        if (last.flags & VF_Pause) {
+            last.dur = std::max(last.dur, seconds);
+            return;
+        }
+        VSyl v;
+        v.flags = VF_Pause;
+        v.dur = seconds;
+        push(v);
+    };
+    auto endSentence = [&](uint8_t type) {
+        endWord();
+        for (int k = sentStart; k < P.n; ++k) P.s[(size_t)k].sent = type;
+        for (int k = P.n - 1; k >= sentStart; --k)
+            if (!(P.s[(size_t)k].flags & VF_Pause)) {
+                P.s[(size_t)k].flags |= VF_SentEnd;
+                break;
+            }
+        pause((type == VS_Trail ? .36f : .24f) * vp.pauseScale);
+        sentStart = P.n;
+    };
+    auto letter = [&](char32_t c) {
+        if (!inWord) {
+            inWord = true;
+            wordStart = P.n;
+            np = 0;
+        }
+        const int vi = vowelIndex(c);
+        if (vi >= 0) {
+            // the same vowel again ("Gooool", "Göstergeee"): one long vowel
+            if (np == 0 && P.n > wordStart && P.s[(size_t)(P.n - 1)].vowel == vi && P.s[(size_t)(P.n - 1)].coda == VC_None) {
+                VSyl& l = P.s[(size_t)(P.n - 1)];
+                l.longV = (uint8_t)std::min(4, l.longV + 1);
+                return;
+            }
+            VSyl v;
+            v.vowel = (uint8_t)vi;
+            if (np > 0) {
+                v.onCh = pend[np - 1];
+                v.onset = consonantClass(v.onCh);
+                if (np > 1 && P.n > wordStart && P.s[(size_t)(P.n - 1)].coda == VC_None) {
+                    P.s[(size_t)(P.n - 1)].codaCh = pend[0];
+                    P.s[(size_t)(P.n - 1)].coda = consonantClass(pend[0]);
+                }
+            }
+            np = 0;
+            push(v);
+        } else if (c == U'ğ') { // yumuşak g: the vowel before it gets longer
+            if (P.n > wordStart) P.s[(size_t)(P.n - 1)].longV = (uint8_t)std::min(4, P.s[(size_t)(P.n - 1)].longV + 1);
+        } else if (consonantClass(c) != VC_None) {
+            if (np < 4) pend[np++] = c;
+            else pend[3] = c;
+        }
+    };
+    int dots = 0;
+    for (size_t i = 0; i < text.size() && P.n < kVoiceMaxSyl - 2;) {
+        const char32_t c = nextCodepoint(text, i);
+        if (c != U'.') {
+            if (dots >= 2) endSentence(VS_Trail);
+            else if (dots == 1) endSentence(VS_Statement);
+            dots = 0;
+        }
+        if (c >= U'0' && c <= U'9') {
+            const std::string w = digitWord(c);
+            for (size_t k = 0; k < w.size();) letter(nextCodepoint(w, k));
+            endWord(); // "1 0 1": each digit a word
+            pause(vp.wordGap * .6f);
+        } else if (vowelIndex(c) >= 0 || consonantClass(c) != VC_None || c == U'ğ') {
+            letter(c);
+        } else if (c == U'.') {
+            ++dots;
+        } else if (c == U'?') {
+            endSentence(VS_Question);
+        } else if (c == U'!') {
+            endSentence(VS_Exclaim);
+        } else if (c == U'…') {
+            endSentence(VS_Trail);
+        } else if (c == U',' || c == U';' || c == U':' || c == U'—' || c == U'–') {
+            endWord();
+            pause(.15f * vp.pauseScale);
+        } else if (c == U' ' || c == U'-' || c == U'\n' || c == U'\t') {
+            endWord();
+            pause(vp.wordGap * rng.uniform(.7f, 1.3f));
+        } // apostrophes, quotes, other symbols: nothing
+    }
+    if (dots >= 2) endSentence(VS_Trail);
+    else endSentence(VS_Statement);
+    while (P.n > 0 && (P.s[(size_t)(P.n - 1)].flags & VF_Pause)) --P.n; // no trailing silence
+
+    // ---- 2. durations
+    float total = 0.f;
+    for (int k = 0; k < P.n; ++k) {
+        VSyl& v = P.s[(size_t)k];
+        if (v.flags & VF_Pause) {
+            total += v.dur;
+            continue;
+        }
+        float d = vp.syl * rng.uniform(.86f, 1.14f);
+        if (v.coda != VC_None) d *= 1.22f;
+        if (v.flags & VF_WordEnd) d *= 1.1f;
+        if (v.flags & VF_SentEnd) d *= v.sent == VS_Trail ? 1.6f : 1.3f;
+        if (v.flags & VF_Hum) d *= 1.3f;
+        if (v.sent == VS_Exclaim && !(v.flags & VF_SentEnd)) d *= .92f;
+        d *= 1.f + .55f * (float)v.longV;
+        v.dur = d;
+        total += d;
+    }
+    // too long: talk a little faster, then stop at a word boundary and let the last syllable fall
+    const float cap = kVoiceMaxSeconds - .05f;
+    if (total > cap) {
+        const float k = std::max(.8f, cap / total);
+        total = 0.f;
+        for (int i = 0; i < P.n; ++i) {
+            P.s[(size_t)i].dur *= k;
+            total += P.s[(size_t)i].dur;
+        }
+    }
+    if (total > cap) {
+        float t = 0.f;
+        int keep = 0, lastWordEnd = -1;
+        for (int i = 0; i < P.n; ++i) {
+            if (t + P.s[(size_t)i].dur > cap) break;
+            t += P.s[(size_t)i].dur;
+            keep = i + 1;
+            if (!(P.s[(size_t)i].flags & VF_Pause) && (P.s[(size_t)i].flags & VF_WordEnd)) lastWordEnd = i;
+        }
+        P.n = lastWordEnd >= 0 ? lastWordEnd + 1 : std::max(1, keep);
+        VSyl& l = P.s[(size_t)(P.n - 1)];
+        l.flags |= VF_SentEnd;
+        if (l.sent == VS_Question) l.sent = VS_Statement; // the question mark is cut off: no rise
+        total = 0.f;
+        for (int i = 0; i < P.n; ++i) total += P.s[(size_t)i].dur;
+    }
+    // a sigh after the line (Nuri, sometimes Rıza), if there is room
+    if (vp.sigh > 0.f && P.n > 0 && P.n < kVoiceMaxSyl && rng.chance(vp.sigh) && total + .55f < kVoiceMaxSeconds) {
+        VSyl g;
+        g.flags = VF_Pause;
+        g.dur = .12f;
+        P.s[(size_t)P.n++] = g;
+        VSyl s;
+        s.flags = VF_Sigh | VF_SentEnd;
+        s.vowel = 0;
+        s.dur = rng.uniform(.34f, .42f);
+        s.amp = .55f;
+        P.s[(size_t)P.n++] = s;
+        total += g.dur + s.dur;
+    }
+    P.total = total;
+
+    // ---- 3. pitch contour and loudness per syllable
+    int sentFirst = 0;
+    for (int k = 0; k < P.n; ++k) {
+        VSyl& v = P.s[(size_t)k];
+        if (v.flags & (VF_Pause | VF_Sigh)) continue;
+        // position within the sentence
+        int a = k, b = k;
+        while (a > 0 && !(P.s[(size_t)(a - 1)].flags & VF_SentEnd)) --a;
+        while (b < P.n - 1 && !(P.s[(size_t)b].flags & VF_SentEnd)) ++b;
+        if (a != sentFirst) sentFirst = a;
+        const float pos = b > a ? (float)(k - a) / (float)(b - a) : 1.f;
+        const float R = vp.range;
+        float f = 1.f + .07f * R - .14f * R * pos;             // declination
+        if (v.flags & VF_WordEnd) f += .045f * R;               // Turkish: stress on the word's last syllable
+        f += rng.uniform(-.03f, .03f) * R;
+        float g = f;                                            // where the syllable glides to
+        float amp = rng.uniform(.88f, 1.f) * (1.f - .18f * pos);
+        switch (v.sent) {
+        case VS_Question:
+            if (v.flags & VF_SentEnd) {
+                f = 1.f + .02f * R;
+                g = 1.f + .3f * std::max(.6f, R);
+            } else if (k == b - 1) {
+                g = f + .04f * R;
+            }
+            break;
+        case VS_Exclaim:
+            f *= 1.07f;
+            g = f;
+            amp *= 1.2f;
+            if (k == a) { // a punchy first syllable
+                f += .12f * R;
+                g = f;
+                amp *= 1.12f;
+            }
+            if (v.flags & VF_SentEnd) {
+                if (vp.exclRise > .15f) g = f * (1.f + vp.exclRise);   // Mahmut: "Gooool!" up
+                else g = f * .86f;
+            }
+            break;
+        case VS_Trail:
+            if (v.flags & VF_SentEnd) {
+                g = f * .82f;
+                amp *= .7f;
+            }
+            break;
+        default:
+            if (v.flags & VF_SentEnd) g = f * (.9f - .04f * R);
+            break;
+        }
+        if (v.flags & VF_Hum) {
+            amp *= .55f;
+            g = f * .95f;
+        }
+        v.f0a = f;
+        v.f0b = g;
+        v.amp = std::min(amp, 1.45f);
+    }
+}
+
+// Consonant colour: (noise band centre, Q, level) and the sonorants' second formant.
+void consonantNoise(char32_t c, float& hz, float& q, float& lvl) {
+    switch (c) {
+    case U's': case U'z': hz = 5200.f; q = 2.4f; lvl = .20f; break;
+    case U'ş': case U'j': case U'ç': case U'c': hz = 3000.f; q = 2.f; lvl = .22f; break;
+    case U'f': case U'v': hz = 2400.f; q = .8f; lvl = .10f; break;
+    case U'p': case U'b': hz = 1100.f; q = 1.f; lvl = .45f; break;
+    case U't': case U'd': hz = 3800.f; q = 1.4f; lvl = .40f; break;
+    case U'k': case U'g': case U'q': hz = 2000.f; q = 1.5f; lvl = .45f; break;
+    default: hz = 2500.f; q = 1.f; lvl = .15f; break;
+    }
+}
+
+float sonorantF2(char32_t c) {
+    switch (c) {
+    case U'm': return 1000.f;
+    case U'n': return 1500.f;
+    case U'l': return 1250.f;
+    case U'r': return 1350.f;
+    case U'y': return 2150.f;
+    default: return 1400.f;
+    }
+}
+
+bool voicedConsonant(char32_t c) {
+    return c == U'b' || c == U'c' || c == U'd' || c == U'g' || c == U'v' || c == U'z' || c == U'j';
+}
+
+// Renders a planned line (mono) into `out` (capacity `cap` frames); returns the frames written.
+int renderSpeech(const VoicePlan& P, const VoiceProfile& vp, float sr, uint64_t seed, float* out, int cap) {
+    okey::Rng rng(seed);
+    Noise nz((uint32_t)(seed * 2654435761u) | 1u);
+    const int total = std::min(cap, (int)((P.total + kVoiceTail) * sr));
+    if (total <= 0 || P.n <= 0) return 0;
+    Biquad b1, b2, b3, nb, nasalRes, nasalNotch, lp1, lp2, hp;
+    OnePole tilt;
+    tilt.lp(sr, vp.tilt);
+    lp1.lowpass(sr, vp.lp, .6f);
+    lp2.lowpass(sr, vp.lp * 1.2f, .7f);
+    hp.highpass(sr, 75.f, .7f);
+    nasalRes.bandpass(sr, 260.f, 2.5f);
+    nasalNotch.peaking(sr, 1050.f * vp.formant, 1.6f, -10.f * vp.nasal);
+    const float fs = vp.formant;
+    float f1 = kVowels[P.s[0].vowel].f1 * fs, f2 = kVowels[P.s[0].vowel].f2 * fs, f3 = kVowels[P.s[0].vowel].f3 * fs;
+    float f0 = vp.f0 * P.s[0].f0a, ph = 0.f, vibPh = rng.uniform(0.f, 1.f), jit = 0.f, shim = 1.f;
+    float vA = 0.f, nA = 0.f, aA = 0.f, dvA = 0.f, dnA = 0.f, daA = 0.f; // voicing, consonant noise, aspiration
+    float g2 = .55f, g3 = .25f;
+    int cycle = 0;
+    float fryAmt = 0.f;
+    const float kForm = 1.f - std::exp(-(float)kCtrl / (.022f * sr));
+    const float kF0 = 1.f - std::exp(-(float)kCtrl / (.018f * sr));
+    int seg = 0;
+    float segT0 = 0.f; // start time of `seg`
+    for (int i0 = 0; i0 < total; i0 += kCtrl) {
+        const float t = (float)i0 / sr;
+        while (seg < P.n && t >= segT0 + P.s[(size_t)seg].dur) {
+            segT0 += P.s[(size_t)seg].dur;
+            ++seg;
+        }
+        // ---- targets for this control block
+        float vT = 0.f, nT = 0.f, aT = 0.f, f1t = f1, f2t = f2, f3t = f3, f0t = f0, g2t = .55f, g3t = .25f, fryT = 0.f;
+        float nHz = 2500.f, nQ = 1.f;
+        if (seg < P.n) {
+            const VSyl& v = P.s[(size_t)seg];
+            const float u = (t - segT0) / std::max(v.dur, 1e-3f); // 0..1 through the event
+            const Vowel& vw = kVowels[v.vowel];
+            if (v.flags & VF_Sigh) {
+                // "hhhaah": breath through an open vowel, a whisper of voice that sinks
+                const float e = u < .18f ? u / .18f : std::pow(1.f - (u - .18f) / .82f, 1.6f);
+                aT = .55f * e * v.amp;
+                vT = .12f * e * v.amp;
+                f1t = vw.f1 * fs * .95f;
+                f2t = vw.f2 * fs;
+                f3t = vw.f3 * fs;
+                f0t = vp.f0 * (.8f - .2f * u);
+            } else if (!(v.flags & VF_Pause)) {
+                // phases: onset consonant | vowel | coda consonant (in seconds)
+                const float on = v.onset == VC_Stop ? .028f : v.onset == VC_Fric ? .05f : v.onset == VC_Son ? .04f
+                                 : v.onset == VC_H ? .04f : 0.f;
+                const float cd = v.coda == VC_Stop ? .03f : v.coda == VC_Fric ? .045f : v.coda == VC_Son ? .04f
+                                 : v.coda == VC_H ? .03f : 0.f;
+                const float sc = std::min(1.f, v.dur * .5f / std::max(on + cd, 1e-3f));
+                const float tOn = on * sc, tCd = cd * sc, tt = t - segT0;
+                const float vowelLen = std::max(.02f, v.dur - tOn - tCd);
+                const float pf = clampf(tt / v.dur, 0.f, 1.f);
+                f0t = vp.f0 * (v.f0a + (v.f0b - v.f0a) * pf);
+                f1t = vw.f1 * fs;
+                f2t = vw.f2 * fs;
+                f3t = vw.f3 * fs;
+                if (v.flags & VF_Hum) { // closed mouth: "mmm"
+                    f1t = 280.f * fs;
+                    f2t = 1100.f * fs;
+                    g2t = .2f;
+                    g3t = .08f;
+                }
+                if (tt < tOn) { // onset
+                    const float q = tt / std::max(tOn, 1e-4f);
+                    consonantNoise(v.onCh, nHz, nQ, nT);
+                    switch (v.onset) {
+                    case VC_Stop: // closure, then a short burst into the vowel
+                        vT = voicedConsonant(v.onCh) ? .1f : 0.f;
+                        nT = q > .62f ? nT * v.amp : 0.f;
+                        break;
+                    case VC_Fric:
+                        vT = voicedConsonant(v.onCh) ? .22f : 0.f;
+                        nT *= v.amp * (q < .2f ? q / .2f : 1.f);
+                        break;
+                    case VC_H:
+                        nT = 0.f;
+                        aT = .35f * v.amp;
+                        break;
+                    default: // sonorant: hummed, the formants glide from the consonant into the vowel
+                        nT = 0.f;
+                        vT = .42f * v.amp * (v.onCh == U'r' && q > .35f && q < .65f ? .45f : 1.f);
+                        f1t = 300.f * fs;
+                        f2t = sonorantF2(v.onCh) * fs;
+                        if (v.onCh == U'm' || v.onCh == U'n') {
+                            g2t = .18f;
+                            g3t = .08f;
+                        }
+                        break;
+                    }
+                } else if (tt < tOn + vowelLen) { // the vowel: a soft blip
+                    const float q = (tt - tOn) / vowelLen;
+                    const float atk = clampf((tt - tOn) / std::max(vp.attack, .003f), 0.f, 1.f);
+                    const bool open = (v.flags & (VF_WordEnd | VF_SentEnd)) != 0;
+                    const float rel = q < .62f ? 1.f : 1.f - (q - .62f) / .38f * (open ? .9f : .6f);
+                    vT = v.amp * (.5f - .5f * std::cos((float)kPi * atk)) * rel;
+                    aT = vp.breath * vT;
+                    if ((v.flags & VF_SentEnd) && q > .45f) fryT = vp.fry;
+                } else { // coda
+                    const float q = (tt - tOn - vowelLen) / std::max(tCd, 1e-4f);
+                    consonantNoise(v.codaCh, nHz, nQ, nT);
+                    switch (v.coda) {
+                    case VC_Stop:
+                        vT = 0.f;
+                        nT = q > .7f ? nT * .5f * v.amp : 0.f;
+                        break;
+                    case VC_Fric: nT *= .8f * v.amp * (1.f - q); break;
+                    case VC_H:
+                        nT = 0.f;
+                        aT = .25f * v.amp * (1.f - q);
+                        break;
+                    default:
+                        nT = 0.f;
+                        vT = .35f * v.amp * (1.f - .6f * q);
+                        f1t = 300.f * fs;
+                        f2t = sonorantF2(v.codaCh) * fs;
+                        if (v.codaCh == U'm' || v.codaCh == U'n') {
+                            g2t = .18f;
+                            g3t = .08f;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        // ---- smoothing and filter updates (control rate)
+        f1 += (f1t - f1) * kForm;
+        f2 += (f2t - f2) * kForm;
+        f3 += (f3t - f3) * kForm;
+        g2 += (g2t - g2) * kForm;
+        g3 += (g3t - g3) * kForm;
+        f0 += (f0t - f0) * kF0;
+        fryAmt += (fryT - fryAmt) * kForm;
+        jit += (rng.uniform(-.012f, .012f) - jit) * .3f;
+        shim += (1.f + rng.uniform(-vp.shimmer, vp.shimmer) - shim) * .35f;
+        b1.bandpass(sr, f1, f1 / (80.f * fs));
+        b2.bandpass(sr, f2, f2 / (100.f * fs));
+        b3.bandpass(sr, f3, f3 / (150.f * fs));
+        nb.bandpass(sr, nHz, nQ);
+        dvA = (vT * shim - vA) / (float)kCtrl;
+        dnA = (nT - nA) / (float)kCtrl;
+        daA = (aT - aA) / (float)kCtrl;
+        vibPh += 5.3f * (float)kCtrl / sr;
+        if (vibPh >= 1.f) vibPh -= 1.f;
+        const float vib = centsToRatio(vp.vibCents * std::sin(kTauF * vibPh));
+        const float inc = f0 * vib * (1.f + jit) / sr;
+        const int end = std::min(total, i0 + kCtrl);
+        for (int i = i0; i < end; ++i) {
+            ph += inc;
+            if (ph >= 1.f) {
+                ph -= 1.f;
+                ++cycle;
+            }
+            // a rounded glottal pulse: band-limited saw softened by the tilt, plus the fundamental for warmth
+            const float saw = 2.f * ph - 1.f - polyBlep(ph, inc);
+            const float sp = ph < .5f ? ph : ph - 1.f; // fast sine: parabola + one correction step
+            float sine = 8.f * sp * (1.f - 2.f * std::fabs(sp));
+            sine = .225f * (sine * std::fabs(sine) - sine) + sine;
+            float src = tilt.process(saw) * 1.6f + .45f * sine;
+            if (fryAmt > .01f && (cycle & 1)) src *= 1.f - .75f * fryAmt; // creak: every other pulse weaker
+            const float n = nz.next();
+            const float voiced = src * vA + n * aA * .5f;
+            float y = b1.process(voiced) + g2 * b2.process(voiced) + g3 * b3.process(voiced) + .12f * voiced * vA;
+            if (vp.nasal > 0.f) y = nasalNotch.process(y) + vp.nasal * .5f * nasalRes.process(src * vA);
+            if (nA > 1e-6f || dnA > 0.f) y += nb.process(n) * nA; // consonant hiss (idle between consonants)
+            y = hp.process(lp2.process(lp1.process(y)));
+            out[i] = y;
+            vA += dvA;
+            nA += dnA;
+            aA += daA;
+        }
+    }
+    // ---- level: the voiced parts at the target RMS, peaks under the ceiling, faded edges
+    const int win = std::max(1, (int)(.02f * sr));
+    float wins[160];
+    int nw = 0;
+    for (int i = 0; i + win <= total && nw < 160; i += win) {
+        double s = 0.0;
+        for (int k = 0; k < win; ++k) s += (double)out[i + k] * out[i + k];
+        wins[nw++] = (float)std::sqrt(s / win);
+    }
+    std::sort(wins, wins + nw);
+    const float active = nw > 0 ? wins[(int)(.8f * (float)(nw - 1))] : 0.f;
+    float peak = 0.f;
+    for (int i = 0; i < total; ++i) peak = std::max(peak, std::fabs(out[i]));
+    int syl = 0, excl = 0;
+    for (int k = 0; k < P.n; ++k)
+        if (!(P.s[(size_t)k].flags & (VF_Pause | VF_Sigh))) {
+            ++syl;
+            excl += P.s[(size_t)k].sent == VS_Exclaim ? 1 : 0;
+        }
+    const float punch = syl > 0 ? 2.f * (float)excl / (float)syl : 0.f; // exclamations: up to +2 dB
+    if (active > 1e-6f && peak > 0.f) {
+        float g = dbToGain(kVoiceRmsDb + vp.gainDb + punch) / active;
+        g = std::min(g, kVoicePeak / peak);
+        for (int i = 0; i < total; ++i) out[i] *= g;
+    }
+    const int fi = std::min(total / 4, (int)(.004f * sr) + 1), fo = std::min(total / 3, (int)(.03f * sr) + 1);
+    for (int i = 0; i < fi; ++i) out[i] *= (float)i / (float)fi;
+    for (int i = 0; i < fo; ++i) out[total - 1 - i] *= (float)i / (float)fo;
+    return total;
+}
+
+// One line in flight, handed from the main thread to the audio thread.
+struct VoiceSlot {
+    std::vector<float> buf;           // preallocated at init
+    std::atomic<int> state{0};        // 0 free (main thread may write), 1 playing (audio thread owns)
+    std::atomic<bool> stop{false};    // main -> audio: fade out now
+    int len = 0, voice = 0;
+    float gl = 0.f, gr = 0.f;
+    uint64_t serial = 0;              // main thread: start order
+    // audio thread only
+    int pos = 0;
+    float fade = 1.f;
+};
+
+struct VoiceBus {
+    std::array<VoiceSlot, kVoiceSlots> slots;
+    std::atomic<float> target{0.f};   // master * voices on/off (main thread)
+    float cur = 0.f, coef = 0.f, fadeStep = 0.f;
+    void init(float sr) {
+        for (VoiceSlot& s : slots) s.buf.assign((size_t)((kVoiceMaxSeconds + kVoiceTail + .05f) * sr), 0.f);
+        coef = smoothCoef(sr, .05f);
+        fadeStep = 1.f / (.02f * sr);
+    }
+    // audio thread: mixes the playing slots (overwrites `out`, interleaved stereo)
+    void render(float* out, int frames) {
+        std::memset(out, 0, sizeof(float) * 2 * (size_t)frames);
+        const float tgt = target.load(std::memory_order_relaxed);
+        float g = cur;
+        for (VoiceSlot& s : slots) {
+            if (s.state.load(std::memory_order_acquire) != 1) continue;
+            const bool stopping = s.stop.load(std::memory_order_relaxed);
+            g = cur;
+            int i = 0;
+            for (; i < frames && s.pos < s.len; ++i, ++s.pos) {
+                g += (tgt - g) * coef;
+                if (stopping) {
+                    s.fade -= fadeStep;
+                    if (s.fade <= 0.f) break;
+                }
+                const float x = s.buf[(size_t)s.pos] * g * s.fade;
+                out[2 * i] += x * s.gl;
+                out[2 * i + 1] += x * s.gr;
+            }
+            if (s.pos >= s.len || (stopping && s.fade <= 0.f)) s.state.store(0, std::memory_order_release);
+        }
+        // the shared gain moves the same way whether or not anything played
+        for (int i = 0; i < frames; ++i) cur += (tgt - cur) * coef;
+    }
+};
+
+std::atomic<VoiceBus*> gVoices{nullptr};
+
+void voiceCallback(void* data, unsigned int frames) {
+    float* out = static_cast<float*>(data);
+    if (VoiceBus* v = gVoices.load(std::memory_order_acquire))
+        v->render(out, (int)frames);
+    else
+        std::memset(out, 0, sizeof(float) * 2 * frames);
+}
+
+// ------------------------------------------------------------------------------------------------
 // Live state shared with raylib's audio thread
 // ------------------------------------------------------------------------------------------------
 
@@ -2590,6 +3272,12 @@ struct Audio::Impl {
     std::unique_ptr<RecordFx> recFx;
     std::string nowPlaying;
     bool nowPlayingNew = false;
+    // the regulars' voices
+    std::unique_ptr<VoiceBus> voices;
+    AudioStream voiceStream{};
+    bool voiceStreamOk = false, voicesOn = true;
+    VoicePlan plan;
+    uint64_t voiceSerial = 0, voiceSeed = 0;
 
     void loadPlaylist();
     void startSong();
@@ -2600,6 +3288,7 @@ struct Audio::Impl {
     void pushTargets() {
         if (amb) amb->target.store(ambOn ? masterGain() : 0.f, std::memory_order_relaxed);
         if (radio) radio->target.store(musicOn ? masterGain() : 0.f, std::memory_order_relaxed);
+        if (voices) voices->target.store(voicesOn ? masterGain() : 0.f, std::memory_order_relaxed);
     }
     void playNow(Sfx s, float vol, float pitch, float pan);
     void enqueue(Sfx s, float vol, float pan, float gap, bool handEnd = false, float pitch = 1.f);
@@ -2830,6 +3519,18 @@ bool Audio::init() {
         SetAudioStreamVolume(m.radioStream, 1.f / kCenterPanGain);
         PlayAudioStream(m.radioStream);
     }
+    m.voices = std::make_unique<VoiceBus>();
+    m.voices->init(m.sr);
+    m.voiceSeed = seed ^ 0x5EECull;
+    m.pushTargets();
+    gVoices.store(m.voices.get(), std::memory_order_release);
+    m.voiceStream = LoadAudioStream((unsigned)m.sr, 32, 2);
+    m.voiceStreamOk = IsAudioStreamValid(m.voiceStream);
+    if (m.voiceStreamOk) {
+        SetAudioStreamCallback(m.voiceStream, voiceCallback);
+        SetAudioStreamVolume(m.voiceStream, 1.f / kCenterPanGain);
+        PlayAudioStream(m.voiceStream);
+    }
     AttachAudioMixedProcessor(mixLimiter);
     m.loadPlaylist();
     if (!m.tracks.empty()) {
@@ -2861,6 +3562,10 @@ void Audio::shutdown() {
             StopAudioStream(m.radioStream);
             UnloadAudioStream(m.radioStream);
         }
+        if (m.voiceStreamOk) {
+            StopAudioStream(m.voiceStream);
+            UnloadAudioStream(m.voiceStream);
+        }
         for (auto& vars : m.sounds) {
             for (auto& var : vars) {
                 for (size_t k = 1; k < var.voices.size(); ++k) UnloadSoundAlias(var.voices[k]);
@@ -2871,12 +3576,15 @@ void Audio::shutdown() {
     gAmb.store(nullptr);
     gRadio.store(nullptr);
     gRecFx.store(nullptr);
+    gVoices.store(nullptr);
     gBank.store(nullptr);
     gRate.store(0);
     for (auto& vars : m.sounds) vars.clear();
     m.amb.reset();
     m.radio.reset();
     m.recFx.reset();
+    m.voices.reset();
+    m.voiceStreamOk = false;
     m.tracks.clear();
     m.order.clear();
     m.orderPos = 0;
@@ -2903,6 +3611,7 @@ void Audio::update(float dt) {
     // a device hiccup can stop a stream; keep the beds running
     if (m.ambStreamOk && !IsAudioStreamPlaying(m.ambStream)) PlayAudioStream(m.ambStream);
     if (m.radioStreamOk && !IsAudioStreamPlaying(m.radioStream)) PlayAudioStream(m.radioStream);
+    if (m.voiceStreamOk && !IsAudioStreamPlaying(m.voiceStream)) PlayAudioStream(m.voiceStream);
     m.updateRadio(clampf(dt, 0.f, .25f));
 }
 
@@ -2991,6 +3700,69 @@ void Audio::setRain(float amount01) {
     Impl& m = *impl_;
     m.rain = clampf(amount01, 0.f, 1.f);
     if (m.amb) m.amb->rainTarget.store(m.rain, std::memory_order_relaxed);
+}
+
+namespace {
+uint64_t hashText(const std::string& t) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : t) h = (h ^ c) * 1099511628211ull;
+    return h;
+}
+
+// Where a voice sits: the seats like their other sounds, a patron somewhere in the room, the çaycı nearby.
+void voiceSpatial(int voice, okey::Rng& r, float& gl, float& gr) {
+    float pan = 0.f, vol = 1.f;
+    if (voice >= 1 && voice <= 3) seatSpatial(voice, pan, vol);
+    else if (voice == 4) pan = r.uniform(-.85f, .85f);
+    else pan = r.uniform(-.35f, .35f), vol = .9f;
+    gl = std::cos((pan + 1.f) * (float)kPi * .25f) * vol;
+    gr = std::sin((pan + 1.f) * (float)kPi * .25f) * vol;
+}
+
+// The voice's profile for one line (a patron gets a voice of his own each time).
+VoiceProfile lineProfile(int voice, okey::Rng& r) {
+    VoiceProfile p = kVoiceProfiles[voice];
+    if (voice == 4) {
+        p.f0 *= r.uniform(.82f, 1.22f);
+        p.formant *= r.uniform(.95f, 1.06f);
+        p.syl *= r.uniform(.9f, 1.15f);
+    }
+    return p;
+}
+} // namespace
+
+void Audio::speak(int voice, const std::string& text) {
+    Impl& m = *impl_;
+    if (!m.ready || !m.voicesOn || !m.voices || text.empty() || voice < 1 || voice > 5) return;
+    VoiceBus& bus = *m.voices;
+    // the same man starts a new line: the old one fades out
+    for (VoiceSlot& s : bus.slots)
+        if (s.voice == voice && s.state.load(std::memory_order_acquire) == 1) s.stop.store(true, std::memory_order_relaxed);
+    VoiceSlot* slot = nullptr;
+    for (VoiceSlot& s : bus.slots)
+        if (s.state.load(std::memory_order_acquire) == 0 && (!slot || s.serial < slot->serial)) slot = &s;
+    if (!slot) return; // five lines at once already: this one stays silent
+    const uint64_t seed = hashText(text) ^ (m.voiceSeed + 0x9E3779B97F4A7C15ull * ++m.voiceSerial);
+    okey::Rng r(seed);
+    const VoiceProfile p = lineProfile(voice, r);
+    planSpeech(text, p, r, m.plan);
+    slot->len = renderSpeech(m.plan, p, m.sr, seed, slot->buf.data(), (int)slot->buf.size());
+    if (slot->len <= 0) return;
+    voiceSpatial(voice, r, slot->gl, slot->gr);
+    slot->voice = voice;
+    slot->serial = m.voiceSerial;
+    slot->pos = 0;
+    slot->fade = 1.f;
+    slot->stop.store(false, std::memory_order_relaxed);
+    slot->state.store(1, std::memory_order_release);
+}
+
+void Audio::setVoicesEnabled(bool on) {
+    Impl& m = *impl_;
+    m.voicesOn = on;
+    m.pushTargets();
+    if (!on && m.voices)
+        for (VoiceSlot& s : m.voices->slots) s.stop.store(true, std::memory_order_relaxed);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -3127,6 +3899,37 @@ void soak(int sampleRate, unsigned long long seed, double seconds, double out[12
     }
     out[10] = (double)nonFinite;
     out[11] = (double)done / sr;
+}
+
+// One line of a voice as the game would play it (stereo, panned, at full master volume), plus its plan's length.
+// `chunked`: through the voice bus with random callback-sized chunks (the audio thread's path).
+double renderVoice(int sampleRate, int voice, const std::string& text, unsigned long long seed, bool chunked,
+                   std::vector<float>& stereoOut) {
+    stereoOut.clear();
+    if (voice < 1 || voice > 5) return 0.0;
+    const float sr = (float)sampleRate;
+    auto bus = std::make_unique<VoiceBus>();
+    bus->init(sr);
+    bus->target.store(1.f);
+    bus->cur = 1.f;
+    auto plan = std::make_unique<VoicePlan>();
+    okey::Rng r(seed);
+    const VoiceProfile p = lineProfile(voice, r);
+    planSpeech(text, p, r, *plan);
+    VoiceSlot& s = bus->slots[0];
+    s.len = renderSpeech(*plan, p, sr, seed, s.buf.data(), (int)s.buf.size());
+    voiceSpatial(voice, r, s.gl, s.gr);
+    s.state.store(1);
+    const int frames = s.len;
+    stereoOut.assign((size_t)frames * 2, 0.f);
+    okey::Rng cr(seed ^ 0xC4u);
+    int done = 0;
+    while (done < frames) {
+        const int n = std::min(frames - done, chunked ? cr.range(1, 1024) : 512);
+        bus->render(stereoOut.data() + 2 * done, n);
+        done += n;
+    }
+    return (double)plan->total;
 }
 
 bool streamStats(double out[8]) {

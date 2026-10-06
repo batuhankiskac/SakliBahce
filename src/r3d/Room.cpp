@@ -1,6 +1,7 @@
 // The kıraathane interior (room owner): public API, per-frame animation (lamps, TV, fan, clock, dice, chairs,
 // passing cars, bead curtain), lighting & atmosphere (key light, point lights, fog/haze, smoke) and submission.
 #include "r3d/RoomInternal.h"
+#include "r3d/Daytime.h"
 
 #include <algorithm>
 #include <cmath>
@@ -58,7 +59,11 @@ bool Room::init(Renderer& r, uint64_t seed) {
     I.cvArt = makeCanvas(ART_W, ART_H);
     drawArtAtlas(I.cvArt, I.seed);
     I.cvStreet = makeCanvas(STREET_W, STREET_H);
-    drawStreetCanvas(I.cvStreet, I.seed);
+    I.phase = w3d::resolveDayPhase(I.dayMode);
+    I.seasonNow = w3d::resolveSeason(I.seasonMode);
+    drawStreetCanvas(I.cvStreet, I.seed, I.phase, I.seasonNow);
+    I.streetPhase = I.phase;
+    I.streetSeason = I.seasonNow;
     I.cvScore = makeCanvas(1024, 696);
     I.cvTv = makeCanvas(320, 240);
     I.cvLetter = makeCanvas(1024, 256);
@@ -99,6 +104,7 @@ bool Room::init(Renderer& r, uint64_t seed) {
     I.buildAll();
     I.initWeather();
     I.initCat();
+    I.initDaylight();
     for (Impl::Lamp& L : I.lamps) L.dust = r.makeMat(Color{255, 212, 158, 26}, I.texDust, 0.f, 1.f, 1.f);
     {
         MeshBuilder q;
@@ -137,6 +143,7 @@ bool Room::init(Renderer& r, uint64_t seed) {
 }
 
 void Room::Impl::freeAll(Renderer& r) {
+    freeDaylight(r);
     freeWeather(r);
     freeCat(r);
     auto um = [](Mesh& m) {
@@ -210,6 +217,7 @@ void Room::update(float dt) {
     if (!I.ready) return;
     dt = std::clamp(dt, 0.f, 0.1f);
     I.time += dt;
+    I.updateDaylight(dt);
     I.updateLamps(dt);
     I.updateProps(dt);
     I.updateSmoke(dt);
@@ -234,6 +242,7 @@ void Room::submit(Renderer& r) {
     I.submitLamps(r);
     I.submitProps(r);
     I.submitWeather(r);
+    I.submitDaylight(r);
     I.submitCat(r);
 }
 
@@ -244,7 +253,7 @@ void Room::Impl::updateLamps(float dt) {
     for (size_t i = 0; i < lamps.size(); ++i) {
         Lamp& L = lamps[i];
         float n = noise1(time * 5.3f + L.phase, 17u + (uint32_t)i);
-        float target = L.key ? 0.99f + 0.01f * n : 0.92f + 0.08f * n;
+        float target = (L.key ? 0.99f + 0.01f * n : 0.92f + 0.08f * n) * L.power;
         if (L.dip > 0.f) {
             L.dip -= dt;
             if (L.faulty > 0.f) target *= noise1(time * 55.f, 5u) > 0.45f ? 0.3f : 0.95f;
@@ -283,7 +292,7 @@ void Room::Impl::updateLamps(float dt) {
 
 void Room::Impl::updateProps(float dt) {
     const float sfxRate = title ? 0.5f : 1.f;
-    fanAngle = std::fmod(fanAngle + dt * 2.3f, 2.f * PI);
+    fanAngle = std::fmod(fanAngle + dt * fanSpeed, 2.f * PI);
     // --- TV match
     tv.step(dt);
     if (tv.goalEvent) {
@@ -297,7 +306,7 @@ void Room::Impl::updateProps(float dt) {
     }
     tvLight += (tv.brightness * tv.flicker - tvLight) * std::min(1.f, dt * 20.f);
     // --- stove fire flicker, window light
-    stoveLevel = 0.8f + 0.2f * noise1(time * 3.1f, 41u) + 0.08f * noise1(time * 11.f, 43u);
+    stoveLevel = (0.8f + 0.2f * noise1(time * 3.1f, 41u) + 0.08f * noise1(time * 11.f, 43u)) * stoveLit;
     windowLevel = 0.95f + 0.05f * noise1(time * 0.3f, 47u);
     emberHeat = 0.75f + 0.25f * noise1(time * 1.7f, 51u) + 0.1f * noise1(time * 9.f, 53u);
     // --- tavla dice: every now and then somebody throws
@@ -514,21 +523,23 @@ void Room::Impl::warmUpSmoke() {
 
 // ============================================================================ submission
 void Room::Impl::submitLights(Renderer& r) {
-    // Night: very little bounce light, so the lamps make pools and the corners fall into brown shadow.
+    // Night: very little bounce light, so the lamps make pools and the corners fall into brown shadow. By day the
+    // windows fill the room with a soft, cooler light (golden in the evening) and the smoke glows with it.
+    const float D = dayK;
     Ambient a;
-    a.sky = Color{92, 74, 58, 255};
-    a.ground = Color{40, 30, 24, 255};
-    a.intensity = title ? 0.34f : 0.2f;
+    a.sky = mix(Color{92, 74, 58, 255}, mix(Color{176, 170, 158, 255}, Color{200, 150, 110, 255}, duskK), D);
+    a.ground = mix(Color{40, 30, 24, 255}, Color{92, 78, 62, 255}, D);
+    a.intensity = (title ? 0.34f : 0.2f) + 0.3f * D;
     r.setAmbient(a);
     // Dumanaltı: thin smoky air everywhere, a thick layer under the ceiling that starts above head height.
     // The colour is the radiance of *unlit* smoke (the renderer scales it by its FOG_AMBIENT), so it is kept
     // dark: the haze glows where the lamps light it (in-scatter) and the corners fall off to near-black.
     Fog f;
-    f.color = Color{50, 44, 38, 255};
+    f.color = mix(Color{50, 44, 38, 255}, mix(Color{118, 116, 110, 255}, Color{130, 104, 84, 255}, duskK), D);
     f.density = 0.05f;
     f.hazeStart = 1.95f;
     f.hazeTop = CY;
-    f.hazeDensity = 0.5f;
+    f.hazeDensity = 0.5f - 0.12f * D;
     r.setFog(f);
 
     const Lamp& K = lamps[0];
@@ -543,21 +554,37 @@ void Room::Impl::submitLights(Renderer& r) {
     k.shadows = true;
     r.setKeyLight(k);
 
+    // the room's budget is 9 point lights; a lamp switched off (an empty table by day) or the cold stove leave
+    // their slot to the daylight from the other windows
+    int n = 0;
+    auto add = [&](const PointLight& p) {
+        if (n >= 9 || p.intensity <= 0.01f) return;
+        r.addPointLight(p);
+        ++n;
+    };
     // Pendants: the light source sits a little below the shade mouth, so the enamel shade "blocks" most of
     // the light that would otherwise wash the ceiling.
     for (size_t i = 1; i < lamps.size(); ++i) {
         const Lamp& L = lamps[i];
         float s = L.small ? 0.7f : 1.f;
-        r.addPointLight({Vector3Add(L.cur, Vector3{0, -0.26f * s, 0}), L.color, L.intensity * L.level, L.range});
+        add({Vector3Add(L.cur, Vector3{0, -0.26f * s, 0}), L.color, L.intensity * L.level, L.range});
     }
-    r.addPointLight({tvFront, Color{150, 176, 255, 255}, 0.2f + 0.8f * tvLight, 3.2f});
-    // cool street light through the left windows; a passing car's headlights drag it along the wall
-    Vector3 wp{-3.8f, 1.85f, -0.45f};
-    if (sweepLevel > 0.01f) wp = Vector3Lerp(wp, sweepLightPos, std::min(1.f, sweepLevel * 1.5f));
-    r.addPointLight({wp, Color{116, 146, 210, 255}, 1.0f * windowLevel + 1.1f * sweepLevel, 3.6f});
-    r.addPointLight({stoveGlowPos, Color{255, 128, 56, 255}, 0.75f * stoveLevel, 2.3f});
-    // the picture light keeps the chalked scores readable from our table (9th and last room light)
-    r.addPointLight({boardLightPos, Color{255, 200, 140, 255}, 0.42f * lamps[1].level, 1.7f});
+    add({tvFront, Color{150, 176, 255, 255}, (0.2f + 0.8f * tvLight) * (1.f - 0.5f * D), 3.2f});
+    // cool street light through the left windows (daylight by day); a passing car's headlights drag it along the wall
+    // (by day the light sits up and into the room: the haze glows with it instead of a blob on the glass)
+    Vector3 wp = Vector3Lerp(Vector3{-3.8f, 1.85f, -0.45f}, Vector3{-2.7f, 2.45f, -0.6f}, std::min(1.f, D * 2.f));
+    const float sweep = sweepLevel * (1.f - D);
+    if (sweep > 0.01f) wp = Vector3Lerp(wp, sweepLightPos, std::min(1.f, sweep * 1.5f));
+    const Color winCol = mix(Color{116, 146, 210, 255}, sunColor, std::min(1.f, D * 1.6f));
+    add({wp, winCol, 1.0f * windowLevel + 1.1f * sweep + 1.5f * D, 3.6f + 2.4f * D});
+    if (stoveLit > 0.02f) add({stoveGlowPos, Color{255, 128, 56, 255}, 0.75f * stoveLevel * (1.f + 0.35f * (1.f - D)), 2.3f + 0.6f * stoveLit});
+    // the picture light keeps the chalked scores readable from our table
+    add({boardLightPos, Color{255, 200, 140, 255}, 0.42f * lamps[1].level, 1.7f});
+    if (D > 0.02f) {
+        add({{-2.7f, 2.45f, 0.9f}, winCol, 1.4f * D, 5.5f});     // the second street window
+        add({{-3.2f, 2.4f, -2.4f}, winCol, 1.1f * D, 4.5f});     // the back window
+        add({{-3.0f, 2.3f, 2.75f}, winCol, 0.8f * D, 3.8f});     // the open street door
+    }
 }
 
 void Room::Impl::submitLamps(Renderer& r) {
@@ -567,11 +594,13 @@ void Room::Impl::submitLamps(Renderer& r) {
         const float s = L.small ? 0.7f : 1.f;
         Matrix M = MatrixMultiply(MatrixMultiply(MatrixScale(s, s, s), translate(L.bulb)), L.xf);
         r.submit(&shadeOut, &mCeramic, M, 0);  // never in the shadow map: the key light sits inside its shade
-        r.submit(&shadeIn, &mShadeIn, M, 0);
-        r.submit(&bulbMesh, &mBulb, M, 0);
+        const bool lit = L.power > 0.3f;       // switched off by day over an empty table
+        r.submit(&shadeIn, lit ? &mShadeIn : &mCeramic, M, 0);
+        if (lit) r.submit(&bulbMesh, &mBulb, M, 0);
         float top = L.bulb.y + 0.165f * s;
         Matrix C = MatrixMultiply(MatrixMultiply(MatrixScale(1.f, CY - top, 1.f), MatrixTranslate(L.bulb.x, top, L.bulb.z)), L.xf);
         r.submit(&cordMesh, &mPaint, C, 0);
+        if (L.level < 0.02f) continue;
         r.submitGlow(Vector3Add(L.cur, Vector3{0, -0.03f * s, 0}), (L.key ? 0.2f : 0.17f) * s, Color{255, 214, 150, 255}, 0.6f * L.level);
         r.submitGlow(Vector3Add(L.cur, Vector3{0, -0.09f * s, 0}), (L.key ? 0.55f : 0.45f) * s, Color{255, 190, 120, 255}, 0.12f * L.level);
         // light shaft facing the camera about the vertical axis
@@ -645,7 +674,7 @@ void Room::Impl::submitProps(Renderer& r) {
         r.submit(&curtainMesh[g], &mVarnish, M, 0);
     }
     // headlight sweep across the ceiling
-    if (sweepLevel > 0.01f) {
+    if (sweepLevel * (1.f - dayK) > 0.01f) {
         float zc = 0.f, best = -1.f;
         for (float zw : {-1.7f, 0.8f, 2.8f}) {
             float s = std::exp(-(carZ - zw) * (carZ - zw) / 2.2f);
@@ -654,7 +683,7 @@ void Room::Impl::submitProps(Renderer& r) {
                 zc = zw - (carZ - zw) * 1.3f;
             }
         }
-        mSweep.material.maps[MATERIAL_MAP_ALBEDO].color.a = (unsigned char)std::clamp(70.f * sweepLevel, 0.f, 255.f);
+        mSweep.material.maps[MATERIAL_MAP_ALBEDO].color.a = (unsigned char)std::clamp(70.f * sweepLevel * (1.f - dayK), 0.f, 255.f);
         Matrix M = MatrixMultiply(MatrixScale(2.2f, 1.f, 0.9f), MatrixTranslate(-2.3f, CY - 0.012f, std::clamp(zc, -3.f, 3.2f)));
         r.submit(&sweepQuad, &mSweep, M, Transparent | Additive | DoubleSided | NoFog);
     }
@@ -663,21 +692,26 @@ void Room::Impl::submitProps(Renderer& r) {
     {
         Vector3 sc = Vector3Subtract(tvFront, Vector3Scale(tvNormal, 0.25f));
         r.submitGlow(sc, 0.42f, Color{140, 170, 255, 255}, 0.16f * tvLight);
-        r.submitGlow(stoveGlowPos, 0.12f, Color{255, 120, 40, 255}, 0.55f * stoveLevel);
-        r.submitGlow(Vector3Add(stoveGlowPos, Vector3{0, -0.2f, 0}), 0.35f, Color{255, 110, 40, 255}, 0.12f * stoveLevel);
+        if (stoveLit > 0.02f) {
+            r.submitGlow(stoveGlowPos, 0.12f + 0.05f * stoveLit, Color{255, 120, 40, 255}, 0.55f * stoveLevel);
+            r.submitGlow(Vector3Add(stoveGlowPos, Vector3{0, -0.2f, 0}), 0.35f + 0.15f * stoveLit, Color{255, 110, 40, 255}, 0.14f * stoveLevel);
+        }
         float fl = 0.8f + 0.2f * noise1(time * 13.f, 61u);
         r.submitGlow(flamePos, 0.07f, Color{90, 150, 255, 255}, 0.7f * fl);
         r.submitGlow(Vector3Add(flamePos, Vector3{0.3f, 0, 0}), 0.05f, Color{90, 150, 255, 255}, 0.35f * fl);
         r.submitGlow(radioDialPos, 0.05f, Color{255, 190, 110, 255}, 0.35f);
         r.submitGlow(boardGlowPos, 0.09f, Color{255, 214, 160, 255}, 0.28f * lamps[1].level);
-        r.submitGlow(streetLampGlow, 0.9f, Color{255, 170, 90, 255}, 0.55f);
-        r.submitGlow(backLampGlow, 0.7f, Color{255, 176, 96, 255}, 0.5f);
+        const float night = 1.f - std::min(1.f, dayK * 1.4f);  // street lamps and lit windows: evening and night
+        if (night > 0.01f) {
+        r.submitGlow(streetLampGlow, 0.9f, Color{255, 170, 90, 255}, 0.55f * night);
+        r.submitGlow(backLampGlow, 0.7f, Color{255, 176, 96, 255}, 0.5f * night);
         for (size_t i = 0; i < neighbourWindows.size(); ++i) {
             float f = i == 0 ? 0.5f + 0.5f * noise1(time * 6.f, 71u) : 0.8f;
             Color c = i == 0 ? Color{120, 160, 255, 255} : Color{255, 190, 110, 255};
-            r.submitGlow(neighbourWindows[i], 0.5f, c, 0.18f * f);
+            r.submitGlow(neighbourWindows[i], 0.5f, c, 0.18f * f * night);
         }
-        if (carActive > 0.f) {
+        }
+        if (carActive > 0.f && dayK < 0.6f) {
             for (int s = -1; s <= 1; s += 2) {
                 r.submitGlow({-6.2f + s * 0.65f, 0.62f, carZ}, 0.28f, Color{255, 246, 220, 255}, 0.9f);
                 r.submitGlow({-6.2f + s * 0.65f, 0.62f, carZ + carDir * 0.2f}, 1.1f, Color{255, 240, 210, 255}, 0.18f);

@@ -642,6 +642,7 @@ std::vector<RuleBlock> buildRules101(bool esli) {
       "olan maçı kazanır. En düşük toplam birden fazla oyuncudaysa birincilik paylaşılır.");
 
     H("Kontroller");
+    B("*İpucu:* takılırsan *İpucu* düğmesi (ya da *H*) Kurt'un senin yerinde ne yapacağını gösterir.");
     B("*Etrafa bakmak:* farenin sağ tuşunu basılı tutup sürükle. *Fare tekerleği* yakınlaştırır, *R* ya da sağ "
       "tuşa çift tıklamak bakışını yeniden masaya ortalar.");
     B("*Istaka:* taşları sürükleyerek 2 sıra \xC3\x97 16 yuvaya dilediğin gibi diz. Yan yana duran taşlar "
@@ -736,6 +737,7 @@ std::vector<RuleBlock> buildRulesOkey() {
     B("*Okey atarak* bitişte ^4^, *çiftten* bitişte ^4^, ikisi birden olursa ^8^ düşülür.");
     B("Gösterge gösterilince diğerlerinden ^1^ düşülür.");
     B("Ortadaki taşlar biter ve kimse bitemezse el berabere biter; yalnızca gösterge sayılır.");
+    B("*Renkli okey* (ayarlardan): gösterge kırmızı ya da siyahsa o elde bütün puanlar iki katına çıkar.");
     P("Puanı sıfıra (ya da altına) inen biri olunca oyun biter; *en yüksek puanda kalan* kazanır.");
 
     H("Kontroller");
@@ -745,6 +747,7 @@ std::vector<RuleBlock> buildRulesOkey() {
       "*Bitir* parlar.");
     B("*Seri Diz / Çift Diz:* ıstakanı seri ya da çift düzenine göre kendiliğinden dizer (*S* / *C*).");
     B("*Göster:* göstergenin eşini gösterir (yalnızca ilk taşını atmadan önce).");
+    B("*İpucu:* Kurt'un senin yerinde ne yapacağını gösterir (*H*).");
     B("*Etrafa bakmak:* sağ tuşla sürükle; *Y* yapay zekaya bırakır, *ESC* duraklatır.");
     return v;
 }
@@ -1100,10 +1103,11 @@ void beginClip(Rectangle r) {
 namespace L {
 // title
 constexpr Rectangle TitlePlay{640, 470, 320, 68};
-constexpr Rectangle TitleWatchAi{660, 556, 280, 56};
-constexpr Rectangle TitleRules{660, 626, 280, 56};
-constexpr Rectangle TitleSettings{660, 696, 280, 56};
-constexpr Rectangle TitleQuit{660, 766, 280, 56};
+// the rows under "Oyna" (see titleRows): 70 apart from y 556, 280 wide (a row of two: 136 each)
+constexpr float TitleRowY = 556.f, TitleRowStep = 70.f, TitleRowX = 660.f, TitleRowW = 280.f, TitleRowH = 56.f;
+// stats
+constexpr Rectangle StatsPanel{250, 40, 1100, 820};
+constexpr Rectangle StatsBack{690, 776, 220, 58};
 // settings
 constexpr Rectangle SetPanel{330, 40, 940, 820};
 constexpr float SetLabelX = 385.f;
@@ -1139,6 +1143,7 @@ constexpr float SelRowY[2] = {178.f, 476.f};
 constexpr Rectangle SelBack{690, 790, 220, 58};
 constexpr Rectangle MatchNew{530, 736, 250, 64};
 constexpr Rectangle MatchMenu{820, 736, 250, 64};
+constexpr Rectangle MatchAnalysis{1100, 744, 190, 50};
 } // namespace L
 
 enum ClickId {
@@ -1147,12 +1152,14 @@ enum ClickId {
     C_Back, C_Defaults, C_Hands, C_Level, C_Anim, C_Sfx, C_Ambient, C_Music, C_Hints, C_Katlamali, C_YandanCeza, C_Name,
     C_Resume, C_PauseAi, C_PauseRules, C_PauseSettings, C_PauseMenu, C_ConfirmYes, C_ConfirmNo,
     C_Next, C_NewGame, C_MatchMenu, C_RulesTab, C_GameCard, C_SelBack, C_OkeyStart, C_TavlaPoints,
-    C_BatakEsli, C_BatakTarget, C_PistiTarget, C_PistiMode,
+    C_BatakEsli, C_BatakTarget, C_PistiTarget, C_PistiMode, C_TitleStats, C_Continue, C_StatsBack, C_GuideOk, C_Guide, C_TavlaDoubling, C_TavlaKatmerli,
+    C_OkeyRenkli, C_BatakKoz, C_King12, C_SetPage, C_DayTime, C_Season, C_Voices, C_ColorBlind, C_BigText, C_StatsReplays, C_ReplayWatch,
+    C_ReplaysBack, C_ReplayAnalyze, C_ShowAnalysis, C_AnalysisBack,
 };
 
 
 
-constexpr int kScreenCount = 8;
+constexpr int kScreenCount = 12;
 
 } // namespace
 
@@ -1184,7 +1191,10 @@ struct Screens::Impl {
     bool nameEditing = false;
     std::string nameBuf;
     std::string nameBefore; // name when editing started (ESC restores it)
-    float toggleAnim[7] = {1, 1, 1, 1, 0, 1, 0}; // sfx, ambient, music, hints, katlamalı, yandan ceza, eşli batak
+    // sfx, ambient, music, hints, katlamalı, yandan ceza, eşli batak, rehber, katlama zarı, katmerli mars, renkli okey,
+    // batak koz, king 12, konuşma, renk körü, büyük yazı
+    float toggleAnim[16] = {1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0};
+    int settingsPage = 0; // 0 Oyun, 1 Görünüm · Ses
 
     // rules
     std::vector<RuleBlock> rules;
@@ -1203,6 +1213,17 @@ struct Screens::Impl {
 
     // Yapay Zeka mode (an AI plays the human's seat) and the self-pressing between-hands buttons
     bool aiMode = false;
+    const StatsBook* stats = nullptr;   // App's record (İstatistik screen)
+    bool canResume = false;             // "Devam Et" on the title
+    std::string resumeLabel;
+    std::vector<ReplayEntry> replays;
+    bool analysisAvailable = false, analysisReady = false;
+    std::string analysisTitle;
+    std::vector<MistakeView> analysis;
+    ScreenId analysisBack = ScreenId::MatchOver;
+    int chosen = -1;
+    std::string guideTitle;
+    std::vector<std::string> guideLines;
     float autoLeft = -1.f;
 
     // match over
@@ -1272,6 +1293,15 @@ struct Screens::Impl {
             toggleAnim[4] = settings.katlamali ? 1.f : 0.f;
             toggleAnim[5] = settings.yandanCeza ? 1.f : 0.f;
             toggleAnim[6] = settings.batakEsli ? 1.f : 0.f;
+            toggleAnim[7] = settings.guide ? 1.f : 0.f;
+            toggleAnim[8] = settings.tavlaDoubling ? 1.f : 0.f;
+            toggleAnim[9] = settings.tavlaKatmerli ? 1.f : 0.f;
+            toggleAnim[10] = settings.okeyRenkli ? 1.f : 0.f;
+            toggleAnim[11] = settings.batakKozKirilmadan ? 1.f : 0.f;
+            toggleAnim[12] = settings.king12 ? 1.f : 0.f;
+            toggleAnim[13] = settings.voices ? 1.f : 0.f;
+            toggleAnim[14] = settings.colorBlind ? 1.f : 0.f;
+            toggleAnim[15] = settings.bigText ? 1.f : 0.f;
             break;
         case ScreenId::Rules:
             scroll = scrollTarget = 0.f;
@@ -1444,12 +1474,84 @@ struct Screens::Impl {
         case C_PistiMode:
             settings.pistiMode = std::clamp(c.value, 0, 2);
             return ScreenAction::SettingsChanged;
+        case C_Guide:
+            settings.guide = !settings.guide;
+            if (settings.guide) settings.guideSeen = 0; // switched on again: every game's guide once more
+            return ScreenAction::SettingsChanged;
+        case C_TavlaDoubling:
+            settings.tavlaDoubling = !settings.tavlaDoubling;
+            return ScreenAction::SettingsChanged;
+        case C_TavlaKatmerli:
+            settings.tavlaKatmerli = !settings.tavlaKatmerli;
+            return ScreenAction::SettingsChanged;
+        case C_OkeyRenkli:
+            settings.okeyRenkli = !settings.okeyRenkli;
+            return ScreenAction::SettingsChanged;
+        case C_BatakKoz:
+            settings.batakKozKirilmadan = !settings.batakKozKirilmadan;
+            return ScreenAction::SettingsChanged;
+        case C_King12:
+            settings.king12 = !settings.king12;
+            return ScreenAction::SettingsChanged;
+        case C_SetPage:
+            if (nameEditing) commitName();
+            settingsPage = std::clamp(c.value, 0, 1);
+            return ScreenAction::None;
+        case C_DayTime:
+            settings.dayTime = std::clamp(c.value, 0, 4);
+            return ScreenAction::SettingsChanged;
+        case C_Season:
+            settings.season = std::clamp(c.value, 0, 4);
+            return ScreenAction::SettingsChanged;
+        case C_Voices:
+            settings.voices = !settings.voices;
+            return ScreenAction::SettingsChanged;
+        case C_ColorBlind:
+            settings.colorBlind = !settings.colorBlind;
+            return ScreenAction::SettingsChanged;
+        case C_BigText:
+            settings.bigText = !settings.bigText;
+            return ScreenAction::SettingsChanged;
         case C_WatchAi:
             show(ScreenId::None);
             return ScreenAction::StartAiMatch;
         case C_PauseAi:
             show(ScreenId::None);
             return ScreenAction::ToggleAiMode;
+        case C_TitleStats:
+            show(ScreenId::Stats);
+            return ScreenAction::None;
+        case C_StatsBack:
+            show(ScreenId::Title);
+            return ScreenAction::None;
+        case C_StatsReplays:
+            show(ScreenId::Replays);
+            return ScreenAction::None;
+        case C_ReplaysBack:
+            show(ScreenId::Stats);
+            return ScreenAction::None;
+        case C_ReplayAnalyze:
+            chosen = c.value;
+            analysisBack = ScreenId::Replays;
+            show(ScreenId::Analysis);
+            return ScreenAction::AnalyzeReplay;
+        case C_ShowAnalysis:
+            analysisBack = ScreenId::MatchOver;
+            show(ScreenId::Analysis);
+            return ScreenAction::None;
+        case C_AnalysisBack:
+            show(analysisBack);
+            return ScreenAction::None;
+        case C_ReplayWatch:
+            chosen = c.value;
+            show(ScreenId::None);
+            return ScreenAction::WatchReplay;
+        case C_GuideOk:
+            show(ScreenId::None);
+            return ScreenAction::None;
+        case C_Continue:
+            show(ScreenId::None);
+            return ScreenAction::ResumeSaved;
         case C_TitleRules:
         case C_PauseRules:
             show(ScreenId::Rules);
@@ -1601,6 +1703,18 @@ struct Screens::Impl {
             if (!clicked && IsKeyPressed(KEY_ESCAPE)) show(ScreenId::Title);
             else if (!clicked && settled && enter) merge(handleClick({cur, C_GameCard, settings.game}, g));
             break;
+        case ScreenId::Stats:
+            if (!clicked && (IsKeyPressed(KEY_ESCAPE) || (settled && enter))) show(ScreenId::Title);
+            break;
+        case ScreenId::Replays:
+            if (!clicked && IsKeyPressed(KEY_ESCAPE)) show(ScreenId::Stats);
+            break;
+        case ScreenId::Analysis:
+            if (!clicked && (IsKeyPressed(KEY_ESCAPE) || (settled && enter))) show(analysisBack);
+            break;
+        case ScreenId::Guide:
+            if (!clicked && settled && (IsKeyPressed(KEY_ESCAPE) || enter || IsKeyPressed(KEY_SPACE))) show(ScreenId::None);
+            break;
         }
 
         // 3. animations
@@ -1610,9 +1724,12 @@ struct Screens::Impl {
     }
 
     ScreenAction updateSettings(float dt, Vector2 m, bool clicked) {
-        const bool on[7] = {settings.sfx,   settings.ambient,   settings.music,    settings.hints,
-                            settings.katlamali, settings.yandanCeza, settings.batakEsli};
-        for (int i = 0; i < 7; ++i) toggleAnim[i] = approach(toggleAnim[i], on[i] ? 1.f : 0.f, 16.f, dt);
+        const bool on[16] = {settings.sfx,        settings.ambient,   settings.music,         settings.hints,
+                             settings.katlamali,  settings.yandanCeza, settings.batakEsli,    settings.guide,
+                             settings.tavlaDoubling, settings.tavlaKatmerli, settings.okeyRenkli,
+                             settings.batakKozKirilmadan, settings.king12, settings.voices, settings.colorBlind,
+                             settings.bigText};
+        for (int i = 0; i < 16; ++i) toggleAnim[i] = approach(toggleAnim[i], on[i] ? 1.f : 0.f, 16.f, dt);
 
         ScreenAction act = ScreenAction::None;
         if (nameEditing) {
@@ -1837,6 +1954,10 @@ struct Screens::Impl {
         case ScreenId::HandSummary: drawHandSummary(m, g); break;
         case ScreenId::MatchOver: drawMatchOver(m, g); break;
         case ScreenId::GameSelect: drawGameSelect(m); break;
+        case ScreenId::Stats: drawStats(m); break;
+        case ScreenId::Guide: drawGuide(m); break;
+        case ScreenId::Replays: drawReplays(m); break;
+        case ScreenId::Analysis: drawAnalysis(m); break;
         case ScreenId::None: break;
         }
     }
@@ -1854,6 +1975,37 @@ struct Screens::Impl {
     }
 
     // ------------------------------------------------------------ title
+    // The buttons under "Oyna": "Devam Et" first when a match was left unfinished, then the AI, rules and record,
+    // settings and quit (two rows share a line when "Devam Et" needs the room).
+    struct TitleButton {
+        Rectangle r;
+        const char* label;
+        int id;
+        float fs;
+    };
+    std::vector<TitleButton> titleButtons() const {
+        std::vector<std::vector<std::pair<const char*, int>>> rows;
+        if (canResume) rows.push_back({{"Devam Et", C_Continue}});
+        rows.push_back({{"Yapay Zekayı İzle", C_WatchAi}});
+        rows.push_back({{"Kurallar", C_TitleRules}, {"İstatistik", C_TitleStats}});
+        if (canResume) rows.push_back({{"Ayarlar", C_TitleSettings}, {"Çıkış", C_Quit}});
+        else {
+            rows.push_back({{"Ayarlar", C_TitleSettings}});
+            rows.push_back({{"Çıkış", C_Quit}});
+        }
+        std::vector<TitleButton> out;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            const float y = L::TitleRowY + (float)i * L::TitleRowStep;
+            const float gap = 8.f, w = rows[i].size() == 1 ? L::TitleRowW : (L::TitleRowW - gap) * 0.5f;
+            for (size_t j = 0; j < rows[i].size(); ++j) {
+                const char* label = rows[i][j].first;
+                const float fs = rows[i].size() > 1 ? 23.f : std::string(label).size() > 12 ? 25.f : 27.f;
+                out.push_back({{L::TitleRowX + (float)j * (w + gap), y, w, L::TitleRowH}, label, rows[i][j].second, fs});
+            }
+        }
+        return out;
+    }
+
     void drawTitle(Vector2 m) {
         const float age = ageOf(ScreenId::Title);
         // let the room show through; darken the edges so the sign and the menu read
@@ -1878,10 +2030,13 @@ struct Screens::Impl {
                                  alphaMul(pal::Highlight, 0.10f + 0.08f * gl));
         }
         if (drawButton(L::TitlePlay, "Oyna", m, true, ButtonStyle::Wood, 34.f)) click(C_Play);
-        if (drawButton(L::TitleWatchAi, "Yapay Zekayı İzle", m, true, ButtonStyle::Wood, 25.f)) click(C_WatchAi);
-        if (drawButton(L::TitleRules, "Kurallar", m, true, ButtonStyle::Wood, 27.f)) click(C_TitleRules);
-        if (drawButton(L::TitleSettings, "Ayarlar", m, true, ButtonStyle::Wood, 27.f)) click(C_TitleSettings);
-        if (drawButton(L::TitleQuit, "Çıkış", m, true, ButtonStyle::Wood, 27.f)) click(C_Quit);
+        for (const TitleButton& b : titleButtons())
+            if (drawButton(b.r, b.label, m, true, ButtonStyle::Wood, b.fs)) click(b.id);
+        if (canResume && !resumeLabel.empty()) {
+            const Rectangle r = titleButtons().front().r;
+            drawTextCentered(FontId::Ui, resumeLabel, {r.x + r.width * 0.5f, r.y + r.height + 9.f}, 15.f,
+                             alphaMul(pal::TextLight, 0.6f));
+        }
 
         drawTextCentered(FontId::Ui, "SaklıBahçe  \xC2\xB7  sürüm 1.1  \xC2\xB7  radyoda Turku (CC BY 4.0) ve 1920'lerin plakları", {800.f, 872.f}, 17.f,
                          alphaMul(pal::TextLight, 0.55f));
@@ -2087,6 +2242,218 @@ struct Screens::Impl {
                  17.f, alphaMul(pal::TextLight, 0.5f));
     }
 
+    // ------------------------------------------------------------ a game's guide card
+    void drawGuide(Vector2 m) {
+        const float a = clamp01(ageOf(ScreenId::Guide) / 0.3f);
+        drawDim(0.45f * a);
+        const float W = 860.f;
+        float h = 150.f;
+        std::vector<float> lineH;
+        for (const std::string& l : guideLines) {
+            // (measured by a transparent pass far off screen: the same wrap as below)
+            lineH.push_back(drawTextWrapped(FontId::Ui, l, {-4000.f, -4000.f, W - 150.f, 400.f}, 22.f, Color{0, 0, 0, 0}, 6.f) + 12.f);
+            h += lineH.back();
+        }
+        h += 90.f;
+        const Rectangle P{800.f - W * 0.5f, 450.f - h * 0.5f + (1.f - easeOutCubic(a)) * 24.f, W, h};
+        drawPanel(P, PanelStyle::Wood);
+        drawHeader(guideTitle, {800.f, P.y + 62.f}, 46.f, alphaMul(kGold, a));
+        brassRule(P.x + 60.f, P.x + P.width - 60.f, P.y + 104.f);
+        float y = P.y + 130.f;
+        for (size_t i = 0; i < guideLines.size(); ++i) {
+            const float la = clamp01((ageOf(ScreenId::Guide) - 0.12f - 0.08f * (float)i) / 0.3f);
+            DrawCircleV({P.x + 70.f, y + 15.f}, 5.f, alphaMul(pal::Brass, la));
+            drawTextWrapped(FontId::Ui, guideLines[i], {P.x + 92.f, y, W - 150.f, lineH[i]}, 22.f,
+                            alphaMul(pal::TextLight, 0.92f * la), 6.f);
+            y += lineH[i];
+        }
+        const Rectangle ok{800.f - 120.f, P.y + P.height - 82.f, 240.f, 58.f};
+        if (drawButton(ok, "Anladım", m, true, ButtonStyle::Wood, 28.f)) click(C_GuideOk);
+        drawText(FontId::Ui, "Kurallar: Menü > Kurallar", {P.x + 40.f, P.y + P.height - 46.f}, 15.f,
+                 alphaMul(pal::TextLight, 0.45f * a));
+    }
+
+    // ------------------------------------------------------------ stats (kahvehane defteri)
+    void drawStats(Vector2 m) {
+        const float age = ageOf(ScreenId::Stats);
+        static const StatsBook kEmpty;
+        const StatsBook& book = stats ? *stats : kEmpty;
+        drawDim(0.6f);
+        const Rectangle P = L::StatsPanel;
+        drawPanel(P, PanelStyle::Wood);
+        drawHeader("Kahvehane Defteri", {800.f, 94.f}, 54.f, kGold);
+        brassRule(P.x + 50.f, P.x + P.width - 50.f, 136.f);
+
+        // --- rank: the title the regulars give you, and how far the next one is
+        const int pts = book.rankPoints();
+        const Rank& rank = StatsBook::rankFor(pts);
+        const Rank* next = StatsBook::nextRank(pts);
+        const float a = clamp01(age / 0.35f);
+        drawText(FontId::UiBold, "RÜTBEN", {P.x + 70.f, 162.f}, 17.f, alphaMul(pal::Brass, 0.9f * a), 4.f);
+        drawTextShadow(FontId::Sign, rank.name, {P.x + 70.f, 184.f}, 46.f, alphaMul(kGold, a));
+        drawText(FontId::Ui, rank.line, {P.x + 72.f, 238.f}, 19.f, alphaMul(pal::TextLight, 0.72f * a));
+        {
+            const float bx = P.x + 640.f, by = 196.f, bw = 380.f, bh = 16.f;
+            const int lo = rank.points, hi = next ? next->points : rank.points;
+            const float f = next ? clamp01((float)(pts - lo) / (float)std::max(1, hi - lo)) : 1.f;
+            DrawRectangleRounded({bx, by, bw, bh}, 1.f, 8, rgba(20, 10, 6, 0.8f));
+            if (f > 0.f) DrawRectangleRounded({bx, by, std::max(bh, bw * f * easeOutCubic(a)), bh}, 1.f, 8, pal::Brass);
+            DrawRectangleRoundedLinesEx({bx, by, bw, bh}, 1.f, 8, 1.2f, alphaMul(kGold, 0.6f));
+            const std::string ptsLine = std::to_string(pts) + " puan";
+            drawText(FontId::UiBold, ptsLine, {bx, by - 30.f}, 20.f, alphaMul(pal::TextLight, a));
+            const std::string nextLine = next ? std::string(next->name) + " için " + std::to_string(next->points - pts) +
+                                                    " puan daha"
+                                              : std::string("En yüksek rütbe!");
+            drawText(FontId::Ui, nextLine, {bx + bw - measureText(FontId::Ui, nextLine, 17.f).x, by - 27.f}, 17.f,
+                     alphaMul(pal::TextLight, 0.7f * a));
+            drawText(FontId::Ui, "Maç galibiyeti: Acemi'ye karşı 1, Usta'ya 2, Kurt'a 3 puan", {bx, by + 26.f}, 15.f,
+                     alphaMul(pal::TextLight, 0.5f * a));
+        }
+
+        // --- the table: one line per game, the total last
+        const float x0 = P.x + 60.f, top = 296.f, rowH = 46.f;
+        struct Col {
+            const char* title;
+            float x;    // right edge of the numbers (the game name: left edge)
+        };
+        const Col cols[] = {{"Oyun", x0 + 10.f},        {"Maç", x0 + 300.f},        {"Galibiyet", x0 + 420.f},
+                            {"Oran", x0 + 520.f},       {"El / Oyun", x0 + 660.f},  {"En uzun seri", x0 + 800.f},
+                            {"Rekor", x0 + 970.f}};
+        for (size_t c = 0; c < sizeof cols / sizeof cols[0]; ++c) {
+            const float w = measureText(FontId::UiBold, cols[c].title, 16.f, 2.f).x;
+            drawText(FontId::UiBold, cols[c].title, {c == 0 ? cols[c].x : cols[c].x - w, top}, 16.f,
+                     alphaMul(pal::Brass, 0.9f), 2.f);
+        }
+        DrawLineEx({x0, top + 28.f}, {x0 + 980.f, top + 28.f}, 1.2f, alphaMul(pal::Brass, 0.45f));
+        auto num = [&](float right, float y, const std::string& t, Color c, FontId f = FontId::Ui) {
+            drawText(f, t, {right - measureText(f, t, 21.f).x, y}, 21.f, c);
+        };
+        auto pct = [](int a, int b) { return b > 0 ? std::to_string((a * 100 + b / 2) / b) + "%" : std::string("-"); };
+        const int sel = std::clamp(settings.game, 0, (int)GameKind::Count - 1);
+        for (int k = 0; k <= STATS_GAMES; ++k) {
+            const bool totalRow = k == STATS_GAMES;
+            const GameRecord r = totalRow ? book.total() : book.games[(size_t)k];
+            const float ra = clamp01((age - 0.04f * (float)k) / 0.3f);
+            const float y = top + 40.f + (float)k * rowH + (totalRow ? 10.f : 0.f) + (1.f - easeOutCubic(ra)) * 14.f;
+            if (totalRow) DrawLineEx({x0, y - 8.f}, {x0 + 980.f, y - 8.f}, 1.2f, alphaMul(pal::Brass, 0.45f * ra));
+            else if (k % 2 == 0)
+                DrawRectangleRounded({x0 - 10.f, y - 8.f, 1000.f, rowH - 4.f}, 0.3f, 6, rgba(255, 220, 160, 0.04f * ra));
+            const bool none = r.matches == 0 && r.hands == 0;
+            const Color tc = alphaMul(none ? alphaMul(pal::TextLight, 0.45f) : pal::TextLight, ra);
+            const std::string name = totalRow ? "Toplam" : gameInfo((GameKind)k).name;
+            drawText(FontId::UiBold, name, {cols[0].x, y}, 22.f, alphaMul(totalRow || k == sel ? kGold : pal::TextLight, ra));
+            if (none && !totalRow) {
+                drawText(FontId::Ui, "henüz oynanmadı", {cols[1].x - 60.f, y + 2.f}, 18.f, alphaMul(pal::TextLight, 0.4f * ra));
+                continue;
+            }
+            num(cols[1].x, y, std::to_string(r.matches), tc);
+            num(cols[2].x, y, std::to_string(r.wins), tc, FontId::UiBold);
+            num(cols[3].x, y, pct(r.wins, r.matches), tc);
+            num(cols[4].x, y, std::to_string(r.handWins) + " / " + std::to_string(r.hands), tc);
+            num(cols[5].x, y, std::to_string(r.bestStreak) + (r.streak > 1 ? "  (şimdi " + std::to_string(r.streak) + ")" : ""), tc);
+            if (!totalRow && r.hasBest && StatsBook::bestLabel(k)) {
+                const std::string b = std::to_string(r.best);
+                num(cols[6].x, y, b, alphaMul(kGold, ra), FontId::UiBold);
+                const char* bl = StatsBook::bestLabel(k);
+                drawText(FontId::Ui, bl, {cols[6].x - measureText(FontId::Ui, bl, 13.f).x, y + 24.f}, 13.f,
+                         alphaMul(pal::TextLight, 0.45f * ra));
+            } else if (!totalRow) {
+                num(cols[6].x, y, "-", alphaMul(pal::TextLight, 0.4f * ra));
+            } else {
+                const std::string lv = "Acemi " + std::to_string(r.winsAt[0]) + "/" + std::to_string(r.playedAt[0]) +
+                                       "   Usta " + std::to_string(r.winsAt[1]) + "/" + std::to_string(r.playedAt[1]) +
+                                       "   Kurt " + std::to_string(r.winsAt[2]) + "/" + std::to_string(r.playedAt[2]);
+                drawText(FontId::Ui, lv, {x0 + 10.f, y + 34.f}, 17.f, alphaMul(pal::TextLight, 0.65f * ra));
+            }
+        }
+        drawTextCentered(FontId::Ui, "Yalnızca kendin oynadığın, sonuna kadar biten maçlar deftere yazılır.",
+                         {800.f, 752.f}, 16.f, alphaMul(pal::TextLight, 0.5f));
+        if (drawButton({L::StatsBack.x - 130.f, L::StatsBack.y, L::StatsBack.width, L::StatsBack.height}, "Tekrarlar", m,
+                       true, ButtonStyle::Wood, 26.f))
+            click(C_StatsReplays);
+        if (drawButton({L::StatsBack.x + 130.f, L::StatsBack.y, L::StatsBack.width, L::StatsBack.height}, "Geri", m, true,
+                       ButtonStyle::Wood, 28.f))
+            click(C_StatsBack);
+    }
+
+    // ------------------------------------------------------------ hatalarım: the analysis of a match
+    void drawAnalysis(Vector2 m) {
+        const float age = ageOf(ScreenId::Analysis);
+        drawDim(0.62f);
+        const Rectangle P = L::StatsPanel;
+        drawPanel(P, PanelStyle::Wood);
+        drawHeader("Hatalarım", {800.f, 94.f}, 54.f, kGold);
+        brassRule(P.x + 50.f, P.x + P.width - 50.f, 136.f);
+        drawTextCentered(FontId::Ui, analysisTitle, {800.f, 160.f}, 18.f, alphaMul(pal::TextLight, 0.6f));
+        if (!analysisReady) {
+            const std::string dots(1 + (int)(time * 2.f) % 3, '.');
+            drawTextCentered(FontId::UiBold, "Kurt maçı inceliyor" + dots, {800.f, 420.f}, 28.f, pal::TextLight);
+            drawTextCentered(FontId::Ui, "Her hamlende onun yerinde ne yapacağına bakıyor.", {800.f, 462.f}, 18.f,
+                             alphaMul(pal::TextLight, 0.6f));
+        } else if (analysis.empty()) {
+            drawTextCentered(FontId::UiBold, "Kayda değer bir hata yok!", {800.f, 400.f}, 30.f, kGold);
+            drawTextCentered(FontId::Ui, "Kurt da bu maçı senin gibi oynardı. Helal olsun.", {800.f, 446.f}, 19.f,
+                             alphaMul(pal::TextLight, 0.7f));
+        } else {
+            for (size_t i = 0; i < analysis.size() && i < 3; ++i) {
+                const MistakeView& e = analysis[i];
+                const float a = clamp01((age - 0.1f * (float)i) / 0.35f);
+                const Rectangle c{P.x + 70.f, 196.f + (float)i * 182.f + (1.f - easeOutCubic(a)) * 16.f, P.width - 140.f, 166.f};
+                DrawRectangleRounded(c, 0.08f, 8, rgba(20, 10, 6, 0.45f * a));
+                DrawRectangleRoundedLinesEx(c, 0.08f, 8, 1.2f, alphaMul(pal::Brass, 0.5f * a));
+                drawText(FontId::Sign, std::to_string(i + 1) + ".", {c.x + 22.f, c.y + 16.f}, 44.f, alphaMul(kGold, a));
+                drawText(FontId::UiBold, e.when, {c.x + 80.f, c.y + 16.f}, 18.f, alphaMul(pal::Brass, a), 2.f);
+                drawText(FontId::UiBold, e.played, {c.x + 80.f, c.y + 46.f}, 24.f, alphaMul(pal::TextLight, a));
+                drawText(FontId::Ui, e.better, {c.x + 80.f, c.y + 82.f}, 21.f, alphaMul(pal::Good, a));
+                if (!e.why.empty())
+                    drawTextWrapped(FontId::Ui, e.why, {c.x + 80.f, c.y + 114.f, c.width - 320.f, 48.f}, 17.f,
+                                    alphaMul(pal::TextLight, 0.65f * a), 2.f);
+                if (!e.cost.empty()) {
+                    const float w = measureText(FontId::UiBold, e.cost, 22.f).x + 30.f;
+                    const Rectangle b{c.x + c.width - w - 24.f, c.y + 20.f, w, 40.f};
+                    DrawRectangleRounded(b, 0.5f, 8, alphaMul(kMarginRed, 0.85f * a));
+                    drawTextCentered(FontId::UiBold, e.cost, {b.x + b.width * 0.5f, b.y + b.height * 0.5f - 1.f}, 22.f,
+                                     alphaMul(Color{255, 246, 230, 255}, a));
+                }
+            }
+        }
+        if (drawButton(L::StatsBack, "Geri", m, true, ButtonStyle::Wood, 28.f)) click(C_AnalysisBack);
+    }
+
+    // ------------------------------------------------------------ tekrarlar: the last finished matches
+    void drawReplays(Vector2 m) {
+        const float age = ageOf(ScreenId::Replays);
+        drawDim(0.6f);
+        const Rectangle P = L::StatsPanel;
+        drawPanel(P, PanelStyle::Wood);
+        drawHeader("Maç Tekrarları", {800.f, 94.f}, 54.f, kGold);
+        brassRule(P.x + 50.f, P.x + P.width - 50.f, 136.f);
+        if (replays.empty()) {
+            drawTextCentered(FontId::Ui, "Henüz biten bir maç yok. Bir maçı sonuna kadar oyna, burada izleyebilirsin.",
+                             {800.f, 420.f}, 21.f, alphaMul(pal::TextLight, 0.7f));
+        }
+        const float x0 = P.x + 70.f, top = 168.f, rowH = 58.f;
+        const int shown = std::min<int>((int)replays.size(), 10);
+        for (int i = 0; i < shown; ++i) {
+            const ReplayEntry& e = replays[(size_t)i];
+            const float a = clamp01((age - 0.03f * (float)i) / 0.3f);
+            const float y = top + (float)i * rowH + (1.f - easeOutCubic(a)) * 12.f;
+            if (i % 2 == 0) DrawRectangleRounded({x0 - 14.f, y - 6.f, P.width - 112.f, rowH - 6.f}, 0.3f, 6, rgba(255, 220, 160, 0.04f * a));
+            drawText(FontId::UiBold, e.game, {x0, y + 6.f}, 24.f, alphaMul(kGold, a));
+            drawText(FontId::Ui, e.date, {x0 + 200.f, y + 9.f}, 19.f, alphaMul(pal::TextLight, 0.7f * a));
+            const bool won = e.result == "Kazandın";
+            drawText(FontId::UiBold, e.result, {x0 + 420.f, y + 8.f}, 21.f, alphaMul(won ? pal::Good : pal::TextLight, a));
+            drawText(FontId::Ui, std::to_string(e.actions) + " hamle", {x0 + 690.f, y + 10.f}, 17.f, alphaMul(pal::TextLight, 0.5f * a));
+            const Rectangle b{P.x + P.width - 210.f, y, 130.f, 42.f};
+            if (drawButton(b, "İzle", m, true, ButtonStyle::Wood, 22.f)) click(C_ReplayWatch, i);
+            const Rectangle an{b.x - 140.f, y, 130.f, 42.f};
+            if (drawButton(an, "Analiz", m, true, ButtonStyle::Wood, 22.f)) click(C_ReplayAnalyze, i);
+        }
+        drawTextCentered(FontId::Ui, "İzlerken: Boşluk durdurur, ok tuşları hızı değiştirir, ESC menüyü açar.", {800.f, 752.f},
+                         16.f, alphaMul(pal::TextLight, 0.5f));
+        if (drawButton(L::StatsBack, "Geri", m, true, ButtonStyle::Wood, 28.f)) click(C_ReplaysBack);
+    }
+
     // ------------------------------------------------------------ settings
     void settingRow(float cy, const char* label, const std::string& hint) {
         if (hint.empty()) {
@@ -2152,6 +2519,19 @@ struct Screens::Impl {
         drawHeader("Ayarlar", {800.f, 94.f}, 54.f, kGold);
         brassRule(L::SetPanel.x + 50.f, L::SetPanel.x + L::SetPanel.width - 50.f, 136.f);
 
+        // two pages: the game (player, level, the game's rules) | looks and sound
+        {
+            const char* tabs[2] = {"Oyun", "Görünüm \xC2\xB7 Ses"};
+            const float tw[2] = {100.f, 170.f};
+            float tx = L::SetPanel.x + L::SetPanel.width - 55.f - (tw[0] + tw[1] + 8.f); // top right, clear of the title
+            for (int i = 0; i < 2; ++i) {
+                const Rectangle r{tx, 70.f, tw[i], 44.f};
+                if (i == settingsPage) drawSelectedChip(r, tabs[i], 21.f);
+                else if (drawButton(r, tabs[i], m, true, ButtonStyle::Wood, 21.f)) click(C_SetPage, i);
+                tx += tw[i] + 8.f;
+            }
+        }
+
         // a running list: section headings and rows, the game's own rules in the middle
         float y = L::SetTopY;
         auto section = [&](const std::string& s) {
@@ -2166,6 +2546,9 @@ struct Screens::Impl {
             y += L::SetRowH;
             return cy;
         };
+        if (settingsPage == 1) {
+            drawSettingsLooks(m, section, row);
+        } else {
         section("OYUN");
 
         // player name
@@ -2204,8 +2587,12 @@ struct Screens::Impl {
         chipRow(C_Anim, {"Yavaş", "Normal", "Hızlı"}, selectedAnim(), cy, 146.f, 12.f, m, 24.f);
 
         cy = row();
-        settingRow(cy, "İpuçları", "Oynanabilir hamleler ve sayaçlar");
+        settingRow(cy, "İpuçları", "Oynanabilir hamleler ve İpucu düğmesi");
         toggle(C_Hints, 3, settings.hints, cy, m);
+
+        cy = row();
+        settingRow(cy, "Oyun rehberi", "Her oyunun ilk maçında kısa anlatım");
+        toggle(C_Guide, 7, settings.guide, cy, m);
 
         // the selected game's own rules
         const GameKind game = (GameKind)std::clamp(settings.game, 0, (int)GameKind::Count - 1);
@@ -2228,11 +2615,20 @@ struct Screens::Impl {
             cy = row();
             settingRow(cy, "Başlangıç puanı", "Herkes bununla başlar, sıfıra inen oyunu bitirir");
             chipRow(C_OkeyStart, {"6", "12", "20"}, selectedOkeyStart(), cy, 66.f, 12.f, m, 25.f);
+            cy = row();
+            settingRow(cy, "Renkli okey", "Kırmızı, siyah göstergede puan iki kat");
+            toggle(C_OkeyRenkli, 10, settings.okeyRenkli, cy, m);
             break;
         case GameKind::Tavla:
             cy = row();
             settingRow(cy, "Maç", "Kaç sayıya oynansın? (mars iki sayı)");
             chipRow(C_TavlaPoints, {"3", "5", "7"}, closest(kTavlaChoices, settings.tavlaPoints), cy, 66.f, 12.f, m, 25.f);
+            cy = row();
+            settingRow(cy, "Katlama zarı", "Oyunun değerini ikiye katlayabilirsin");
+            toggle(C_TavlaDoubling, 8, settings.tavlaDoubling, cy, m);
+            cy = row();
+            settingRow(cy, "Katmerli mars", "Kırık pulu ya da evinde pulu kalan marsa 3 sayı");
+            toggle(C_TavlaKatmerli, 9, settings.tavlaKatmerli, cy, m);
             break;
         case GameKind::Batak:
             cy = row();
@@ -2241,6 +2637,9 @@ struct Screens::Impl {
             cy = row();
             settingRow(cy, "Oyun sonu", "Bu puana ilk ulaşan kazanır");
             chipRow(C_BatakTarget, {"31", "51", "71"}, closest(kBatakTargets, settings.batakTarget), cy, 66.f, 12.f, m, 25.f);
+            cy = row();
+            settingRow(cy, "Önce koz açılmalı", "Koz çakılmadan ele kozla başlanmaz");
+            toggle(C_BatakKoz, 11, settings.batakKozKirilmadan, cy, m);
             break;
         case GameKind::Pisti:
             cy = row();
@@ -2250,22 +2649,16 @@ struct Screens::Impl {
             settingRow(cy, "Oyun sonu", "Bu puana ilk ulaşan kazanır");
             chipRow(C_PistiTarget, {"101", "151"}, closest(kPistiTargets, settings.pistiTarget), cy, 78.f, 12.f, m, 25.f);
             break;
-        default:
+        case GameKind::King:
             cy = row();
-            settingRow(cy, "Bu oyunun ayarı yok", "Kurallar her kahvede aynı: 20 el, 2 koz 3 ceza");
+            settingRow(cy, "Kısa King (12 el)", settings.king12 ? "Herkes 1 koz, 2 ceza seçer"
+                                                                : "Kapalıyken 20 el: herkes 2 koz, 3 ceza");
+            toggle(C_King12, 12, settings.king12, cy, m);
             break;
+        default: break;
         }
 
-        section("SES");
-        cy = row();
-        settingRow(cy, "Efekt sesleri", "Taş, çay kaşığı ve düğme sesleri");
-        toggle(C_Sfx, 0, settings.sfx, cy, m);
-        cy = row();
-        settingRow(cy, "Ortam sesi", "Kalabalık, vantilatör, televizyon");
-        toggle(C_Ambient, 1, settings.ambient, cy, m);
-        cy = row();
-        settingRow(cy, "Radyo", "Türküler ve eski plaklar");
-        toggle(C_Music, 2, settings.music, cy, m);
+        }
 
         if (backSettings != ScreenId::Title) {
             drawTextWrapped(FontId::Ui, "Oyunun kuralları yeni maçta geçerli olur.", {640.f, 778.f, 330.f, 60.f},
@@ -2273,6 +2666,49 @@ struct Screens::Impl {
         }
         if (drawButton(L::SetDefaults, "Varsayılanlar", m, true, ButtonStyle::Wood, 22.f)) click(C_Defaults);
         if (drawButton(L::SetBack, "Geri", m, true, ButtonStyle::Wood, 28.f)) click(C_Back);
+    }
+
+    // The second page of the settings: the time of day and season of the room, colour-blind / big text, sounds.
+    template <class Section, class Row>
+    void drawSettingsLooks(Vector2 m, Section& section, Row& row) {
+        section("GÖRÜNÜM");
+        float cy = row();
+        settingRow(cy, "Vakit", "Otomatik: bilgisayarın saatine göre");
+        chipRow(C_DayTime, {"Otomatik", "Sabah", "Öğle", "Akşam", "Gece"}, std::clamp(settings.dayTime, 0, 4), cy, 96.f,
+                8.f, m, 19.f);
+        cy = row();
+        settingRow(cy, "Mevsim", "Kışın soba yanar, yazın kapı açık");
+        chipRow(C_Season, {"Otomatik", "İlkbahar", "Yaz", "Sonbahar", "Kış"}, std::clamp(settings.season, 0, 4), cy, 96.f,
+                8.f, m, 19.f);
+        cy = row();
+        settingRow(cy, "Renk körü modu", "Taşlarda şekil işareti, dört renkli deste");
+        toggle(C_ColorBlind, 14, settings.colorBlind, cy, m);
+        cy = row();
+        settingRow(cy, "Büyük yazı", "Masadaki yazılar daha büyük");
+        toggle(C_BigText, 15, settings.bigText, cy, m);
+
+        section("SES");
+        cy = row();
+        settingRow(cy, "Sesler", "Efektler, kahvehanenin uğultusu ve radyo");
+        {
+            // three switches as chips: lit = on
+            const char* labels[3] = {"Efekt", "Ortam", "Radyo"};
+            const bool ons[3] = {settings.sfx, settings.ambient, settings.music};
+            const int ids[3] = {C_Sfx, C_Ambient, C_Music};
+            const float w = 108.f, gap = 12.f, h = 46.f;
+            for (int i = 0; i < 3; ++i) {
+                const Rectangle r{L::SetCtrlX + (float)i * (w + gap), cy - h * 0.5f, w, h};
+                if (ons[i]) {
+                    drawSelectedChip(r, labels[i], 22.f);
+                    if (hit(r, ids[i] + 3000, m)) click(ids[i]);
+                } else if (drawButton(r, labels[i], m, true, ButtonStyle::Wood, 22.f)) {
+                    click(ids[i]);
+                }
+            }
+        }
+        cy = row();
+        settingRow(cy, "Konuşma sesleri", "Rakipler konuşurken mırıldanır");
+        toggle(C_Voices, 13, settings.voices, cy, m);
     }
 
     // ------------------------------------------------------------ rules
@@ -2928,6 +3364,8 @@ struct Screens::Impl {
         const std::string nlabel = autoLabel("Yeni Oyun", FontId::UiBold, L::MatchNew.width - 24.f, nfs);
         if (drawButton(L::MatchNew, nlabel, m, true, ButtonStyle::Wood, nfs)) click(C_NewGame);
         if (drawButton(L::MatchMenu, "Ana Menü", m, true, ButtonStyle::Wood, 30.f)) click(C_MatchMenu);
+        if (analysisAvailable && drawButton(L::MatchAnalysis, "Hatalarım", m, true, ButtonStyle::Wood, 22.f))
+            click(C_ShowAnalysis);
         drawConfetti();
     }
 
@@ -3071,6 +3509,8 @@ struct Screens::Impl {
         const std::string nlabel = autoLabel("Yeni Oyun", FontId::UiBold, L::MatchNew.width - 24.f, nfs);
         if (drawButton(L::MatchNew, nlabel, m, true, ButtonStyle::Wood, nfs)) click(C_NewGame);
         if (drawButton(L::MatchMenu, "Ana Menü", m, true, ButtonStyle::Wood, 30.f)) click(C_MatchMenu);
+        if (analysisAvailable && drawButton(L::MatchAnalysis, "Hatalarım", m, true, ButtonStyle::Wood, 22.f))
+            click(C_ShowAnalysis);
         drawConfetti();
     }
 };
@@ -3127,5 +3567,27 @@ void Screens::setAutoAdvance(float secondsLeft) { impl_->autoLeft = secondsLeft;
 void Screens::setSheet(const SheetModel& m) { impl_->sheet = m; }
 
 void Screens::clearSheet() { impl_->sheet.reset(); }
+
+void Screens::setStats(const StatsBook* stats) { impl_->stats = stats; }
+
+void Screens::setReplays(const std::vector<ReplayEntry>& rows) { impl_->replays = rows; }
+int Screens::chosenReplay() const { return impl_->chosen; }
+
+void Screens::setAnalysis(bool available, bool ready, const std::string& title, const std::vector<MistakeView>& rows) {
+    impl_->analysisAvailable = available;
+    impl_->analysisReady = ready;
+    impl_->analysisTitle = title;
+    impl_->analysis = rows;
+}
+
+void Screens::setGuide(const std::string& title, const std::vector<std::string>& lines) {
+    impl_->guideTitle = title;
+    impl_->guideLines = lines;
+}
+
+void Screens::setResumable(bool on, const std::string& label) {
+    impl_->canResume = on;
+    impl_->resumeLabel = on ? label : std::string();
+}
 
 } // namespace ui

@@ -432,18 +432,12 @@ struct Bot::Impl {
         return bestCard(v, paramsFor(g));
     }
 
-    int kurt(const Game& g, int seat) {
+    // Kurt's determinized Monte Carlo: the value (own side minus the others' mean, majority and last capture
+    // included) of each candidate in S sampled worlds, val[ci * S + k] (common worlds: paired comparisons).
+    // Returns S.
+    int sampleValues(const Game& g, int seat, const std::vector<int>& cands, Rng& rng, int plays,
+                     std::vector<double>& val) const {
         const std::vector<int>& h = g.hand(seat);
-        // Equivalent cards (same rank, same points) give the same result: evaluate one of each class.
-        std::vector<int> cands;
-        for (int c : h) {
-            bool dup = false;
-            for (int d : cands)
-                if (rk(d) == rk(c) && cpts(d) == cpts(c)) dup = true;
-            if (!dup) cands.push_back(c);
-        }
-        if (cands.size() == 1) return cands[0];
-
         const Params P = paramsFor(g);
         Table t{};
         t.nActive = (int)g.activeSeats().size();
@@ -489,12 +483,11 @@ struct Bot::Impl {
         }
 
         const int nc = (int)cands.size();
-        // Sample budget: about ROLLOUT_PLAYS simulated plays per decision (a simulated play costs ~0.05 µs at -O2).
+        // Sample budget: about `plays` simulated plays per decision (a simulated play costs ~0.05 µs at -O2).
         int remaining = g.deckCount();
         for (int s : g.activeSeats()) remaining += g.handCount(s);
-        int S = std::max(MIN_SAMPLES, std::min(MAX_SAMPLES, ROLLOUT_PLAYS / std::max(1, nc * remaining)));
-        // Value of every candidate in every sampled world (common random numbers -> paired comparison).
-        std::vector<double> val((size_t)nc * S, 0.0);
+        const int S = std::max(MIN_SAMPLES, std::min(MAX_SAMPLES, plays / std::max(1, nc * remaining)));
+        val.assign((size_t)nc * S, 0.0);
         std::vector<int> pool;
         std::vector<char> used;
         for (int k = 0; k < S; ++k) {
@@ -554,6 +547,28 @@ struct Bot::Impl {
                 val[(size_t)ci * S + k] = simValue(x, t, g.rules().majorityPoints, mySide);
             }
         }
+        return S;
+    }
+
+    // Equivalent cards (same rank, same points) give the same result: one of each class.
+    static std::vector<int> candidates(const std::vector<int>& h) {
+        std::vector<int> cands;
+        for (int c : h) {
+            bool dup = false;
+            for (int d : cands)
+                if (rk(d) == rk(c) && cpts(d) == cpts(c)) dup = true;
+            if (!dup) cands.push_back(c);
+        }
+        return cands;
+    }
+
+    int kurt(const Game& g, int seat) {
+        const std::vector<int> cands = candidates(g.hand(seat));
+        if (cands.size() == 1) return cands[0];
+        const Params P = paramsFor(g);
+        const int nc = (int)cands.size();
+        std::vector<double> val;
+        const int S = sampleValues(g, seat, cands, rng, ROLLOUT_PLAYS, val);
 
         // Start from the Usta choice and switch only to a candidate that is better by a margin the samples
         // support (paired over the same worlds): sampling noise must not override sound judgment.
@@ -596,6 +611,47 @@ void Bot::setLevel(BotLevel level) { impl_->level = level; }
 BotLevel Bot::level() const { return impl_->level; }
 void Bot::resetForHand() { impl_->reset(); }
 void Bot::observe(const GameEvent& e, const Game&) { impl_->observe(e); }
+
+std::vector<CardValue> Bot::evaluate(const Game& g, int seat) const {
+    std::vector<CardValue> out;
+    if (seat < 0 || seat >= 4 || g.stage() != Stage::Playing || g.current() != seat || g.hand(seat).empty()) return out;
+    const std::vector<int>& h = g.hand(seat);
+    const std::vector<int> cands = Impl::candidates(h);
+    const int nc = (int)cands.size();
+    std::vector<double> val;
+    // its own random numbers (from the state), so the bot's play is not disturbed and the result is reproducible
+    uint64_t z = 0x9157A11ull ^ ((uint64_t)g.handIndex() << 32) ^ ((uint64_t)g.turnNumber() << 8) ^ (uint64_t)seat;
+    for (int c : h) z = z * 0x9E3779B97F4A7C15ull + (uint64_t)c + 1;
+    Rng r(z);
+    const int S = nc > 1 ? impl_->sampleValues(g, seat, cands, r, 2 * ROLLOUT_PLAYS, val) : 0;
+    std::vector<double> mean((size_t)nc, 0.0);
+    for (int ci = 0; ci < nc && S > 0; ++ci) {
+        for (int k = 0; k < S; ++k) mean[(size_t)ci] += val[(size_t)ci * S + k];
+        mean[(size_t)ci] /= S;
+    }
+    int best = 0;
+    for (int ci = 1; ci < nc; ++ci)
+        if (mean[(size_t)ci] > mean[(size_t)best]) best = ci;
+    std::vector<double> se((size_t)nc, 0.0);
+    for (int ci = 0; ci < nc && S > 1; ++ci) {
+        if (ci == best) continue;
+        double m = 0, q = 0;
+        for (int k = 0; k < S; ++k) {
+            const double d = val[(size_t)ci * S + k] - val[(size_t)best * S + k];
+            m += d;
+            q += d * d;
+        }
+        m /= S;
+        se[(size_t)ci] = std::sqrt(std::max(0.0, (q / S - m * m) / (S - 1)));
+    }
+    for (int c : h)
+        for (int ci = 0; ci < nc; ++ci)
+            if (rk(cands[(size_t)ci]) == rk(c) && cpts(cands[(size_t)ci]) == cpts(c)) {
+                out.push_back({c, mean[(size_t)ci], se[(size_t)ci]});
+                break;
+            }
+    return out;
+}
 
 int Bot::next(const Game& g, int seat) {
     if (seat < 0 || seat >= 4 || g.stage() != Stage::Playing || g.current() != seat || g.hand(seat).empty())

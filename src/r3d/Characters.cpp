@@ -52,6 +52,7 @@ bool Characters::init(Renderer& r, uint64_t seed) {
     buildAll(m.M, r, m.seed);
     m.setupOpponents();
     m.setupCrowd();
+    m.initLife(r);
     m.banter.reset(m.seed * 31u + 7u);
     m.banter.setNames(m.names);
     m.banter.setEnabled(!m.titleMode);
@@ -73,6 +74,7 @@ bool Characters::init(Renderer& r, uint64_t seed) {
 void Characters::shutdown(Renderer& r) {
     Impl& m = *impl_;
     if (!m.ready) return;
+    m.freeLife(r);
     freeAll(m.M, r);
     m.ready = false;
 }
@@ -180,6 +182,8 @@ void Characters::onCatMeow(Vector3 where) {
     if (!m.titleMode) m.banter.catMeow();
 }
 
+ui::Banter& Characters::banter() { return impl_->banter; }
+
 void Characters::setAnimationSpeed(float speed) { impl_->animSpeed = std::clamp(speed, 0.25f, 4.f); }
 
 void Characters::setTitleMode(bool on) {
@@ -215,6 +219,7 @@ void Characters::update(float dt, const Camera3D& viewer) {
     if (m.activeSeat == 0) m.humanWait += dt;
     else if (m.activeSeat > 0) m.humanWait = 0.f;
     for (int s = 1; s <= 3; ++s) m.updateOpponent(m.opp[s], dt);
+    m.updateLife(dt);
     m.updateCrowd(dt);
     m.updateGlasses(dt);
     m.emitSteam(dt);
@@ -309,6 +314,7 @@ void Cast::updateBubbles(float dt) {
         B.lastStart = time;
         ++visible;
         banter.spoke(best);  // (the çaycı too: Banter spaces his lines as well)
+        if (owner && owner->speak) owner->speak(best, B.cur[best].text);
         if (best <= 3) {
             Opponent& o = opp[best];
             o.talk = B.cur[best].text;
@@ -712,6 +718,7 @@ void Cast::submitOpponent(Renderer& r, const Opponent& o) {
 void Cast::submitCrowd(Renderer& r) {
     // patrons
     for (const Patron& p : patrons) {
+        if (!p.present) continue;
         submitSeatedBody(r, p, false);
         if (p.prop == 1) {  // card fan in the left hand, faces toward the holder
             Vector3 hp = xfPoint(p.arm[1].hand, {-0.004f, -0.02f, -0.07f});
@@ -753,7 +760,7 @@ void Cast::submitCrowd(Renderer& r) {
                 ++submitCount;
             }
         }
-        if (T.kind == 2)
+        if (T.kind == 2 && !T.patrons.empty() && patrons[T.patrons[0]].present)
             for (const Matrix& c : T.pileCards) {
                 r.submit(&M.card, &M.cardMat, c, 0);
                 ++submitCount;
@@ -816,6 +823,7 @@ void Characters::submit(Renderer& r) {
     }
     for (int s = 1; s <= 3; ++s) m.submitOpponent(r, m.opp[s]);
     m.submitCrowd(r);
+    m.submitLife(r);
 }
 
 } // namespace r3d

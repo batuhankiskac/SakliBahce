@@ -246,10 +246,64 @@ them; `ui::Settings::game` is the one the next match plays (the title's "Oyna" o
     player's cards, bot pacing and `Characters::reach` / `react` / `chat` for the people.
   * Tavla uses `r3d::Tavla3D`: the box, 24 inlaid points, 30 checkers that hop between stacks (the engine's position
     is reconciled checker by checker), two dice thrown to their numbers, highlights (lit checkers, green targets)
-    and ray picking of points / bar / bear-off.
+    and ray picking of points / bar / bear-off. Optional katlama zarı (`tavla::Rules::doubling`: offer / take / drop, Crawford, a
+    3D cube with 2–64 faces; the bots' cube decisions come from their win estimate), the "MARS!" banner and a
+    "Hamleler" panel (`Game::gameLog()`, notation in the mover's own point numbers).
   * Between hands the game fills a `ui::SheetModel` (Screens.h): the same hand-written sheet and final standings as
     the okey games, from rows the game chooses.
   * `tools/tables_check` (`make tablescheck`) plays all four with real mouse clicks through
     `TableGame::debugHumanClick`.
 * Rules pages: the okey family's are written in Screens.cpp; the others come from `docs/kurallar_*.md`, embedded by
   `tools/gen_rules.py` into `src/ui/RulesText.inc` and parsed at runtime (headings become the page's tabs).
+
+## 8. Around the games (2026-10)
+
+* **Personalities** (`core/BotStyle.h`): `BotStyle::forSeat` makes Kel Mahmut bold (+1) and Emekli Nuri careful (-1),
+  Hacı Rıza neutral; each bot maps boldness to a few knobs (feeding weights, pair openings and left tiles in 101 /
+  okey, bids in Batak, koz choices in King). Neutral reproduces the tuned behaviour exactly; the styled bots stay
+  within a few per cent of neutral strength (`sim --styles`).
+* **Record** (`ui/Stats.{h,cpp}`, `istatistik.txt`): per game matches / wins / hands / streaks / wins per level and
+  a best hand (`TableGame::humanHandScore`); rank points 1 / 2 / 3 per match won against Acemi / Usta / Kurt.
+  App writes only matches the player played himself (no unattended runs, no Yapay Zeka). `ScreenId::Stats`.
+* **İpucu**: what a Kurt would do in the player's seat now (`App::showOkeyHint` -> `Table3D::showHint`; the other
+  games ask their own Kurt). `--hint-demo` shows one in a snapshot.
+* **Rehber**: a short guide card (`ScreenId::Guide`, `App::guideFor`) at each game's first match, then one tip at the
+  player's first turn; `Settings::guideSeen` keeps which were shown.
+* **Save / resume** (`kayit.txt`): a match is its seed, the settings it started with and its engine's action log
+  (`okey::Game::actionLog()` / `replay()`, `LoggedAction` text lines; the other games through
+  `TableGame::saveState` / `restoreState`). Leaving a match, closing the window and every hand end write it; "Devam
+  Et" on the title starts the same match again and replays it; Table3D rebuilds from the game state. A new match
+  replaces the save. `--resume` continues it at once.
+* **Variants**: renkli okey (`RulesConfig::okeyColorDouble`), Batak "önce koz açılmalı", Kısa King (12 el), tavla
+  katlama zarı and katmerli mars — all in Ayarlar under the game's own section.
+* **Memory** (`ui/Memory.{h,cpp}`, `hafiza.txt`): per regular and game the matches together, who won last, the best
+  win / worst loss, mars and okey-finish moments, the days between visits and the rank last seen. `Banter::setMemory`;
+  `Banter::matchStart` queues at most one remark (first visit, long absence, rematch, tease, streak, favourite game),
+  `Banter::rankUp` a congratulation. App records at every match end (`MatchRecord::fromScores` for the okey family,
+  `fromStandings` from the final sheet for the others).
+* **Voices** (`Audio::speak`): every speech bubble is murmured by a small formant synthesiser (Turkish vowels,
+  consonant onsets, falling / rising sentence pitch), one voice per regular plus the crowd and the çaycı. Rendered on
+  the main thread into preallocated slots, mixed by its own stream; Ayarlar "Konuşma sesleri".
+* **Replays** (`tekrarlar/`, newest 20): every finished match is archived in the save format plus `d` (date) and `r`
+  (result). İstatistik -> Tekrarlar lists them; "İzle" restarts the match from its seed and feeds the actions one by
+  one (`okey::Game::replay`, `TableGame::setReplayMode` / `replayStep`), nobody else moves. Space pauses, the arrows
+  change the speed (0.5–8×). `--watch` watches the newest.
+* **Analysis** (`app/Analysis.{h,cpp}`, `analysis::analyzeMatch`): a Kurt replays the match and judges each of the
+  player's decisions (discards / openings / draws in 101, finishing chance in okey, 2-ply equity in tavla, Monte Carlo
+  in the card games, bids / koz / contracts); the three costliest that are clear of the noise are shown on "Hatalarım"
+  (`ScreenId::Analysis`, MatchOver button and Tekrarlar "Analiz"). App runs it on a worker thread (cancelled on a new
+  match or quit); `--analyze` opens it for the newest replay.
+* **Accessibility**: every table plays from the keyboard (okey: arrows walk the rack, Space carries, D / A draw,
+  Enter discards, O opens, I finds a meld to add to; cards: arrows + Enter, Tab / 1–9 for the buttons; tavla: arrows
+  for source and target, R / Enter rolls, U undoes). A key-help strip shows while the keyboard is in use.
+  `ui::setColorBlind` / `tilegfx::setColorBlind` paint tiles with lightness-separated inks and a shape per colour,
+  `cardgfx::setFourColour` a four-colour deck; `ui::setHudTextScale(1.25)` is "Büyük yazı". `tables_check --keys`.
+* **Time of day and season** (`r3d/Daytime.h`, `RoomDaylight.cpp`, `CharactersLife.cpp`): Ayarlar "Vakit" (0 from the
+  clock, 1 sabah, 2 öğle, 3 akşam, 4 gece) and "Mevsim" (0 from the date, 1–4 ilkbahar..kış) go to
+  `Room::setTimeOfDay / setSeason` and the same on Characters every frame. Daylight paints the street, sun shafts
+  and floor patches; fewer patrons in the morning; rain mostly on autumn / winter nights, snow and scarves in winter,
+  leaves in autumn; the stove burns in the cold. Dev switches `SAKLI_SAAT`, `SAKLI_MEVSIM`, `SAKLI_KALABALIK`.
+* **The crowd**: `Characters::crowdReact(Cheer|Groan|Laugh)` at a big finish (okey / ×2), a mars, a lost match;
+  their shouts come back through `consumeCrowdLine` and App draws them where they came from (`drawCrowdShouts`, the
+  crowd voice murmurs them). Bystanders (`setSpectatorMatch`) walk in during a long match and stand behind Kel Mahmut.
+  At a match end the winner buys tea (`orderTeaRound`): the çırak refills our glasses, then the busy tables.

@@ -23,6 +23,7 @@ public:
     bool animating() const override;
     int activeSeat() const override;
     bool mouseBusy() const override { return hover_ >= 0 || hud_.mouseOverHud(); }
+    std::string debugPhase() const override { return phase_; }
     void setLevel(int level) override;
     void setAnimationSpeed(float s) override;
     void setHints(bool on) override { hints_ = on; }
@@ -31,6 +32,9 @@ public:
     void toast(const std::string& text, Color c, float seconds) override { hud_.toast(text, c, seconds); }
     std::string lastLogLine() const override { return log_; }
     bool debugHumanClick(const r3d::Renderer& r, Vector2& out) const override;
+    // Maç tekrarı: no bots, no player input; replayStep waits for the table (0) and hands the line to replayLine.
+    bool setReplayMode(bool on) override;
+    int replayStep(const std::string& line) override;
 
 protected:
     // ---- the game's hooks ----
@@ -47,6 +51,24 @@ protected:
     virtual void layoutExtra() {}                          // cards outside hands / trick / piles (Pişti's middle)
     virtual bool faceUpHand(int seat) const { return seat == 0; } // eşli batak's open dummy
     virtual bool extraBusy() const { return false; }      // the game's own animation the bots must wait for
+    // İpucu: what a Kurt bot of the game would do in the player's seat now (a card to play, or a panel choice), with
+    // the Turkish line to show ("İpucu: Kupa Kızı oyna"). False: no hint here.
+    struct Hint {
+        int card = -1;     // a card of the player's hand (or the open dummy) to lift and glow
+        int choice = -1;   // a panel decision (bid value, koz suit, contract): the game marks that button
+        int suit = -1;     // King's koz contract: the suit
+        std::string text;
+    };
+    virtual bool computeHint(Hint& out) { (void)out; return false; }
+    // Changes whenever the player's decision changes (e.g. the engine's action log length): a hint lasts until then.
+    virtual size_t decisionStamp() const { return 0; }
+    // Restore (save / resume): the trick on the felt now, and every seat's won pile, from the engine.
+    virtual std::vector<std::pair<int, int>> trickOnTable() const { return {}; } // (seat, card) in play order
+    virtual std::array<std::vector<int>, 4> wonPiles() const { return {}; }
+    // Maç tekrarı: one saved action line, applied to the engine with its events pumped (the usual animations):
+    // 1 done, 0 not now (e.g. a "next hand" line while the sheet is up), -1 does not apply. Called only when the table
+    // is idle.
+    virtual int replayLine(const std::string& line) = 0;
 
     // ---- helpers for the games ----
     void resetTable();                                     // all cards hidden, piles and the trick cleared
@@ -64,6 +86,18 @@ protected:
     // layoutExtra(): put a card that is in none of the hands / trick / piles (keeps it visible this frame)
     void placeExtra(int card, const r3d::CardPose& p, bool animate = true, float delay = 0.f);
     std::string seatName(int s) const { return names_[(size_t)s]; }
+    // Maç tekrarı: the status while the player's seat is to move ("Sıra sende" for the default name "Sen").
+    std::string replaySelfStatus() const { return names_[0] == "Sen" ? std::string("Sıra sende") : names_[0] + " düşünüyor…"; }
+    // After a resume: the table shows the engine's state at once (hands, the trick, won piles, extras via layoutExtra;
+    // nothing in flight, no toasts), and the player's / bots' turns go on from there.
+    void restoreView();
+    // The button column: "İpucu" (the game's only own button), then "Yapay Zeka" and "Menü"; and the key-help strip
+    // while the keyboard is in use (call it after the game's panel, before hud_.toasts()).
+    void drawButtons(Vector2 mouse, bool aiSeat);
+    bool hintAvailable() const;                           // the player decides now (not the AI, nothing moving)
+    void requestHint();                                   // "İpucu" / H: ask the game's Kurt bot, show its answer
+    const Hint* activeHint() const;                       // the hint still standing for this decision (nullptr: none)
+    static constexpr int HINT_BUTTON = 0;                 // GameHud click id of "İpucu"
 
     TableContext ctx_;
     r3d::Cards3D cards_;
@@ -94,9 +128,18 @@ protected:
     std::vector<std::pair<float, ui::Sfx>> delayedSfx_;  // (game time, sound)
     Camera3D cam_{};
     bool built_ = false;
+    bool humanInput_ = false;
+    bool replay_ = false;                                  // maç tekrarı: nobody moves but the saved lines
+    Hint hint_;
+    size_t hintStamp_ = 0;
+    bool hintOn_ = false;
+    int kbCard_ = -1;                                      // the keyboard's card (among the playable ones)
+    std::string phase_;                                    // debugPhase()
 
 private:
     void layoutAll();
+    std::vector<int> playableInOrder() const;             // playable cards left to right as the hand shows them
+    void keyboardCards(bool hudKeys);
 };
 
 } // namespace app

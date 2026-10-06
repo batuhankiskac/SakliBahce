@@ -24,6 +24,15 @@ enum class BotLevel { Acemi = 0, Usta = 1, Kurt = 2 };
 // table, -1 if the seat has no card or it is not its turn.
 int fallbackCard(const Game& g, int seat);
 
+// Hata analizi: Kurt's value of playing `card` now — the expected points of the seat's side minus the others' mean
+// for the rest of the hand (majority and the last capture included), over sampled worlds of the unseen cards; `se` is
+// the standard error of its difference to the best card (paired over the same worlds, 0 for the best one).
+struct CardValue {
+    int card = -1;
+    double value = 0.0;
+    double se = 0.0;
+};
+
 class Bot {
 public:
     explicit Bot(BotLevel level = BotLevel::Usta, uint64_t seed = 1);
@@ -40,6 +49,9 @@ public:
 
     // The card `seat` (== g.current()) plays now; always a card of g.hand(seat). Typical < 30 ms.
     int next(const Game& g, int seat);
+    // Every card of the seat's hand (== g.current()) valued by Kurt's Monte Carlo (CardValue), whatever this bot's
+    // level; uses what observe() remembered. Deterministic for the state; does not touch next()'s random numbers.
+    std::vector<CardValue> evaluate(const Game& g, int seat) const;
 
 private:
     struct Impl;

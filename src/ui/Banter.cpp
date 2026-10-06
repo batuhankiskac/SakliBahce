@@ -12,9 +12,12 @@
 // only ever the human's victim (kHumanTook*).
 #include "ui/Banter.h"
 
+#include "ui/Memory.h"
+
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <vector>
 
 namespace ui {
 
@@ -84,6 +87,18 @@ enum Sit {
     S_IndicatorSelf,    // klasik okey: the speaker shows the gösterge's twin
     S_IndicatorReact,   // klasik okey: {p} showed the gösterge (one point off everybody else)
     S_PartnerWin,       // eşli 101: the speaker's partner {p} finished the hand
+    // the regulars remember the player (Memory): {o} the game ({o:de} … with a case ending), {v} a number, {r} a rank
+    S_MemFirst,         // the first visit ever: meeting the player
+    S_MemLongAway,      // the player was away for {v} days
+    S_MemRematch,       // the player beat the speaker in the last match of {o}
+    S_MemTease,         // the speaker beat the player in the last match of {o}
+    S_MemMarsBy,        // the player marsed the speaker last time (tavla)
+    S_MemMarsTo,        // the speaker marsed the player last time
+    S_MemMarsWatch,     // a bystander reminds {p} of the mars he took from the player
+    S_MemOkey,          // the player finished with the okey in the last match against the speaker
+    S_MemStreak,        // the player has won {v} matches of this game in a row
+    S_MemFavourite,     // {o} is the player's favourite game
+    S_MemRankUp,        // the player rose to the rank {r}
     S_Count
 };
 
@@ -518,6 +533,89 @@ LINES(kCayciIdle, "Çay parası birikti ha abiler.", "Abi ben de oynayabilirim i
       "Mahmut Abi, maç kaç kaç?", "Abi, çay ocağı benden çok çalışıyor.", "Bardaklar boş, abiler dolu.")
 LINES(kCayciGoal, "Gol mü oldu abi?", "Oley!", "Kim attı abi?")
 
+// ---------------------------------------------------------------- memory: the regulars remember the player
+LINES(kMemFirstR, "Hoş geldin {h}, seni ilk defa görüyoruz. Otur, çayımız bol.",
+      "Yeni bir yüz! Hoş geldin {h}, bu kapı herkese açık.", "Buyur {h}; ilk gelişin hayırlara vesile olsun.",
+      "Misafir umduğunu değil, bulduğunu yer {h}; bizde çay da muhabbet de bol.")
+LINES(kMemFirstM, "Yeni oyuncu mu var? Hoş geldin {h}, ben Mahmut, bu masanın golcüsü!",
+      "Hoş geldin {h}! Kural basit: kaybeden çayları ısmarlar!", "Taze kan geldi beyler! Hoş geldin {h}, bana acımak yok!",
+      "İlk maçın ha {h}? Formanı giy, sahaya çık!")
+LINES(kMemFirstN, "Hıh, yeni biri. Ben Nuri; otuz yıl memurluk yaptım. Hoş geldin {h}.",
+      "Seni ilk defa görüyorum {h}. Bizim zamanımızda yeni gelen önce bir ay izlerdi.",
+      "Hoş geldin {h}. Sandalye gıcırdar, aldırma; benim dizlerim de öyle.",
+      "Yeni gelen mi? Otur {h}, bakalım ne kadar dayanacaksın.")
+LINES(kMemFirstC, "Hoş geldin abi! İlk çay benden, ikram!", "Abi hoş geldin, çay mı olsun oralet mi?")
+LINES(kMemAwayR, "Gözümüz yollarda kaldı {h}; {v} gündür yoktun, hoş geldin.", "Hoş geldin {h}! {v} gün oldu, merak ettik seni.",
+      "Nerelerdeydin {h}? Gelmeyenin sandalyesi de boş kalır.", "Maşallah, {h} geldi. {v} gündür yerin boştu.")
+LINES(kMemAwayM, "Abi neredesin? {v} gündür yoksun, takımı sensiz sahaya çıkardık!",
+      "{h} döndü beyler! Transfer dönemi bitti mi?", "{v} gün ha {h}! Antrenmansız maça çıktın, bugün yandın!",
+      "Vay {h}! Seni kampa mı aldılar, {v} gündür ortada yoksun!")
+LINES(kMemAwayN, "Hıh, {h}. {v} gündür yoktun; ben de bizi unuttun sandım.",
+      "{v} gün! Bizim zamanımızda kahveyi bir gün aksatan olmazdı.", "Geldin mi {h}? Ben buradayım, her gün buradayım.",
+      "Kaybolmuştun {h}. Neyse, oraletim soğumadan otur.")
+LINES(kMemAwayC, "Abi nerelerdeydin? {v} gündür çayın bekliyor!")
+LINES(kMemRematchR, "Geçen sefer {o:de} bizi yendin {h}; bakalım bugün kısmet kimden yana.",
+      "Geçen sefer sen aldın {h}. Kazanmak da kaybetmek de bizim için.",
+      "Geçen {o} maçı senindi {h}, helali hoş olsun. Bugün yeni bir gün.",
+      "Geçen sefer beni güzel yendin {h}; bugün sabırla oynayacağım.")
+LINES(kMemRematchM, "Geçen sefer beni yendin {h}, bugün rövanş var!", "{o:de} geçen sefer şans yüzüne güldü {h}, bugün rövanş!",
+      "Rövanş maçı beyler! {h}, geçen seferi unutmadım!", "Geçen sefer hakem senden yanaydı {h}; bugün rövanş!")
+LINES(kMemRematchN, "Geçen sefer yendin diye havalanma {h}.", "Geçen sefer şanslıydın {h}. Şans her gün gelmez.",
+      "Hıh, {h}. Geçen {o} maçını hâlâ düşünüyorum.", "Geçen sefer gözlüğümü unutmuştum {h}, ondan kaybettim.")
+LINES(kMemTeaseR, "Geçen sefer kısmet bizdendi {h}; üzülme, bugün senin günün olabilir.",
+      "Geçen {o} maçını ben almıştım {h}, ama her gün yeni bir gün.",
+      "Kaybetmek ayıp değil {h}; geçen seferden ders aldıysan ne mutlu.",
+      "Geçen sefer seni yendim ama gönlünü kırmadım, değil mi {h}?")
+LINES(kMemTeaseM, "Geçen sefer seni fena yendim {h}, hatırlıyor musun?", "{h}, geçen seferki skoru unuttun mu? Ben unutmadım!",
+      "Şampiyon kim, şampiyon? Geçen {o} maçını hatırla {h}!", "Geçen sefer seni sahadan sildim {h}, bugün de aynısı!")
+LINES(kMemTeaseN, "Geçen sefer seni yendim {h}. Tecrübe, tecrübe.",
+      "{o:de} geçen sefer kim kazanmıştı {h}? Hatırlatayım: ben.", "Geçen seferki dersi unutmadın inşallah {h}.",
+      "Bizim zamanımızda yenilen, rövanş istemeye utanırdı {h}.")
+LINES(kMemMarsByR, "Geçen sefer beni mars ettin {h}; maşallah, ama bugün tespihim yanımda.",
+      "Mars olmak da bir tecrübe {h}; bugün dikkatli oynayacağım.")
+LINES(kMemMarsByM, "Geçen sefer beni mars ettin {h}, unutmadım!", "O mars hâlâ boğazımda {h}. Bugün ödeşiyoruz!",
+      "Mars yedim diye bütün mahalle güldü {h}, rövanş!", "Geçen seferki mars kaza golüydü {h}, bugün göreceksin!")
+LINES(kMemMarsByN, "Geçen sefer mars ettin beni {h}. Bizim zamanımızda büyüğe mars yapılmazdı.",
+      "Hıh, o marsı torunlarıma anlatmayacağım {h}.")
+LINES(kMemMarsToR, "Geçen sefer mars oldun {h}, üzülme; sabreden kazanır.", "Mars oldun diye küsme {h}, oyun bu.")
+LINES(kMemMarsToM, "Geçen sefer seni mars ettim {h}, hatırladın mı?", "Mars kralı kim? Mahmut! Geçen seferi hatırla {h}!",
+      "{h}, geçen seferki marsın tadı hâlâ damağımda!", "Bugün de mars var mı {h}? Geçen sefer pek güzeldi!")
+LINES(kMemMarsToN, "Geçen sefer mars oldun {h}. Tecrübe delikanlı, tecrübe.", "Hıh, geçen seferki marsı unuttun mu {h}?")
+LINES(kMemMarsWatchR, "{p}, geçen sefer mars olmuştun; bugün dikkatli ol.", "Bakalım bugün kim mars olacak, {p}?")
+LINES(kMemMarsWatchN, "{p}, geçen seferki marsı unutma. Hıh!", "Geçen sefer mars olan yine oynuyor; cesaret işte, {p}.")
+LINES(kMemOkeyR, "Geçen sefer okeyle bitirdin {h}; eli bereketli adamsın maşallah.",
+      "Okeyle bitirmeyi unutmadık {h}; bugün de nasip olur mu bakalım.",
+      "Geçen sefer okeyle bitirdin {h}, çifte yazdık. Helal olsun.", "Okeyi sabırla bekleyen bulur {h}; geçen sefer sen buldun.")
+LINES(kMemOkeyM, "Geçen sefer okeyle bitirip çifte yazdırdın {h}, unutmam!", "Okeyle bitirmek ha {h}? Bugün o okey benim!",
+      "Geçen seferki okeyle bitiriş röveşata gibiydi {h}, ama bugün kaleci benim!",
+      "{h}, geçen sefer okeyi nereden buldun? Bugün göz hapsindesin!")
+LINES(kMemOkeyN, "Okeyle bitirdin diye kendini usta sanma {h}.", "Geçen sefer okeyle bitirdin {h}. Hıh, şans.",
+      "Bizim zamanımızda okeyle bitiren çay ısmarlardı {h}, hatırlatayım.", "Okey sende kalınca kolay {h}. Bugün görelim.")
+LINES(kMemStreakR, "Maşallah {h}, {v} maçtır kazanıyorsun; nazar değmesin.",
+      "{v} maç üst üste! Allah bereket versin {h}; ama her yokuşun bir inişi var.", "Seri yapıyorsun {h}, tahtaya vurun beyler.",
+      "{v} galibiyet… Sabrın meyvesi bu {h}.")
+LINES(kMemStreakM, "{v} maçtır yenilmiyorsun {h}! Bu seri bugün bitiyor!",
+      "Yenilmezlik serisi ha {h}? {v} maç! Bugün o seriyi bozuyoruz!", "Abi {v} maç üst üste, sana transfer teklifi gelir!",
+      "Seri yapmışsın {h}! Savunma, sıkı durun beyler!")
+LINES(kMemStreakN, "{v} maçtır kazanıyorsun {h}. Acemi şansı bu kadar uzun sürmez.",
+      "Hıh, {v} maç. Bizim zamanımızda böyle seriye hile derlerdi.", "{v} kere üst üste ha {h}? Bugün bitiyor o iş.",
+      "Seri yapan çay ısmarlar {h}; {v} maç oldu.")
+LINES(kMemFavR, "Yine {o} {h}; sen bu oyunu pek seviyorsun.", "{o} senin göz ağrın, değil mi {h}?",
+      "{o:i} seven kaybetmekten korkmaz {h}. Buyur.", "Sen geldin mi bilirim {h}, {o} oynanacak.")
+LINES(kMemFavM, "Yine mi {o} abi? Sen bunun fanatiğisin!", "{o} deyince koşa koşa geliyorsun {h}, bilirim!",
+      "Yine {o:i} seçtin ha {h}, tahmin etmiştim!", "Senin takımın {o}, belli {h}!")
+LINES(kMemFavN, "Yine {o}. Bizim zamanımızda bir oyunla yetinmezdik {h}.", "Hıh, yine {o}. Başka oyun bilmiyor musun {h}?",
+      "{o:i} benden çok oynuyorsun {h}.", "Her gelişinde {o}. Alışkanlık iyidir; ben de hep oralet içerim.")
+LINES(kMemRankR, "Maşallah {h}, artık {r} oldun. Hayırlı olsun!", "{r} ha? Emek verdin, hak ettin {h}.",
+      "Hayırlı olsun {h}, {r} olmuşsun; tevazuyu da elden bırakma.",
+      "Ağaç meyve verdikçe başını eğer {h}; {r} oldun, mübarek olsun.")
+LINES(kMemRankM, "Demek {r} oldun {h}! Vay be, kaptanlık bandını ver bari!", "Terfi var beyler! Artık {r} bu!",
+      "Abi {r} olmuşsun! Yine de seni yenerim!", "{r} oldu bizim {h}, çaylar ondan beyler!")
+LINES(kMemRankN, "{r} olmuşsun {h}. Bizim zamanımızda bu rütbe kırk yılda verilirdi.",
+      "{r}… Eh, aferin {h}. Torunuma anlatırım belki.", "Hıh, {r} olmuşsun {h}. Rütbe başa bela, bilirim.",
+      "Otuz yıl memurluk yaptım, terfi nedir bilirim. Hayırlı olsun {h}: {r}.")
+LINES(kMemRankC, "Abi {r} olmuşsun! Çayın artık en ince belliden!", "{r} abi, çayın benden!")
+
 const Tbl kTables[S_Count][4] = {
     {T(kWelcomeR), T(kWelcomeM), T(kWelcomeN), TN},
     {T(kHandStartR), T(kHandStartM), T(kHandStartN), TN},
@@ -579,6 +677,17 @@ const Tbl kTables[S_Count][4] = {
     {T(kIndSelfR), T(kIndSelfM), T(kIndSelfN), TN},
     {T(kIndReactR), T(kIndReactM), T(kIndReactN), TN},
     {T(kPartnerWinR), T(kPartnerWinM), T(kPartnerWinN), TN},
+    {T(kMemFirstR), T(kMemFirstM), T(kMemFirstN), T(kMemFirstC)},
+    {T(kMemAwayR), T(kMemAwayM), T(kMemAwayN), T(kMemAwayC)},
+    {T(kMemRematchR), T(kMemRematchM), T(kMemRematchN), TN},
+    {T(kMemTeaseR), T(kMemTeaseM), T(kMemTeaseN), TN},
+    {T(kMemMarsByR), T(kMemMarsByM), T(kMemMarsByN), TN},
+    {T(kMemMarsToR), T(kMemMarsToM), T(kMemMarsToN), TN},
+    {T(kMemMarsWatchR), TN, T(kMemMarsWatchN), TN},
+    {T(kMemOkeyR), T(kMemOkeyM), T(kMemOkeyN), TN},
+    {T(kMemStreakR), T(kMemStreakM), T(kMemStreakN), TN},
+    {T(kMemFavR), T(kMemFavM), T(kMemFavN), TN},
+    {T(kMemRankR), T(kMemRankM), T(kMemRankN), T(kMemRankC)},
 };
 
 // Multi-line idle exchanges (2–5 lines): seats 1 Rıza, 2 Mahmut, 3 Nuri, 4 the çaycı. Lines may use {h}.
@@ -745,6 +854,9 @@ void Banter::reset(uint64_t seed) {
     std::fill(std::begin(lastDialogue_), std::end(lastDialogue_), -1);
     recent_.clear();
     queue_.clear();
+    sessionGreeted_ = false;
+    lastMemSit_ = -1;
+    favouriteSaid_ = false;
 }
 
 void Banter::setNames(const std::array<std::string, 4>& names) { names_ = names; }
@@ -824,21 +936,40 @@ std::string Banter::fill(const std::string& tpl, int speaker, int value, int act
     std::string out;
     out.reserve(tpl.size() + 16);
     for (size_t i = 0; i < tpl.size(); ++i) {
-        if (tpl[i] == '{' && i + 2 < tpl.size() && tpl[i + 2] == '}') {
-            char k = tpl[i + 1];
-            if (k == 'v') {
+        const size_t close = tpl[i] == '{' ? tpl.find('}', i + 1) : std::string::npos;
+        if (close != std::string::npos && close - i >= 2 && close - i <= 6) {
+            const std::string key = tpl.substr(i + 1, close - i - 1);
+            const char k = key[0];
+            // an optional case ending: {o:de}, {h:i}, ...
+            int cs = -1;
+            if (key.size() > 2 && key[1] == ':') {
+                const std::string e = key.substr(2);
+                cs = e == "i" ? (int)TrCase::Acc : e == "e" ? (int)TrCase::Dat : e == "de" ? (int)TrCase::Loc
+                   : e == "den" ? (int)TrCase::Abl : e == "in" ? (int)TrCase::Gen : -1;
+            }
+            if (key.size() == 1 && k == 'v') {
                 out += std::to_string(value);
-            } else if (k == 'h') {
+            } else if (key.size() == 1 && k == 'h') {
                 out += humanAddress(speaker);
-            } else if (k == 'p') {
+            } else if (k == 'h' && cs >= 0) {
+                // the player in a sentence: his name with the ending, or "bu delikanlı" when he has none
+                const std::string& n = names_[0];
+                const bool named = !n.empty() && n != "Sen" && n != "sen" && n != "Oyuncu";
+                out += named ? trSuffix(n, (TrCase)cs, true) : "bu " + trSuffix("delikanlı", (TrCase)cs, false);
+            } else if (key.size() == 1 && k == 'p') {
                 out += actor >= 0 ? address(speaker, actor) : std::string();
-            } else if (k == 'g') {
+            } else if (key.size() == 1 && k == 'g') {
                 int giver = actor >= 0 ? okey::Game::leftOf(actor) : -1;
                 out += giver >= 0 ? address(speaker, giver) : std::string();
+            } else if (k == 'o' && (key.size() == 1 || cs >= 0)) {
+                const std::string g = Memory::gameName(memGame_);
+                out += cs >= 0 ? trSuffix(g, (TrCase)cs, false) : g;
+            } else if (key.size() == 1 && k == 'r') {
+                out += memRank_;
             } else {
-                out += tpl.substr(i, 3);
+                out += tpl.substr(i, close - i + 1);
             }
-            i += 2;
+            i = close;
             continue;
         }
         out += tpl[i];
@@ -1257,6 +1388,209 @@ void Banter::catMeow() {
     if (!enabled_ || !chance(0.35f)) return;
     if (chance(0.15f)) say(4, S_Cat, 0.8f, false, 0, -1, 3.f);
     else say(pickBot(), S_Cat, 0.6f, false, 0, -1, 3.f);
+}
+
+// ---------------------------------------------------------------- memory remarks
+namespace {
+constexpr int kAwayDays = 4;      // "long time no see" from this many days away
+constexpr int kStreakMin = 3;     // a win streak worth a remark
+constexpr int kFavouriteMin = 5;  // matches of a game before it counts as the favourite
+constexpr int kMomentDays = 45;   // a mars / okey finish is remembered this long
+} // namespace
+
+bool Banter::matchStart(int game, int streak, int day) {
+    if (!enabled_) return false;
+    memGame_ = game;
+    if (day < 0) day = Memory::today();
+    const Memory* M = memory_;
+    auto queue = [&](int seat, int sit, float delay, int value = 0, int actor = 0) {
+        if (!say(seat, sit, delay, true, value, actor, 8.f)) return false;
+        lastMemSit_ = sit;
+        return true;
+    };
+    // the first match of this run: meeting the player, or welcoming him back after a while
+    if (M && !sessionGreeted_) {
+        sessionGreeted_ = true;
+        const int away = M->daysAway(day);
+        const int sit = M->firstMeeting() ? S_MemFirst : away >= kAwayDays ? S_MemLongAway : -1;
+        if (sit >= 0) {
+            // these greet him themselves: the plain welcome would only repeat it
+            queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [](const Pending& p) { return p.sit == S_Welcome; }),
+                         queue_.end());
+            if (queue(pickBot(), sit, 1.0f, away)) {
+                if (chance(0.4f)) say(4, sit, 4.2f, true, away, 0, 8.f);
+                return true;
+            }
+        }
+    }
+    if (M) {
+        // the regular who sat with him in the last match of this game: a rematch, or teasing
+        int seat = -1, lastDay = -1;
+        for (int s = 1; s <= 3; ++s) {
+            const VsRecord& r = M->with(s, game);
+            if (r.played <= 0 || (r.last != MatchResult::PlayerWon && r.last != MatchResult::TheyWon)) continue;
+            if (r.lastDay > lastDay || (r.lastDay == lastDay && chance(0.5f))) {
+                seat = s;
+                lastDay = r.lastDay;
+            }
+        }
+        if (seat > 0) {
+            const VsRecord& r = M->with(seat, game);
+            const Moment& mo = M->moment[seat];
+            const bool fresh = mo.kind != MomentKind::None && mo.game == game && day - mo.day <= kMomentDays;
+            int sit = -1;
+            if (r.last == MatchResult::PlayerWon) {
+                if (fresh && mo.byPlayer && mo.kind == MomentKind::Mars && chance(0.8f)) sit = S_MemMarsBy;
+                else if (fresh && mo.byPlayer && mo.kind == MomentKind::OkeyFinish && chance(0.5f)) sit = S_MemOkey;
+                else if (chance(0.7f)) sit = S_MemRematch;
+            } else {
+                if (fresh && !mo.byPlayer && mo.kind == MomentKind::Mars && chance(0.8f)) sit = S_MemMarsTo;
+                else if (chance(0.65f)) sit = S_MemTease;
+            }
+            if (sit >= 0 && sit == lastMemSit_ && chance(0.6f)) sit = -1; // don't harp on the same thing
+            if (sit >= 0 && queue(seat, sit, 2.6f)) {
+                if (sit == S_MemMarsBy && chance(0.35f)) say(pickOther(seat), S_MemMarsWatch, 6.f, true, 0, seat, 9.f);
+                return true;
+            }
+        }
+    }
+    // a win streak in this game
+    if (streak >= kStreakMin && lastMemSit_ != S_MemStreak && chance(0.6f) && queue(pickBot(), S_MemStreak, 2.6f, streak))
+        return true;
+    // his favourite game (once a run)
+    if (M && !favouriteSaid_ && M->favouriteGame() == game && M->gameMatches[(size_t)game] >= kFavouriteMin &&
+        chance(0.3f) && queue(pickBot(), S_MemFavourite, 2.6f)) {
+        favouriteSaid_ = true;
+        return true;
+    }
+    return false;
+}
+
+bool Banter::rankUp(const std::string& rankName) {
+    if (!enabled_ || rankName.empty()) return false;
+    memRank_ = rankName;
+    // after the match-end remarks; a regular with nothing pending speaks
+    int seat = pickBot();
+    for (int k = 0; k < 3; ++k) {
+        bool busy = false;
+        for (const Pending& p : queue_) busy = busy || p.line.seat == seat;
+        if (!busy) break;
+        seat = seat % 3 + 1;
+    }
+    if (!say(seat, S_MemRankUp, 5.5f, true, 0, 0, 12.f)) return false;
+    if (chance(0.35f)) say(4, S_MemRankUp, 8.5f, true, 0, -1, 12.f);
+    return true;
+}
+
+// ---------------------------------------------------------------- Turkish case endings
+namespace {
+
+// Lower-cased code points of a UTF-8 string (Turkish I -> ı, İ -> i).
+std::vector<char32_t> trLowerCodepoints(const std::string& s) {
+    std::vector<char32_t> out;
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = (unsigned char)s[i];
+        char32_t cp = c;
+        int n = 1;
+        if (c >= 0xF0 && i + 3 < s.size()) {
+            cp = ((c & 7u) << 18) | (((unsigned char)s[i + 1] & 63u) << 12) | (((unsigned char)s[i + 2] & 63u) << 6) |
+                 ((unsigned char)s[i + 3] & 63u);
+            n = 4;
+        } else if (c >= 0xE0 && i + 2 < s.size()) {
+            cp = ((c & 15u) << 12) | (((unsigned char)s[i + 1] & 63u) << 6) | ((unsigned char)s[i + 2] & 63u);
+            n = 3;
+        } else if (c >= 0xC0 && i + 1 < s.size()) {
+            cp = ((c & 31u) << 6) | ((unsigned char)s[i + 1] & 63u);
+            n = 2;
+        }
+        i += (size_t)n;
+        if (cp == U'I') cp = U'ı';
+        else if (cp == U'İ') cp = U'i';
+        else if (cp >= U'A' && cp <= U'Z') cp = cp + 32;
+        else if (cp == U'Ç') cp = U'ç';
+        else if (cp == U'Ğ') cp = U'ğ';
+        else if (cp == U'Ö') cp = U'ö';
+        else if (cp == U'Ş') cp = U'ş';
+        else if (cp == U'Ü') cp = U'ü';
+        else if (cp == U'Â') cp = U'a';
+        else if (cp == U'â') cp = U'a';
+        else if (cp == U'î' || cp == U'Î') cp = U'i';
+        else if (cp == U'û' || cp == U'Û') cp = U'u';
+        out.push_back(cp);
+    }
+    return out;
+}
+
+bool trVowel(char32_t c) {
+    return c == U'a' || c == U'e' || c == U'ı' || c == U'i' || c == U'o' || c == U'ö' || c == U'u' || c == U'ü';
+}
+
+// how a number is read aloud, last word only: 101 -> "bir", 30 -> "otuz", 1000 -> "bin"
+std::string spokenNumberTail(const std::string& digits) {
+    static const char* const kOnes[10] = {"sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"};
+    static const char* const kTens[10] = {"", "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan"};
+    size_t z = 0;
+    while (z < digits.size() && digits[digits.size() - 1 - z] == '0') ++z;
+    if (z == digits.size()) return kOnes[0];
+    const int d = digits[digits.size() - 1 - z] - '0';
+    if (z == 0) return kOnes[d];
+    if (z == 1) return kTens[d];
+    if (z == 2) return "yüz";
+    if (z <= 5) return "bin";
+    if (z <= 8) return "milyon";
+    return "milyar";
+}
+
+} // namespace
+
+std::string trSuffix(const std::string& word, TrCase c, bool proper) {
+    if (word.empty()) return word;
+    // the sound the ending follows: the word's own end, or the number read aloud
+    size_t nd = 0;
+    while (nd < word.size() && word[word.size() - 1 - nd] >= '0' && word[word.size() - 1 - nd] <= '9') ++nd;
+    const bool number = nd > 0;
+    const std::vector<char32_t> cps = trLowerCodepoints(number ? spokenNumberTail(word.substr(word.size() - nd)) : word);
+    char32_t lastVowel = U'e', last = 0;
+    int vowels = 0;
+    size_t lastWordStart = 0;
+    for (size_t i = 0; i < cps.size(); ++i)
+        if (cps[i] == U' ' || cps[i] == U'-') lastWordStart = i + 1;
+    for (size_t i = lastWordStart; i < cps.size(); ++i) {
+        if (trVowel(cps[i])) {
+            lastVowel = cps[i];
+            ++vowels;
+        }
+        if ((cps[i] >= U'a' && cps[i] <= U'z') || cps[i] > 127) last = cps[i];
+    }
+    const bool back = lastVowel == U'a' || lastVowel == U'ı' || lastVowel == U'o' || lastVowel == U'u';
+    const char* A = back ? "a" : "e";
+    const char* I = (lastVowel == U'a' || lastVowel == U'ı')   ? "ı"
+                    : (lastVowel == U'e' || lastVowel == U'i') ? "i"
+                    : (lastVowel == U'o' || lastVowel == U'u') ? "u"
+                                                                : "ü";
+    const bool vowelEnd = trVowel(last);
+    const bool hard = last == U'f' || last == U's' || last == U't' || last == U'k' || last == U'ç' || last == U'ş' ||
+                      last == U'h' || last == U'p';
+    const bool apostrophe = proper || number;
+    std::string stem = word;
+    const bool vowelSuffix = !vowelEnd && (c == TrCase::Acc || c == TrCase::Dat || c == TrCase::Gen);
+    // a common noun of more than one syllable softens its last stop before a vowel: batak -> batağı, evlat -> evladı
+    if (!apostrophe && vowelSuffix && vowels >= 2) {
+        const bool afterN = stem.size() >= 2 && stem[stem.size() - 2] == 'n';
+        if (last == U'p') stem = stem.substr(0, stem.size() - 1) + "b";
+        else if (last == U't') stem = stem.substr(0, stem.size() - 1) + "d";
+        else if (last == U'k') stem = stem.substr(0, stem.size() - 1) + (afterN ? "g" : "ğ");
+        else if (last == U'ç' && stem.size() >= 2) stem = stem.substr(0, stem.size() - 2) + "c";
+    }
+    std::string e;
+    switch (c) {
+    case TrCase::Acc: e = (vowelEnd ? "y" : "") + std::string(I); break;
+    case TrCase::Dat: e = (vowelEnd ? "y" : "") + std::string(A); break;
+    case TrCase::Loc: e = (hard ? "t" : "d") + std::string(A); break;
+    case TrCase::Abl: e = (hard ? "t" : "d") + std::string(A) + "n"; break;
+    case TrCase::Gen: e = (vowelEnd ? "n" : "") + std::string(I) + "n"; break;
+    }
+    return stem + (apostrophe ? "'" : "") + e;
 }
 
 BanterLine Banter::aiModeLine(bool on, uint32_t pick) {

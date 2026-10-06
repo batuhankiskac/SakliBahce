@@ -533,9 +533,18 @@ Action fallbackAction(const Game& g, int seat) {
 // ---------------------------------------------------------------------------------------------------------
 // Bot
 
+// Personality (Bot::setStyle): boldness b in -1..1 shifts the ihale. Acemi/Usta add b * STYLE_EST_SHIFT tricks to
+// their estimate; Kurt asks STYLE_KURT_BID * b less (more for a cautious bot) expected utility of declaring over
+// passing. A bold bot that bids also jumps one above the minimum when its (shifted) estimate covers it: an overbid
+// that only adds risk (the points are the tricks taken), its signature at the table. Card play stays the level's.
+constexpr double STYLE_EST_SHIFT = 0.35;
+constexpr double STYLE_KURT_BID = 0.5;
+
 struct Bot::Impl {
     Level level;
     Rng rng;
+    BotStyle style;
+    double bold() const { return std::clamp((double)style.boldness, -1.0, 1.0); }
     // tuning knobs (see Bot::debugTune)
     double tune[9] = {-0.6, 0.4, 1200, 64, 96, 2.2, 0.4, 0.6, 0};
     Impl(Level l, uint64_t seed) : level(l), rng(seed) {}
@@ -546,6 +555,8 @@ struct Bot::Impl {
     Action bidAcemi(const Game& g, int seat, const Know& k);
     Action bidUsta(const Game& g, int seat, const Know& k);
     Action bidKurt(const Game& g, int seat, const Know& k);
+    // A bid of `need`, or need + 1 for a bold bot whose estimate `est` (style shift included) reaches it.
+    Action styledBid(const Game& g, int seat, int need, double est) const;
     int trumpAcemi(const Game& g, int seat);
     int trumpKurt(const Game& g, int seat, const Know& k);
     // play
@@ -603,6 +614,14 @@ Action Bot::Impl::next(const Game& g, int seat) {
     }
 }
 
+Action Bot::Impl::styledBid(const Game& g, int seat, int need, double est) const {
+    if (bold() > 0.0 && est >= need + 1.5) {
+        const std::vector<int> lb = g.legalBids(seat);
+        if (std::find(lb.begin(), lb.end(), need + 1) != lb.end()) return makeBid(need + 1);
+    }
+    return makeBid(need);
+}
+
 // ---- Acemi ----
 
 Action Bot::Impl::bidAcemi(const Game& g, int seat, const Know& k) {
@@ -617,10 +636,11 @@ Action Bot::Impl::bidAcemi(const Game& g, int seat, const Know& k) {
     }
     est += std::max(0, longest - 3) * 0.8 + 1.0;
     est += rng.uniform(-1.0f, 1.0f);
+    est += STYLE_EST_SHIFT * bold();
     if (k.esli) est += 3.5;
     const int need = std::max(g.rules().minBid, g.highBid() + 1);
     if (k.esli && g.highBidder() == kart::partnerOf(seat)) return makePass();
-    if (est >= need) return makeBid(need);
+    if (est >= need) return styledBid(g, seat, need, est - 1.0);
     return makePass();
 }
 
@@ -669,11 +689,11 @@ int Bot::Impl::playAcemi(const Game& g, int seat) {
 
 Action Bot::Impl::bidUsta(const Game& g, int seat, const Know& k) {
     const uint64_t h = g.handMask(seat);
-    const double est = bestEval(h) + partnerShare(k, seat, tune[5]);
+    const double est = bestEval(h) + partnerShare(k, seat, tune[5]) + STYLE_EST_SHIFT * bold();
     const int need = std::max(g.rules().minBid, g.highBid() + 1);
     if (k.esli && g.highBidder() == kart::partnerOf(seat) && est < need + 1.5) return makePass();
     const double margin = k.esli ? tune[6] : tune[0];
-    if (est - margin >= need) return makeBid(need);
+    if (est - margin >= need) return styledBid(g, seat, need, est);
     return makePass();
 }
 
@@ -828,7 +848,8 @@ Action Bot::Impl::bidKurt(const Game& g, int seat, const Know& k) {
     double best = declU[0];
     for (int t = 1; t < 4; ++t) best = std::max(best, declU[t]);
     const double margin = k.esli ? tune[7] : tune[1];
-    if (best > passU + margin) return makeBid(need);
+    if (best > passU + margin - STYLE_KURT_BID * bold())
+        return styledBid(g, seat, need, bestEval(g.handMask(seat)) + partnerShare(k, seat, tune[5]) + STYLE_EST_SHIFT * bold());
     return makePass();
 }
 
@@ -849,9 +870,91 @@ Bot::Bot(Bot&&) noexcept = default;
 Bot& Bot::operator=(Bot&&) noexcept = default;
 void Bot::setLevel(Level level) { impl_->level = level; }
 Level Bot::level() const { return impl_->level; }
+void Bot::setStyle(BotStyle style) { impl_->style = style; }
+BotStyle Bot::style() const { return impl_->style; }
 void Bot::resetForHand() {}
 void Bot::observe(const GameEvent&, const Game&) {}
 Action Bot::next(const Game& g, int seat) { return impl_->next(g, seat); }
+namespace {
+uint64_t stateSeed(const Game& g, int seat, uint64_t salt) {
+    uint64_t z = salt ^ ((uint64_t)g.handIndex() << 40) ^ ((uint64_t)seat << 32) ^ g.playedMask();
+    for (int c : g.hand(seat)) z = z * 0x9E3779B97F4A7C15ull + (uint64_t)c + 1;
+    z ^= (uint64_t)g.bids().size() * 0x51ull;
+    return z ? z : 1;
+}
+} // namespace
+
+std::vector<CardValue> Bot::evaluateCards(const Game& g, int seat) {
+    std::vector<CardValue> out;
+    if (g.stage() != Stage::Playing || g.current() != seat) return out;
+    const Know k = buildKnow(g, seat);
+    const Rules& r = g.rules();
+    const uint64_t L = legalMask(g.handMask(seat), viewTrick(g.trick(), g.trump()), g.trump(), g.trumpBroken(), r);
+    std::vector<int> cands;
+    for (uint64_t m = L; m; m &= m - 1) cands.push_back(__builtin_ctzll(m));
+    if (cands.empty()) return out;
+    const int nc = (int)cands.size();
+    const int worlds = nc == 1 ? 0 : std::max(60, std::min(400, 2 * (int)impl_->tune[2] / nc));
+    Rng rng(stateSeed(g, seat, 0xBA7A11ull));
+    std::vector<double> val((size_t)nc * (size_t)std::max(1, worlds), 0.0);
+    const int mySide = g.sideOf(seat);
+    for (int wi = 0; wi < worlds; ++wi) {
+        uint64_t hands[4];
+        sampleWorld(rng, k, r, true, hands);
+        const World base = impl_->worldFromGame(g, k, hands);
+        for (int i = 0; i < nc; ++i) {
+            World w = base;
+            worldPlay(w, seat, cands[(size_t)i], r);
+            rollout(w, r);
+            val[(size_t)i * worlds + wi] = utility(r, mySide, w.tricks, g.declarer(), g.contract());
+        }
+    }
+    std::vector<double> mean((size_t)nc, 0.0), se((size_t)nc, 0.0);
+    for (int i = 0; i < nc && worlds > 0; ++i) {
+        for (int wi = 0; wi < worlds; ++wi) mean[(size_t)i] += val[(size_t)i * worlds + wi];
+        mean[(size_t)i] /= worlds;
+    }
+    int best = 0;
+    for (int i = 1; i < nc; ++i)
+        if (mean[(size_t)i] > mean[(size_t)best] + 1e-9) best = i;
+    for (int i = 0; i < nc && worlds > 1; ++i) {
+        if (i == best) continue;
+        double m = 0, q = 0;
+        for (int wi = 0; wi < worlds; ++wi) {
+            const double d = val[(size_t)i * worlds + wi] - val[(size_t)best * worlds + wi];
+            m += d;
+            q += d * d;
+        }
+        m /= worlds;
+        se[(size_t)i] = std::sqrt(std::max(0.0, (q / worlds - m * m) / (worlds - 1)));
+    }
+    for (int i = 0; i < nc; ++i) out.push_back({cands[(size_t)i], mean[(size_t)i], se[(size_t)i]});
+    return out;
+}
+
+bool Bot::evaluateBid(const Game& g, int seat, int bid, double& declare, double& pass) {
+    if (g.stage() != Stage::Bidding || g.current() != seat) return false;
+    const Know k = buildKnow(g, seat);
+    const Rng saved = impl_->rng;
+    impl_->rng = Rng(stateSeed(g, seat, 0xB1D5ull));
+    double declU[4];
+    impl_->simulateBidding(g, seat, k, std::max(bid, std::max(g.rules().minBid, g.highBid() + 1)),
+                           2 * (int)impl_->tune[3], declU, &pass);
+    impl_->rng = saved;
+    declare = *std::max_element(declU, declU + 4);
+    return true;
+}
+
+bool Bot::evaluateTrumps(const Game& g, int seat, double value[4]) {
+    if (g.stage() != Stage::ChoosingTrump || g.current() != seat) return false;
+    const Know k = buildKnow(g, seat);
+    const Rng saved = impl_->rng;
+    impl_->rng = Rng(stateSeed(g, seat, 0x7E0Bull));
+    impl_->simulateBidding(g, seat, k, g.contract(), 2 * (int)impl_->tune[4], value, nullptr);
+    impl_->rng = saved;
+    return true;
+}
+
 void Bot::debugTune(int key, double value) {
     if (key >= 0 && key < 9) impl_->tune[key] = value;
 }

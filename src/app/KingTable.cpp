@@ -1,4 +1,4 @@
-// King (20 hands: penalties and trump games) at our table: engine king::Game, bots king::Bot, the shared card table.
+// King (20 hands, or the short 12-hand game: penalties and trump games) at our table: engine king::Game, bots king::Bot, the shared card table.
 #include "app/CardTable.h"
 #include "core/King.h"
 #include "core/KingBot.h"
@@ -42,15 +42,23 @@ std::string fillLine(std::string t, const std::string& v, const std::string& h) 
 class KingTable final : public CardTableBase {
 public:
     void startMatch(const ui::Settings& st, const std::array<std::string, 4>& names, uint64_t seed) override {
-        (void)st;
-        g_ = king::Game(king::Rules());
+        king::Rules rules;
+        if (st.king12) { // Kısa King: each player chooses 1 koz and 2 cezas, 12 hands
+            rules.kozPerPlayer = 1;
+            rules.cezaPerPlayer = 2;
+        }
+        g_ = king::Game(rules);
+        pickingTrump_ = false;
         names_ = names;
         for (int s = 0; s < 4; ++s) {
             g_.setPlayer(s, names[(size_t)s], s == 0);
             const king::BotLevel lv = s == 0 ? king::BotLevel::Kurt : (king::BotLevel)std::clamp(level_, 0, 2);
             bots_[(size_t)s] = std::make_unique<king::Bot>(lv, seed * 4 + (uint64_t)s + 0x4196ull);
+            // personalities: Kel Mahmut (2) bold, Emekli Nuri (3) cautious; Hacı Rıza and the AI in my seat neutral
+            bots_[(size_t)s]->setStyle(king::BotStyle::forSeat(s));
         }
         rng_.reseed(seed ^ 0x4196Bull);
+        replay_ = false;
         resetTable();
         g_.startMatch(seed);
         pumpEngine();
@@ -101,16 +109,17 @@ public:
             hud_.label3D(r, {0.f, w3d::TABLE_Y + 0.01f, -0.05f}, g_.contractLabel() + " \xC2\xB7 " + names_[(size_t)g_.chooser()],
                          ui::pal::Highlight, 16.f);
 
-        const bool mine = !aiSeat && g_.stage() == king::Stage::Choosing && g_.current() == 0 && !tableBusy();
+        const bool mine = !aiSeat && !replay_ && g_.stage() == king::Stage::Choosing && g_.current() == 0 && !tableBusy();
         if (mine && !pickingTrump_) {
             panelKind_ = 1;
             std::vector<r3d::GameHud::PanelButton> b;
+            const Hint* tip = activeHint();
             for (const king::ContractOption& o : g_.options(0)) {
                 std::string hint;
                 if (!o.allowed) hint = o.reason;
                 else if (o.contract == king::Contract::Koz) hint = "kalan " + std::to_string(g_.kozLeft(0));
                 else hint = "kalan " + std::to_string(o.remaining);
-                b.push_back({king::contractNameTR(o.contract), o.allowed, false, hint});
+                b.push_back({king::contractNameTR(o.contract), o.allowed, tip && tip->choice == (int)o.contract, hint});
             }
             hud_.panel(mouse, "Ne oynayalım?",
                        "Senin seçimin  \xC2\xB7  koz hakkın " + std::to_string(g_.kozLeft(0)) + ", ceza hakkın " +
@@ -119,10 +128,12 @@ public:
         } else if (mine && pickingTrump_) {
             panelKind_ = 2;
             std::vector<r3d::GameHud::PanelButton> b;
+            const Hint* tip = activeHint();
             for (int s = 0; s < 4; ++s) {
                 int n = 0;
                 for (int c : g_.hand(0)) n += kart::suitOf(c) == s ? 1 : 0;
-                b.push_back({kart::suitNameTR(s), true, false, "elinde " + std::to_string(n) + " kart"});
+                b.push_back({kart::suitNameTR(s), true, tip && tip->choice == (int)king::Contract::Koz && tip->suit == s,
+                             "elinde " + std::to_string(n) + " kart"});
             }
             b.push_back({"Geri", true, false, ""});
             hud_.panel(mouse, "Hangi renk koz?", "", b, 5, 240.f, 116.f);
@@ -137,6 +148,7 @@ public:
         if (g_.stage() == king::Stage::HandOver) st = "El bitti";
         else if (g_.stage() == king::Stage::MatchOver) st = "Parti bitti";
         else if (now_ < dealUntil_) st = "Kağıtlar dağıtılıyor…";
+        else if (a == 0 && replay_) st = replaySelfStatus();
         else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
         else if (a == 0) {
             sc = ui::pal::Highlight;
@@ -150,9 +162,37 @@ public:
             parts.push_back({"  \xC2\xB7  ", Color{226, 216, 196, 120}});
             parts.push_back({"Bu el: " + signedText(g_.handPoints(0)), g_.handPoints(0) < 0 ? Color{255, 150, 130, 255} : Color{160, 236, 160, 255}});
         }
-        hud_.status(st, sc, a == 0 && !aiSeat, parts, aiSeat);
-        hud_.buttons(mouse, {}, {}, {}, aiSeat);
+        hud_.status(st, sc, a == 0 && !aiSeat && !replay_, parts, aiSeat && !replay_);
+        drawButtons(mouse, aiSeat);
         hud_.toasts();
+    }
+
+    bool humanHandScore(int& score) const override {
+        if (g_.sheet().empty()) return false;
+        score = g_.sheet().back().points[0];
+        return true;
+    }
+
+    bool saveState(std::vector<std::string>& lines) const override {
+        lines.clear();
+        for (const king::LoggedAction& a : g_.actionLog()) lines.push_back(a.encode());
+        return true;
+    }
+    bool restoreState(const std::vector<std::string>& lines) override {
+        bool ok = true;
+        for (const std::string& l : lines) {
+            king::LoggedAction a;
+            if (!king::LoggedAction::decode(l, a) || !g_.replay(a)) {
+                ok = false;
+                break;
+            }
+        }
+        g_.drainEvents(); // (what happened is already on the table: nothing to animate)
+        pickingTrump_ = false;
+        panelKind_ = 0;
+        log_.clear();
+        restoreView();
+        return ok;
     }
 
     ui::SheetModel sheet(bool aiMode) const override {
@@ -223,6 +263,18 @@ public:
     }
 
 protected:
+    int replayLine(const std::string& line) override {
+        king::LoggedAction a;
+        if (!king::LoggedAction::decode(line, a)) return -1;
+        if (a.kind == king::LogKind::NextHand) {
+            if (g_.stage() == king::Stage::HandOver) return 0;     // the sheet is up: App deals the next hand
+            return g_.stage() == king::Stage::MatchOver ? -1 : 1; // (already dealt)
+        }
+        if (!g_.replay(a)) return -1;
+        pickingTrump_ = false;
+        pumpEngine();
+        return 1;
+    }
     void pumpEngine() override {
         for (const king::GameEvent& e : g_.drainEvents()) {
             using E = king::EvType;
@@ -287,6 +339,33 @@ protected:
     void botStep(int seat) override {
         king::BotAction a = bots_[(size_t)seat]->next(g_, seat);
         if (!king::applyBotAction(g_, seat, a).ok) king::applyBotAction(g_, seat, king::fallbackAction(g_, seat));
+    }
+    size_t decisionStamp() const override { return g_.actionLog().size() + 100000u * (size_t)g_.handIndex(); }
+    bool computeHint(Hint& h) override {
+        if (actor() != 0 || !bots_[0]) return false;
+        const king::BotAction a = bots_[0]->next(g_, 0);
+        if (a.kind == king::BotAction::Kind::Choose) {
+            h.choice = (int)a.contract;
+            h.suit = a.trump;
+            if (a.contract == king::Contract::Koz) h.text = std::string("İpucu: koz ") + kart::suitNameTR(a.trump) + " seç";
+            else h.text = std::string("İpucu: ") + king::contractNameTR(a.contract) + " seç";
+        } else {
+            h.card = a.card;
+            h.text = "İpucu: " + kart::cardAccusativeTR(a.card) + " oyna";
+        }
+        return true;
+    }
+    std::vector<std::pair<int, int>> trickOnTable() const override {
+        std::vector<std::pair<int, int>> v;
+        for (const king::TrickCard& tc : g_.currentTrick().cards) v.push_back({tc.seat, tc.card});
+        return v;
+    }
+    std::array<std::vector<int>, 4> wonPiles() const override {
+        std::array<std::vector<int>, 4> w;
+        for (const king::Trick& t : g_.tricks())
+            if (t.winner >= 0 && t.winner < 4)
+                for (const king::TrickCard& tc : t.cards) w[(size_t)t.winner].push_back(tc.card);
+        return w;
     }
     void onHudClick(int id) override {
         const int i = id - r3d::GameHud::PANEL_ID;

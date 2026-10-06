@@ -1014,7 +1014,119 @@ void testBotFallbackAndChoice() {
     }
 }
 
+// Personalities: on the same hands a bold chooser takes koz games more readily than a neutral one, a cautious one
+// less (Usta: monotone on every hand; Kurt: in aggregate), and the seat presets are what the table expects.
+void testStyles() {
+    CHECK(BotStyle::forSeat(0).neutral());
+    CHECK(BotStyle::forSeat(1).neutral());
+    CHECK(BotStyle::forSeat(2).boldness > 0.f);
+    CHECK(BotStyle::forSeat(3).boldness < 0.f);
+    const BotStyle styles[3] = {BotStyle{}, BotStyle::bold(), BotStyle::cautious()};
+    for (int lvl = 1; lvl < 3; ++lvl) {
+        int koz[3] = {0, 0, 0}, monotone = 0;
+        const int deals = lvl == 1 ? 200 : 40;
+        for (int d = 0; d < deals; ++d) {
+            okey::Rng rng(5000 + (uint64_t)d);
+            const std::vector<int> deck = kart::shuffledDeck(rng);
+            Hands h;
+            for (int i = 0; i < 52; ++i) h[i % 4].push_back(deck[i]);
+            bool isKoz[3];
+            for (int k = 0; k < 3; ++k) {
+                Game g;
+                setup(g, h, 2);
+                Bot b((BotLevel)lvl, 77 + (uint64_t)d);
+                b.setStyle(styles[k]);
+                const BotAction a = b.next(g, 2);
+                CHECK(a.kind == BotAction::Kind::Choose);
+                CHECK(applyBotAction(g, 2, a).ok);
+                isKoz[k] = a.contract == Contract::Koz;
+                koz[k] += isKoz[k];
+            }
+            if ((!isKoz[0] || isKoz[1]) && (!isKoz[2] || isKoz[0])) ++monotone;
+        }
+        if (lvl == 1) CHECK_EQ(monotone, deals);
+        CHECK(koz[1] > koz[0]);
+        CHECK(koz[0] > koz[2]);
+        std::printf("  styles, %s: koz chosen on %d deals: bold %d, neutral %d, cautious %d\n",
+                    lvl == 1 ? "Usta" : "Kurt", deals, koz[1], koz[0], koz[2]);
+    }
+}
+
 } // namespace
+
+// Save / resume: the action log, written as text lines and replayed on a freshly started game with the same seed,
+// reproduces the state (checked every few actions through whole matches: 20 hands and the short 12).
+void sameKing(const Game& a, const Game& b) {
+    CHECK_EQ((int)a.stage(), (int)b.stage());
+    CHECK_EQ(a.handIndex(), b.handIndex());
+    CHECK_EQ(a.chooser(), b.chooser());
+    CHECK_EQ(a.current(), b.current());
+    CHECK_EQ((int)a.contract(), (int)b.contract());
+    CHECK_EQ(a.trump(), b.trump());
+    CHECK_EQ(a.currentTrick().cards.size(), b.currentTrick().cards.size());
+    CHECK_EQ(a.tricks().size(), b.tricks().size());
+    CHECK_EQ(a.sheet().size(), b.sheet().size());
+    CHECK_EQ(a.actionLog().size(), b.actionLog().size());
+    for (int s = 0; s < 4; ++s) {
+        CHECK_EQ(a.hand(s), b.hand(s));
+        CHECK_EQ(a.total(s), b.total(s));
+        CHECK_EQ(a.handPoints(s), b.handPoints(s));
+        CHECK_EQ(a.kozLeft(s), b.kozLeft(s));
+        CHECK_EQ(a.cezaLeft(s), b.cezaLeft(s));
+    }
+}
+
+void testReplay() {
+    for (int variant = 0; variant < 2; ++variant) {
+        Rules r;
+        if (variant == 1) {
+            r.kozPerPlayer = 1;
+            r.cezaPerPlayer = 2;
+        }
+        const uint64_t seed = 90 + (uint64_t)variant;
+        Game g(r);
+        for (int s = 0; s < 4; ++s) g.setPlayer(s, s == 0 ? "Sen" : "Bot", s == 0);
+        g.startMatch(seed);
+        std::vector<Bot> bots;
+        for (int s = 0; s < 4; ++s) bots.emplace_back(BotLevel::Usta, seed * 4 + (uint64_t)s);
+        int steps = 0, replays = 0;
+        while (g.stage() != Stage::MatchOver && steps < 5000) {
+            if (g.stage() == Stage::HandOver) {
+                g.startNextHand();
+            } else {
+                const int seat = g.stage() == Stage::Choosing ? g.chooser() : g.current();
+                const BotAction a = bots[(size_t)seat].next(g, seat);
+                if (!applyBotAction(g, seat, a).ok) CHECK(applyBotAction(g, seat, fallbackAction(g, seat)).ok);
+            }
+            ++steps;
+            if (steps % 31 == 0 || g.stage() == Stage::MatchOver || g.stage() == Stage::HandOver) {
+                Game h(r);
+                for (int s = 0; s < 4; ++s) h.setPlayer(s, s == 0 ? "Sen" : "Bot", s == 0);
+                h.startMatch(g.matchSeed());
+                bool ok = true;
+                for (const LoggedAction& la : g.actionLog()) {
+                    LoggedAction back;
+                    ok = ok && LoggedAction::decode(la.encode(), back) && h.replay(back);
+                }
+                CHECK(ok);
+                sameKing(g, h);
+                ++replays;
+            }
+        }
+        CHECK_EQ((int)g.stage(), (int)Stage::MatchOver);
+        CHECK_EQ((int)g.sheet().size(), variant == 1 ? 12 : 20);
+        CHECK(replays > 10);
+    }
+    LoggedAction x;
+    CHECK(!LoggedAction::decode("0 1 3", x));
+    CHECK(!LoggedAction::decode("7 0 0 0", x));
+    CHECK(LoggedAction::decode("0 2 6 1", x) && x.kind == LogKind::Choose && x.seat == 2 && x.value == 6 && x.trump == 1);
+    Game h;
+    h.startMatch(5);
+    CHECK(!h.replay({LogKind::NextHand, -1, -1, -1}));
+    CHECK(!h.replay({LogKind::Choose, h.chooser(), 99, -1}));
+    CHECK(h.actionLog().empty());
+}
 
 int main() {
     testDeal();
@@ -1026,8 +1138,10 @@ int main() {
     testKoz();
     testTextsAndTurns();
     testBotFallbackAndChoice();
+    testStyles();
     testDeterminismAndBots();
     testFuzz();
+    testReplay();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

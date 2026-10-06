@@ -21,6 +21,11 @@ struct Options {
     int matches = 1;            // --matches N (autoplay): N matches back to back, every other one via the title screen
     int hands = 0;              // --hands N (1..11), 0 = from the settings
     int level = -1;             // --level 0..2 (Acemi / Usta / Kurt), -1 = from the settings
+    bool watch = false;         // --watch: watch the newest finished match (Tekrarlar)
+    bool analyze = false;       // --analyze: "Hatalarım" of the newest finished match
+    bool resume = false;        // --resume: continue the saved match at once ("Devam Et")
+    bool guideDemo = false;     // --guide-demo (snapshots): the guide card shows even in an unattended run
+    bool hintDemo = false;      // --hint-demo (snapshots): ask for an İpucu once the player's turn comes
     bool katlamali = false;     // --katlamali: this run's matches are katlamalı (else from the settings)
     int game = -1;              // --game 101|esli|okey|...: this run's game (ui::GameKind), -1 = from the settings
     std::vector<std::string> sets; // --set key=value: settings-file keys for this run
