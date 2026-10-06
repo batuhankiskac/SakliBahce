@@ -38,13 +38,14 @@ Vector3 rotateHead(Vector3 v, float yawDeg, float pitchDeg) {
     return Vector3Transform(v, m);
 }
 
-Vector3 eyeFor(float yawDeg, float pitchDeg) {
-    const Vector3 neck = Vector3Subtract(DEF_EYE, rotateHead(EYE_FROM_NECK, 0.f, DEF_PITCH));
+// The eye for a head turned by (yaw, pitch) whose resting eye is `eye` at (baseYaw, defPitch).
+Vector3 eyeFor(Vector3 eye, float baseYaw, float defPitch, float yawDeg, float pitchDeg) {
+    const Vector3 neck = Vector3Subtract(eye, rotateHead(EYE_FROM_NECK, baseYaw, defPitch));
     return Vector3Add(neck, rotateHead(EYE_FROM_NECK, yawDeg, pitchDeg));
 }
 
 // ---- title mode: a slow loop through the room (Catmull-Rom through positions, look targets and framings).
-// The path stays above the seated heads (>= 1.1 m from every head, clear of the lamps) and keeps our table,
+// The path stays above the seated heads (>= 0.9 m from every head, clear of the lamps) and keeps our table,
 // lit under its pendant, in most of the frames. Each subject is framed on a third (`frame`: where it sits on
 // screen, -1..1 with y up), clear of the title screen's sign (top centre) and menu column (centre), and
 // inside the side vignettes.
@@ -54,12 +55,13 @@ struct Waypoint {
 };
 constexpr float kThird = 0.34f; // x = 800 +- 272 of 1600: between the menu column and the edge vignette
 constexpr Waypoint kPath[] = {
-    {{1.70f, 1.78f, 2.62f}, {0.00f, 0.86f, 0.00f}, {-kThird, -0.12f}},    // behind our chair, right: the table under the lamp
+    {{1.70f, 1.86f, 1.55f}, {0.00f, 0.86f, 0.00f}, {-kThird, -0.12f}},    // behind our chair, right: the table under the lamp
     {{2.05f, 2.02f, 0.25f}, {3.00f, 1.15f, -2.85f}, {-kThird, -0.06f}},   // along the right side: the tea counter, steam
     {{0.90f, 2.18f, -1.62f}, {-2.50f, 0.95f, -1.80f}, {-kThird, -0.14f}}, // across the back: tavla left, scoreboard right
     {{-1.78f, 2.24f, -1.58f}, {0.10f, 0.82f, 0.25f}, {kThird, -0.12f}},   // behind Kel Mahmut: our table from across
     {{-2.02f, 2.12f, 0.32f}, {-2.60f, 0.88f, 1.70f}, {-kThird, -0.28f}},  // over the card players by the left wall
-    {{-1.25f, 1.84f, 2.72f}, {0.20f, 0.88f, -0.30f}, {-kThird, -0.12f}},  // round behind our seat again
+    {{-1.30f, 1.90f, 1.50f}, {0.20f, 0.88f, -0.30f}, {-kThird, -0.12f}},  // round behind our seat again (between our
+                                                                          // chair and the tavla table: its lamp behind)
 };
 constexpr int kPathN = (int)(sizeof(kPath) / sizeof(kPath[0]));
 constexpr float kSegSeconds = 13.f;
@@ -92,9 +94,25 @@ Vector3 framedLook(Vector3 toSubject, Vector2 frame, float fovyDeg) {
 
 } // namespace
 
+void PlayerCamera::setSeat(Vector3 eye, float baseYawDeg, float pitchDeg) {
+    eye_ = eye;
+    baseYaw_ = baseYawDeg;
+    defPitch_ = pitchDeg;
+    reset();
+}
+
+void PlayerCamera::setOkeySeat() { setSeat(DEF_EYE, 0.f, DEF_PITCH); }
+
+// The tavla table: the same seated eye as at our table (above the chair, a little in front), looking down at the board
+// closer in front, so the resting pitch is steeper.
+void PlayerCamera::setTavlaSeat() {
+    const Vector3 eye = w3d::tavlaToWorld({0.f, DEF_EYE.y, w3d::TAVLA_SEAT_DIST - (w3d::SEAT_DIST - DEF_EYE.z)});
+    setSeat(eye, -w3d::TAVLA_YAW_DEG, -36.f);
+}
+
 void PlayerCamera::reset() {
     yaw_ = targetYaw_ = 0.f;
-    pitch_ = targetPitch_ = DEF_PITCH;
+    pitch_ = targetPitch_ = defPitch_;
     fov_ = targetFov_ = DEF_FOV;
     glanceT_ = 0.f;
     lastRightClick_ = -10.f;
@@ -126,7 +144,7 @@ void PlayerCamera::update(float dt, bool allowLook) {
     if (allowLook && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
         if (time_ - lastRightClick_ < 0.35f) {
             targetYaw_ = 0.f;
-            targetPitch_ = DEF_PITCH;
+            targetPitch_ = defPitch_;
             targetFov_ = DEF_FOV;
             lastRightClick_ = -10.f;
         } else {
@@ -144,9 +162,9 @@ void PlayerCamera::update(float dt, bool allowLook) {
         const float wheel = GetMouseWheelMove();
         if (wheel != 0.f) targetFov_ = std::clamp(targetFov_ - wheel * 3.5f, FOV_MIN, FOV_MAX);
     }
-    if (IsKeyPressed(KEY_R)) {
+    if (recentreKey_ && IsKeyPressed(KEY_R)) {
         targetYaw_ = 0.f;
-        targetPitch_ = DEF_PITCH;
+        targetPitch_ = defPitch_;
         targetFov_ = DEF_FOV;
     }
 
@@ -155,8 +173,10 @@ void PlayerCamera::update(float dt, bool allowLook) {
     if (glanceT_ > 0.f) {
         glanceT_ = std::max(0.f, glanceT_ - dt);
         if (!rmbDown) {
-            const Vector3 d = Vector3Subtract(glance_, DEF_EYE);
-            const float gy = std::atan2(d.x, -d.z) * RAD2DEG;
+            const Vector3 d = Vector3Subtract(glance_, eye_);
+            float gy = std::atan2(d.x, -d.z) * RAD2DEG - baseYaw_;
+            while (gy > 180.f) gy -= 360.f;
+            while (gy < -180.f) gy += 360.f;
             const float gp = std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)) * RAD2DEG;
             const float w = 0.38f * std::min(1.f, glanceT_ / 0.5f);
             ty += (std::clamp(gy, -YAW_LIMIT, YAW_LIMIT) - ty) * w;
@@ -194,9 +214,9 @@ Camera3D PlayerCamera::camera() const {
     // breathing: one slow breath every ~4.5 s, a few millimetres and a fraction of a degree
     const float b = std::sin(time_ * 2.f * PI / 4.5f);
     const float b2 = std::sin(time_ * 2.f * PI / 7.3f + 0.8f);
-    const float yaw = yaw_ + 0.05f * b2;
+    const float yaw = baseYaw_ + yaw_ + 0.05f * b2;
     const float pitch = pitch_ + 0.08f * b;
-    c.position = eyeFor(yaw, pitch);
+    c.position = eyeFor(eye_, baseYaw_, defPitch_, yaw, pitch);
     c.position.y += 0.0018f * b;
     c.position.z += 0.0010f * b;
     c.target = Vector3Add(c.position, lookDir(yaw, pitch));
@@ -204,7 +224,7 @@ Camera3D PlayerCamera::camera() const {
     return c;
 }
 
-float PlayerCamera::yawDeg() const { return yaw_; }
+float PlayerCamera::yawDeg() const { return baseYaw_ + yaw_; }
 float PlayerCamera::pitchDeg() const { return pitch_; }
 
 } // namespace r3d

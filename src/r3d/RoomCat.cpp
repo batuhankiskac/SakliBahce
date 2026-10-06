@@ -217,6 +217,8 @@ struct FloorGrid {
         disc(0.f, 0.f, 1.35f);
         // background tables and every chair (with their sitters' legs)
         for (const w3d::BgTable& t : w3d::BG_TABLES) box(t.x - 0.47f, t.z - 0.47f, t.x + 0.47f, t.z + 0.47f);
+        box(w3d::TAVLA_TABLE.x - w3d::TAVLA_HALF_D - 0.02f, w3d::TAVLA_TABLE.z - w3d::TAVLA_HALF_W - 0.02f,  // the tavla table
+            w3d::TAVLA_TABLE.x + w3d::TAVLA_HALF_D + 0.02f, w3d::TAVLA_TABLE.z + w3d::TAVLA_HALF_W + 0.02f);
         for (const Vector3& c : chairs) box(c.x - 0.25f, c.z - 0.25f, c.x + 0.25f, c.z + 0.25f);  // legs splay to 0.29
         // counter, stove, coat rack, wall bench, rubber plant
         box(2.03f, -3.5f, 3.97f, -2.93f);
@@ -566,6 +568,9 @@ void Room::Impl::initCat() {
         box(X0 - 1.f, Z1, X1 + 1.f, Z1 + 1.f, 9.f);
         for (const w3d::BgTable& t : w3d::BG_TABLES)  // table legs
             for (int k = 0; k < 4; ++k) disc(t.x + (k % 2 ? 0.39f : -0.39f), t.z + (k < 2 ? 0.39f : -0.39f), 0.036f, w3d::BG_TABLE_Y);
+        for (int k = 0; k < 4; ++k)  // the tavla table's legs
+            disc(w3d::TAVLA_TABLE.x + (k % 2 ? 1.f : -1.f) * (w3d::TAVLA_HALF_D - 0.04f),
+                 w3d::TAVLA_TABLE.z + (k < 2 ? 1.f : -1.f) * (w3d::TAVLA_HALF_W - 0.04f), 0.035f, w3d::TABLE_Y);
         box(2.03f, -3.5f, 3.97f, -2.93f, 1.05f);  // counter
         disc(3.8f, 2.55f, 0.32f, 1.1f);             // stove
         disc(-2.95f, 3.25f, 0.2f, 1.9f);            // coat rack

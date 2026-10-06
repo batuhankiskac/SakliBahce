@@ -55,8 +55,14 @@ public:
 
     // The point (0..23), BAR or OFF under `ray` (OFF: the bear-off strip at the right; BAR: the middle bar), -1 none.
     int pick(const Ray& ray) const;
-    // World position of a point's stack top (for a hand reaching there).
+    // World position of a point's stack top (for a hand reaching there); pointLocal: the same on the board.
     Vector3 pointWorld(int idx, int player) const;
+    Vector3 pointLocal(int idx, int player) const;
+    // Where the board stands: its local frame (x across, z toward player 0, y up, origin at the board's centre on
+    // the table top level) to the world. Identity = the middle of our okey table; tavla now has its own table
+    // (w3d::tavlaFrame()).
+    void setFrame(const Matrix& frame);
+    Vector3 toWorld(Vector3 local) const { return Vector3Transform(local, frame_); }
 
 private:
     struct Checker {
@@ -88,6 +94,7 @@ private:
     Quaternion cubeFaceUp(int value) const; // the cube turned so the player reads `value` upright on the side facing him
     Vector3 cubeWorld(int owner, int offered) const;
 
+    Matrix frame_ = MatrixIdentity(), frameInv_ = MatrixIdentity();
     std::array<Checker, CHECKERS> chk_{};
     std::array<Die, 2> dice_{};
     Cube cube_;

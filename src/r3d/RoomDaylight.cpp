@@ -272,6 +272,11 @@ void Room::Impl::updateDaylight(float dt) {
         Lamp& L = lamps[(size_t)t + 1];
         L.power += (want - L.power) * (lookInit ? std::min(1.f, dt * 3.f) : 1.f);
     }
+    if (tavlaLamp >= 0) { // over the tavla table: on while tavla is played there, and in the evening
+        const float want = (tavlaFocus || phase >= w3d::Aksam) ? 1.f : 0.f;
+        Lamp& L = lamps[(size_t)tavlaLamp];
+        L.power += (want - L.power) * (lookInit ? std::min(1.f, dt * 3.f) : 1.f);
+    }
     lookInit = true;
 
     mCondense.alpha = std::clamp(condenseK, 0.2f, 1.3f);

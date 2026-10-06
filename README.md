@@ -23,7 +23,7 @@ kuralları kendi "Nasıl Oynanır?" sayfasındadır (Kurallar), ayarları da Aya
 | **101** | üç rakip | Per aç, 101'i geç, elini bitir; düşük puan kazanır. Katlamalı oyun ve yandan açma cezası ayarlardan. |
 | **Eşli 101** | Kel Mahmut ortağın | Biriniz bitirince ötekinin eli silinir; takım toplamı düşük olan kazanır. |
 | **Okey** | üç rakip | 14 taşı per ya da yedi çifte diz, 15.'yi atıp bit (12-13-1 geçerli). Herkes 20 puanla başlar, bitiş 2, okey atarak ya da çiftten 4, gösterge 1 düşer; sıfıra inen olunca oyun biter. İsteğe bağlı renkli okey (kırmızı/siyah gösterge ×2). |
-| **Tavla** | Kel Mahmut | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. İsteğe bağlı katlama zarı ve katmerli mars; Hamleler paneli. Hacı Rıza ile Emekli Nuri seyredip laf atar. |
+| **Tavla** | Kel Mahmut (Ayarlar'dan Hacı Rıza ya da Emekli Nuri) | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. İsteğe bağlı katlama zarı ve katmerli mars; Hamleler paneli. Kendi masasında oynanır; öteki ikisi okey masasından seyredip laf atar. |
 | **Pişti** | dört kişi, eşli ya da Mahmut'la ikili | Aynı kâğıt ya da vale yerdekileri alır; tek kâğıda pişti 10, valeye vale 20. 101 ya da 151'e. |
 | **Batak** | tekli ya da eşli | İhaleli batak: ihaleyi al, kozu söyle; tutamazsan batarsın. 31, 51 ya da 71'e. "Önce koz açılmalı" kuralı ayarlardan. |
 | **King** | üç rakip | 20 el: her oyuncu 2 koz, 3 ceza seçer (el almaz, kupa almaz, erkek almaz, kız almaz, rıfkı, son iki). Kısa King: 12 el, 1 koz 2 ceza. |
@@ -34,6 +34,13 @@ tavlada rakibin 21 zar ihtimaline bakarak karar verir. Kâğıt oyunlarında kâ
 yelpaze gibi durur: üzerine gelince kâğıt yelpazeden yukarı kalkıp hafifçe eğilir; tıklayarak ya da yukarı, masanın
 üstüne sürükleyip bırakarak oynarsın (oynayabileceklerin parlak, ötekiler soluk). Tavlada önce pulunun durduğu
 haneye sonra yeşil yanan haneye tıklarsın.
+
+**Tavla kendi masasında oynanır.** Tavla seçilince ekran bir an kararır ve kendini senin sandalyenin arkasında,
+sedirin önündeki iki kişilik küçük ceviz masada bulursun; rakibin (varsayılan Kel Mahmut; Ayarlar → Tavla → Rakip ile
+Hacı Rıza ya da Emekli Nuri) karşına oturur, çay bardaklarınız ve Mahmut'un kül tablası da oradadır. Masanın lambası
+tahtayı aydınlatır, arkada sokak kapısı ve kâğıt oynayanlar görünür. Öteki iki müdavim okey masasında kalıp sizi
+seyreder; uzun bir maçta kapıdan girenler tavla rakibinin arkasında durup izler, çırak çayları oraya getirir. Okey
+oyunlarında ve kâğıt oyunlarında yine okey masasına dönersin.
 
 Kâğıtlar gerçekten kâğıt gibi oynanır: dağıtan desteyi karıştırır (iki yarıyı birbirine geçirir) ve keser — pişti'de
 kesilen alt kâğıt herkese gösterilir —, kâğıtları teker teker keçenin üstünde kaydırarak herkesin önüne dağıtır;
@@ -102,7 +109,7 @@ Masada, kendi sandalyende oturuyorsun; ıstakan önünde, rakiplerin karşında 
 |---|---|
 | Etrafa bakmak | farenin **sağ tuşunu** basılı tutup sürükle |
 | Yakınlaşmak | **fare tekerleği** |
-| Bakışı masaya ortalamak | **R** ya da sağ tuşa çift tıklama |
+| Bakışı masaya ortalamak | **R** ya da sağ tuşa çift tıklama (tavlada R zar atar: orada yalnızca çift tıklama) |
 | Istakayı dizmek | taşları sürükleyerek 2 sıra × 16 yuvaya yerleştir; yan yana duran taşlar bir grup sayılır, boşluk grupları ayırır |
 | Taş çekmek | ortadaki desteye ya da sol alttaki (soldaki oyuncunun) atık taşına tıkla veya ıstakana sürükle |
 | Taş atmak | taşı sağ alttaki atık yerine sürükle ya da taşa çift tıkla |
@@ -252,7 +259,7 @@ ayarlarına dokunmaz.
 | `--frames N` | (`--snapshot` ile) görüntüden önce simüle edilecek kare sayısı |
 | `--render-last N` | (`--snapshot` ile) 3B dünyayı yalnızca son N karede çiz (yazılımsal GL'de, bulutta hızlı) |
 | `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules`, `settings`, `games` ya da `stats` |
-| `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` |
+| `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` (tavlada `back`: rakibin arkasından) |
 | `--help` | yardım |
 
 Örnekler:

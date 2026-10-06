@@ -36,6 +36,10 @@ public:
     // something from `target` to their hand, 1 puts something from their hand down at `target` (timed like the
     // tiles: w3d::BOT_TAKE_LEAD / BOT_GIVE_LEAD). `mood`: 0 none, 1 happy, 2 grumpy, 3 surprised.
     void reach(int seat, Vector3 target, int mode);
+    // Tavla at its own table (CharactersTavla.cpp): `seat` (1..3) gets up and sits across the player at the tavla
+    // table (w3d::tavlaFrame), their glass and the player's go along; false brings them back to the okey table.
+    void setTavlaTable(bool on, int seat);
+    int tavlaSeat() const; // 0: nobody plays at the tavla table
     // ---- the card games (CharactersCards.cpp); seat 1..3, times at animation speed 1 (they follow setAnimationSpeed)
     // holdCards: the seat takes its hand up (picking the dealt cards off the felt at `pickUpAt` when given) and holds
     // it fanned in the left hand; false puts the hand down. While held, cardFan gives the fan's frame (world): origin

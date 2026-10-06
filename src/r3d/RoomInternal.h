@@ -250,6 +250,9 @@ struct Room::Impl {
         Mat dust{};                    // per-lamp shaft material (alpha follows the flicker)
     };
     std::vector<Lamp> lamps;
+    int tavlaLamp = -1;            // the pendant over the tavla table (lamps index)
+    bool tavlaFocus = false;       // tavla is played: its lamp is the key light
+    int keyLamp() const { return tavlaFocus && tavlaLamp >= 0 ? tavlaLamp : 0; }
     Mesh shadeOut{}, shadeIn{}, bulbMesh{}, cordMesh{};
     std::vector<Mesh> dustMeshes;  // one light shaft per lamp (camera-facing about Y)
 
@@ -467,6 +470,7 @@ struct Room::Impl {
     void buildWallDecor(rm::Builders& B);
     void buildCounter(rm::Builders& B);
     void buildBgTables(rm::Builders& B);
+    void buildTavlaTable(rm::Builders& B);
     void buildLamps(rm::Builders& B);
     void buildStoveTvFan(rm::Builders& B);
     void buildAshtray();

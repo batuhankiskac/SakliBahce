@@ -394,6 +394,7 @@ void Room::Impl::buildAll() {
     buildWallDecor(B);
     buildCounter(B);
     buildBgTables(B);
+    buildTavlaTable(B);
     buildLamps(B);
     buildStoveTvFan(B);
     buildStreetAndWindows(B);
@@ -1121,11 +1122,15 @@ void Room::Impl::buildLamps(Builders& B) {
     }
     lamps[2].faulty = 1.f;  // the okey table's bulb stutters now and then
     addLamp({3.05f, 2.18f, -3.02f}, false, true, Color{255, 190, 120, 255}, 0.95f, 3.0f);
+    // the tavla table's pendant (the key light while tavla is played there)
+    addLamp({w3d::TAVLA_TABLE.x, w3d::TAVLA_LAMP_Y, w3d::TAVLA_TABLE.z}, false, false, Color{255, 200, 140, 255}, 1.0f, 3.3f);
+    tavlaLamp = (int)lamps.size() - 1;
     // light shafts (camera-facing quads, local origin at the shade rim, +Y up)
     for (const Lamp& L : lamps) {
         float s = L.small ? 0.7f : 1.f;
         float rimY = L.bulb.y - 0.075f * s;
-        float bottom = L.key ? 1.52f : (L.small ? 1.0f : w3d::BG_TABLE_Y);  // our table's air stays clear (y < 1.5)
+        const bool clearAir = L.key || &L == &lamps[(size_t)std::max(0, tavlaLamp)];
+        float bottom = clearAir ? 1.52f : (L.small ? 1.0f : w3d::BG_TABLE_Y);  // our tables' air stays clear (y < 1.5)
         float h = rimY - bottom;
         float wTop = 0.38f * s, wBot = wTop + 2.f * h * std::tan(52.f * DEG2RAD);
         MeshBuilder q;
@@ -1507,6 +1512,33 @@ void Room::Impl::buildStreetAndWindows(Builders& B) {
             }
             panes.push_back({cm.build(true), cc, &mLace});
         }
+    }
+}
+
+// ---------------------------------------------------------------------------- the tavla table
+// A small walnut table for two behind our seat (w3d::tavlaFrame): plain wood, no felt (the tavla box lies on it), the
+// same height as our felt so the people's poses fit, two bentwood chairs facing each other across it.
+void Room::Impl::buildTavlaTable(Builders& B) {
+    const float TY = w3d::TABLE_Y, hw = w3d::TAVLA_HALF_W, hd = w3d::TAVLA_HALF_D;
+    const Vector3 c = w3d::TAVLA_TABLE;
+    const Color topC{132, 84, 50, 255};
+    // world extents: local x (across) runs along world z, local z (toward the players) along world x
+    const float ex = hd, ez = hw;
+    rbox(B.woodCast, {c.x, TY - 0.0175f, c.z}, {2.f * ex, 0.035f, 2.f * ez}, 0.012f, 2, topC);
+    rbox(B.woodCast, {c.x, TY - 0.075f, c.z - ez + 0.03f}, {2.f * ex - 0.08f, 0.08f, 0.022f}, 0.005f, 1, scaleRgb(topC, 0.85f));
+    rbox(B.woodCast, {c.x, TY - 0.075f, c.z + ez - 0.03f}, {2.f * ex - 0.08f, 0.08f, 0.022f}, 0.005f, 1, scaleRgb(topC, 0.85f));
+    rbox(B.woodCast, {c.x - ex + 0.03f, TY - 0.075f, c.z}, {0.022f, 0.08f, 2.f * ez - 0.08f}, 0.005f, 1, scaleRgb(topC, 0.85f));
+    rbox(B.woodCast, {c.x + ex - 0.03f, TY - 0.075f, c.z}, {0.022f, 0.08f, 2.f * ez - 0.08f}, 0.005f, 1, scaleRgb(topC, 0.85f));
+    for (int k = 0; k < 4; ++k) {
+        const float lx = (k % 2 ? 1.f : -1.f) * (ex - 0.04f), lz = (k < 2 ? 1.f : -1.f) * (ez - 0.04f);
+        rbox(B.woodCast, {c.x + lx, (TY - 0.035f) * 0.5f, c.z + lz}, {0.046f, TY - 0.035f, 0.046f}, 0.008f, 2, scaleRgb(topC, 0.8f));
+    }
+    for (int s : {0, 2}) {
+        Chair ch;
+        ch.occupied = true; // (the cat keeps off: someone may sit down there any time)
+        ch.pos = w3d::tavlaToWorld({0.f, 0.f, s == 0 ? w3d::TAVLA_SEAT_DIST : -w3d::TAVLA_SEAT_DIST});
+        ch.yaw = w3d::TAVLA_YAW_DEG + w3d::seatYawDeg(s);
+        chairs.push_back(ch);
     }
 }
 

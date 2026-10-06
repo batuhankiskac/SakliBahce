@@ -63,12 +63,13 @@ const Node kNodes[] = {
     {3.32f, -1.05f},  // 13 T1 corner
     {-3.45f, -0.98f}, // 14 T0 corner
     {-3.48f, 0.92f},  // 15 T2 corner
+    {-0.22f, 1.52f},  // 16 the tavla table: serve the opponent's glass (node 9 serves the player's)
 };
 constexpr int kNodeCount = (int)(sizeof(kNodes) / sizeof(kNodes[0]));
 const int kEdges[][2] = {{0, 1},  {1, 13}, {13, 2}, {1, 2},   {2, 12}, {2, 3},   {3, 4},   {3, 5},
                          {4, 8},  {8, 7},  {5, 9},  {9, 6},   {6, 10}, {7, 10},  {10, 11}, {11, 14},
-                         {11, 15}};
-const int kServeNode[4] = {6, 5, 4, 7};     // glass index -> node
+                         {11, 15}, {9, 16}};
+const int kServeNode[4] = {6, 5, 4, 7};     // glass index -> node (at the okey table)
 const int kBgNode[4] = {14, 13, 15, 12};    // bg table -> node
 
 std::vector<int> shortestPath(int from, int to) {
@@ -450,20 +451,33 @@ void Cast::updateCrowd(float dt) {
 }
 
 // ============================================================================ the çaycı
+// Where the çaycı stands to serve glass `gi`: by the okey table, or by the tavla table for the two playing there.
+static int serveNode(int gi, int tavlaSeat) {
+    if (tavlaSeat > 0 && gi == 0) return 9;
+    if (tavlaSeat > 0 && gi == tavlaSeat) return 16;
+    return kServeNode[gi];
+}
+
 void Cast::planTrip(bool ours, int bg) {
     Cayci& b = boy;
     int from = nearestNode(b.pos);
     std::vector<int> nodes;
     b.tour.clear();
     if (ours) {
-        // visit the four glasses around our table, entering from the right side
-        const int order[4] = {2, 1, 0, 3};
+        // visit the four glasses around our table, entering from the right side (with tavla on: the tavla table's two
+        // first, then the two still at the okey table)
+        std::vector<int> order{2, 1, 0, 3};
+        if (tavlaSeat > 0) {
+            order = {tavlaSeat, 0};
+            for (int gi : {2, 1, 3})
+                if (gi != tavlaSeat) order.push_back(gi);
+        }
         int cur = from;
         for (int gi : order) {
-            std::vector<int> seg = shortestPath(cur, kServeNode[gi]);
+            std::vector<int> seg = shortestPath(cur, serveNode(gi, tavlaSeat));
             if (!nodes.empty() && !seg.empty()) seg.erase(seg.begin());
             nodes.insert(nodes.end(), seg.begin(), seg.end());
-            cur = kServeNode[gi];
+            cur = serveNode(gi, tavlaSeat);
             b.tour.push_back(gi);
         }
         b.plan = 1;
@@ -488,7 +502,10 @@ void Cast::updateCayci(float dt) {
     b.timer -= dt;
 
     // ---- decisions
-    auto serveStopFor = [&](int gi) { return Vector3{kNodes[kServeNode[gi]].x, 0.f, kNodes[kServeNode[gi]].z}; };
+    auto serveStopFor = [&](int gi) {
+        const int n = serveNode(gi, tavlaSeat);
+        return Vector3{kNodes[n].x, 0.f, kNodes[n].z};
+    };
     bool atStop = false;
     Vector3 faceTarget{};
     bool hasFaceTarget = false;

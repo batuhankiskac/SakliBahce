@@ -267,6 +267,16 @@ them; `ui::Settings::game` is the one the next match plays (the title's "Oyna" o
     drag up onto the felt plays it (`mouseCards`). Sounds: `Sfx::CardShuffle`, `CardSlide`, `CardPlace`,
     `CardSnap`, `CardGather` (synthesised in Audio.cpp). `tools/cards_snapshot` (`make cardsnapshot`) pictures the
     hands close up.
+  * Tavla has its own table (2026-10; `w3d::TAVLA_TABLE`, `tavlaFrame()`): a small two-seat table behind our seat,
+    by the wall bench, turned 90° (the player looks toward the street door). Its frame keeps our table's
+    proportions (same top height, same chair-to-edge distance), so every seated pose fits. `TableGame::location()` 1
+    makes App call `setLocation`: `Room::setTavlaFocus` (its pendant becomes the key light, ours a point light),
+    `Characters::setTavlaTable` (the chosen regular, `Settings::tavlaRakip` 1..3, Kel Mahmut by default, sits
+    across; both glasses go along; Kel Mahmut's ash goes into its ashtray; the bystanders of a long match stand behind
+    him; the çaycı serves the two there from nodes 9 / 16), `PlayerCamera::setTavlaSeat` (eye and base yaw from the
+    frame, a steeper resting pitch, R left to the dice) and a 0.7 s fade in from black. `Tavla3D::setFrame` draws and
+    picks the board in that frame. The other two regulars stay at the okey table and talk; the opponent's lines follow
+    who it is (TavlaTable's `kOpp*` tables). Okey and card games, and the title, bring everything back.
   * Tavla uses `r3d::Tavla3D`: the box, 24 inlaid points, 30 checkers that hop between stacks (the engine's position
     is reconciled checker by checker), two dice thrown to their numbers, highlights (lit checkers, green targets)
     and ray picking of points / bar / bear-off. Optional katlama zarı (`tavla::Rules::doubling`: offer / take / drop, Crawford, a

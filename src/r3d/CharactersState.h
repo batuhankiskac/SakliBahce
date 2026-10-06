@@ -279,6 +279,11 @@ struct Cast {
     float spectateT = 0.f;
     Mesh scarf[3]{};
     Mat scarfMat{};
+    // --- the tavla table (CharactersTavla.cpp): who plays there (0 nobody), where the bystanders look
+    int tavlaSeat = 0;
+    Vector3 tableFocus{0.f, w3d::TABLE_Y, 0.f};
+    std::array<Vector3, 4> glassHome{};  // the saucers' places at our table
+    Vector3 ashtrayFor(const Opponent& o) const;
     float humanWait = 0.f;               // seconds the human has been on turn
     float lastHumanEventT = -100.f;
     int submitCount = 0;                 // debug: submissions last frame

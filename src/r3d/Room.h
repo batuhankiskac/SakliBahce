@@ -33,6 +33,9 @@ public:
     // player (e.g. "Hacı Rıza ....... 143"). Redraw only when the content changes.
     void setScoreboard(const std::string& title, const std::vector<std::string>& lines);
     void setTitleMode(bool on);             // menu backdrop (may dim/stage lighting differently)
+    // Tavla is played at its own table (w3d::TAVLA_TABLE): its pendant becomes the key light (shadows on the board),
+    // our okey table's lamp a plain pendant.
+    void setTavlaFocus(bool on);
     bool consumeTvGoal();                   // true once after a goal on the TV (banter hook)
     // Rain outside tonight: 0 on a dry night, else 0..1 and drifting slowly (App feeds it to Audio::setRain).
     float rainAmount() const;

@@ -249,6 +249,7 @@ void Cast::setupOpponents() {
         // camera, inside their GLASS_KEEPOUT circle, so they don't loom in the frame corners / under the HUD buttons.
         constexpr Vector3 kNudge[4] = {{-0.030f, 0.f, -0.034f}, {0.f, 0.f, -0.046f}, {0.f, 0.f, 0.f}, {0.f, 0.f, 0.f}};
         g.saucer = Vector3Add(w3d::GLASS_POS[s], kNudge[s]);
+        glassHome[(size_t)s] = g.saucer;
         g.rest = Vector3Add(g.saucer, {0, SAUCER_TOP, 0});
         g.yaw = rng.f(0.f, 6.28f);
         g.level = rng.f(0.55f, 0.9f);
@@ -616,7 +617,7 @@ void Cast::startSmoke(Opponent& o, bool ashTap) {
     std::vector<Key> k;
     k.push_back(Key{});
     if (ashTap) {
-        Vector3 ash = xfPoint(o.rootInv, Vector3Add(w3d::ASHTRAY_POS, {0, 0.07f, 0}));
+        Vector3 ash = xfPoint(o.rootInv, Vector3Add(ashtrayFor(o), {0, 0.07f, 0}));
         // cigarette (hand +Y) pointing down-forward over the ashtray: back of the hand faces down-forward
         Vector3 p = vnorm({-0.2f, 0.75f, 0.6f});
         Vector3 f = vnorm({-0.3f, 0.6f, -0.75f});
@@ -630,7 +631,7 @@ void Cast::startSmoke(Opponent& o, bool ashTap) {
         rest.t = 1.55f;
         k.push_back(rest);
         startTrack(o, a, TK_Smoke, k);
-        o.gazeGoal = w3d::ASHTRAY_POS;
+        o.gazeGoal = ashtrayFor(o);
         o.gazeHold = 1.2f;
         return;
     }

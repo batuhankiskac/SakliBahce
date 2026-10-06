@@ -60,6 +60,7 @@ struct Settings {
     int batakTarget = 51;      // batak: the match is won at this score (31, 51, 71)
     int tavlaPoints = 5;       // tavla: the match goes to this many points (3, 5, 7)
     bool tavlaDoubling = false; // tavla: katlama zarı (doubling cube) in play
+    int tavlaRakip = 2;        // tavla: who sits across at the tavla table (seat 1 Hacı Rıza, 2 Kel Mahmut, 3 Emekli Nuri)
     int pistiTarget = 101;     // pişti: the match is won at this score (101, 151)
     int pistiMode = 0;         // pişti: 0 four players, 1 eşli, 2 two players (you and Kel Mahmut)
     // ---- atmosphere / accessibility
