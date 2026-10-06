@@ -308,7 +308,9 @@ struct Painter {
 
 Font loadCardFont() {
     const char* files[] = {"/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
-                           "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf"};
+                           "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf",
+                           "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+                           "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"};
     const char* glyphs = "0123456789VKPASB";
     int cps[16];
     for (int i = 0; i < 16; ++i) cps[i] = glyphs[i];

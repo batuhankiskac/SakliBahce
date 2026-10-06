@@ -12,8 +12,9 @@
 //    modal at the okey istaka. (--out: kb_<game>_*.png.)
 //
 //   build: make tablescheck (see the Makefile)
-//   run:   tables_check [--hands N] [--out DIR] [--keys | --mouse] [--cb] [--big]
+//   run:   tables_check [--hands N] [--out DIR] [--keys | --mouse] [--cb] [--big] [--no-3d]
 //          --cb: colour-blind mode (tiles with shapes, four-colour cards); --big: HUD text x1.25 (Büyük yazı)
+//          --no-3d: skip the 3D pass (picking does not need it; a software GL renders a frame in ~0.1 s)
 #include "app/TableGame.h"
 #include "core/Bot.h"
 #include "core/Game.h"
@@ -91,7 +92,19 @@ struct Ctx {
     Camera3D cam{};
     std::string out;
     int hands = 2;
+    bool no3d = false; // --no-3d: the 3D pass is skipped (a software GL in the cloud); the HUD is still drawn
 };
+
+void render3D(const Ctx& c) {
+    if (c.no3d) {
+        c.R->discardFrame(c.cam);
+        BeginTextureMode(*c.rt);
+        ClearBackground(Color{20, 14, 10, 255});
+        EndTextureMode();
+    } else {
+        c.R->render(c.cam, c.rt, Color{20, 14, 10, 255});
+    }
+}
 
 std::unique_ptr<app::TableGame> startGame(const Ctx& c, int k) {
     std::unique_ptr<app::TableGame> g = app::makeTableGame(kKinds[k]);
@@ -110,7 +123,7 @@ void frame(const Ctx& c, app::TableGame& g, Vector2 mouse) {
     g.update(1.f / 30.f, c.cam, mouse, true, false);
     BeginDrawing();
     g.submit(*c.R);
-    c.R->render(c.cam, c.rt, Color{20, 14, 10, 255});
+    render3D(c);
     BeginTextureMode(*c.rt);
     g.drawHUD(*c.R, mouse, false);
     EndTextureMode();
@@ -298,7 +311,7 @@ int runOkeyKeys(const Ctx& c, bool classic) {
         table.update(1.f / 30.f, c.cam, mouse, true);
         BeginDrawing();
         table.submit(*c.R);
-        c.R->render(c.cam, c.rt, Color{20, 14, 10, 255});
+        render3D(c);
         BeginTextureMode(*c.rt);
         table.drawHUD(*c.R);
         EndTextureMode();
@@ -395,6 +408,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--mouse")) keys = false;
         else if (!std::strcmp(argv[i], "--cb")) cb = true;
         else if (!std::strcmp(argv[i], "--big")) big = true;
+        else if (!std::strcmp(argv[i], "--no-3d")) c.no3d = true;
     }
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     SetTraceLogLevel(LOG_ERROR);

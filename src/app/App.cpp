@@ -216,9 +216,18 @@ std::string watchText(const okey::GameEvent& e) {
 
 // ---------------------------------------------------------------- settings file (interactive runs only)
 std::string supportDir() {
+#if defined(__APPLE__)
     const char* home = std::getenv("HOME");
     if (!home || !*home) return {};
     return std::string(home) + "/Library/Application Support/";
+#else
+    // XDG: $XDG_DATA_HOME, else ~/.local/share
+    const char* xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg && *xdg == '/') return std::string(xdg) + "/";
+    const char* home = std::getenv("HOME");
+    if (!home || !*home) return {};
+    return std::string(home) + "/.local/share/";
+#endif
 }
 std::string statsPath() {
     const std::string dir = supportDir();
@@ -438,6 +447,7 @@ private:
     bool unattended() const { return snapshot_ || opt_.autoplay || opt_.aiChaos; }
     void recordStats(float cpuMs);
     bool snapshotDone();
+    bool snapshotRenderNow() const;
     bool exportSnapshot();
     void saveWindowShot();
     // flow
@@ -864,8 +874,15 @@ int App::run() {
         BeginDrawing();
         const bool seatView = !snapshot_ || opt_.view == "seat";
         if (snapshot_) {
-            submitWorld();
-            renderer_.render(renderCam_, &rt_, CLEAR_COLOR);
+            if (snapshotRenderNow()) {
+                submitWorld();
+                renderer_.render(renderCam_, &rt_, CLEAR_COLOR);
+            } else {
+                renderer_.discardFrame(renderCam_);
+                BeginTextureMode(rt_);
+                ClearBackground(CLEAR_COLOR);
+                EndTextureMode();
+            }
             BeginTextureMode(rt_);
             BeginMode2D(ui::viewportCamera(vp));
             drawOverlays(seatView);
@@ -1075,6 +1092,16 @@ void App::drawOverlays(bool hud) {
 }
 
 // ---------------------------------------------------------------- snapshots
+// --render-last N: a slow (software) GL only draws the frames that lead up to the picture.
+bool App::snapshotRenderNow() const {
+    if (opt_.renderLast < 0) return true;
+    switch (snapState_) {
+    case SnapState::Summary:
+    case SnapState::MatchOver: return snapReachedAt_ >= 0 && frame_ - snapReachedAt_ + opt_.renderLast >= opt_.frames;
+    default: return frame_ + opt_.renderLast >= opt_.frames;
+    }
+}
+
 bool App::snapshotDone() {
     switch (snapState_) {
     case SnapState::Summary:
@@ -2470,6 +2497,7 @@ void printUsage(const char* argv0) {
                 "                    (--state title | game | rules | settings ile başlangıç ekranı seçilebilir)\n"
                 "  --snapshot DOSYA  gizli pencerede 1600x900 bir kare çizip PNG olarak kaydet ve çık\n"
                 "      --frames N    görüntüden önce simüle edilecek kare sayısı\n"
+                "      --render-last N  3B dünyayı yalnızca son N karede çiz (yazılımsal GL'de hızlı)\n"
                 "      --state S     title | game | summary | matchover | rules | settings | games\n"
                 "      --view V      seat | left | right | back | corner\n"
                 "  --help            bu yardım\n",
@@ -2587,6 +2615,9 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
         } else if (a == "--snapshot") {
             if (!(s = need(i, "--snapshot"))) return false;
             o.snapshot = s;
+        } else if (a == "--render-last") {
+            if (!(s = need(i, "--render-last")) || !toInt(s, v, "--render-last")) return false;
+            o.renderLast = (int)std::max(1L, v);
         } else if (a == "--frames") {
             if (!(s = need(i, "--frames")) || !toInt(s, v, "--frames")) return false;
             o.frames = (int)std::clamp(v, 1L, 1000000L);

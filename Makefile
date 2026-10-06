@@ -1,21 +1,30 @@
-# SaklıBahçe — build (macOS, Apple clang, raylib 6.0 from Homebrew)
+# SaklıBahçe — build (macOS: Apple clang + Homebrew raylib 6.0; Linux: clang/gcc + raylib 6.0 from source)
 #   make            -> ./saklibahce (the game)
 #   make run        -> build and start the game
 #   make test       -> engine + AI tests and short headless bot-vs-bot simulations
 #   make asan       -> AddressSanitizer + UBSan build in build/asan/ (game + tests), then runs the tests
 #   make clean
 # Only src/ is compiled into the game; tools/ (developer snapshot harnesses) is not.
+UNAME_S  := $(shell uname -s)
 ifeq ($(origin CXX),default)
 CXX      := clang++
 endif
+CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
+LDFLAGS  ?=
+ifeq ($(UNAME_S),Darwin)
 # raylib's prefix: Homebrew on Apple Silicon (/opt/homebrew) or Intel (/usr/local); override with RAYLIB=...
 RAYLIB   ?= $(or $(patsubst %/lib/libraylib.a,%,$(firstword $(wildcard /opt/homebrew/lib/libraylib.a \
                                                                   /usr/local/lib/libraylib.a))),/opt/homebrew)
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
-LDFLAGS  ?=
-CPPFLAGS := -Isrc -isystem $(RAYLIB)/include -MMD -MP
-LDLIBS   := $(RAYLIB)/lib/libraylib.a -framework Cocoa -framework IOKit -framework OpenGL \
+SYS_LIBS := -framework Cocoa -framework IOKit -framework OpenGL \
             -framework CoreVideo -framework CoreAudio -framework AudioToolbox -framework CoreFoundation
+else
+# Linux: raylib 6 built from source (make install puts it in /usr/local) or a distro package; X11 + OpenGL
+RAYLIB   ?= $(or $(patsubst %/lib/libraylib.a,%,$(firstword $(wildcard /usr/local/lib/libraylib.a \
+                                                                  /usr/lib/libraylib.a))),/usr/local)
+SYS_LIBS := -lGL -lm -lpthread -ldl -lrt -lX11
+endif
+CPPFLAGS := -Isrc -isystem $(RAYLIB)/include -MMD -MP
+LDLIBS   := $(RAYLIB)/lib/libraylib.a $(SYS_LIBS)
 
 BUILD    ?= build/make
 GAME     ?= saklibahce
@@ -74,8 +83,16 @@ test: $(TESTS)
 TABLES_CHECK_OBJ := $(CORE_OBJ) $(UI_OBJ) $(filter-out $(BUILD)/src/app/App.o $(BUILD)/src/app/main.o,$(APP_OBJ))
 $(BUILD)/tables_check: $(BUILD)/tools/tables_check.o $(TABLES_CHECK_OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+# Linux without a display (the cloud, CI): a virtual one through xvfb-run. TABLESCHECK_ARGS=--no-3d skips the 3D
+# pass (a software GL draws a frame in ~0.1 s: the full run takes ~45 min, without 3D a few minutes).
+TABLESCHECK_ARGS ?=
+ifneq ($(UNAME_S),Darwin)
+ifeq ($(DISPLAY),)
+HEADLESS := $(if $(shell command -v xvfb-run),xvfb-run -a -s "-screen 0 1920x1080x24")
+endif
+endif
 tablescheck: $(BUILD)/tables_check
-	$(BUILD)/tables_check --hands 2
+	$(HEADLESS) $(BUILD)/tables_check --hands 2 $(TABLESCHECK_ARGS)
 
 run: $(GAME)
 	./$(GAME)

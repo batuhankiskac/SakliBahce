@@ -126,6 +126,9 @@ public:
     // targets): to render into a RenderTexture pass it as `target` (it is cleared to `clearColor` first).
     // Without a target it draws into the window's framebuffer (clear it yourself with ClearBackground).
     void render(const Camera3D& cam, RenderTexture2D* target = nullptr, Color clearColor = BLACK);
+    // Drops this frame's submissions without drawing (headless snapshots skip the frames nobody will see); the
+    // camera is still remembered for projectToVirtual / rayFromVirtual.
+    void discardFrame(const Camera3D& cam);
     const Camera3D& lastCamera() const;
 
     // Project a world point to the current UI virtual canvas (ui::currentViewport() + renderWidth/Height).

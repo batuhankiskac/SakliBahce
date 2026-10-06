@@ -8,7 +8,7 @@ yolcular geçer. Kahvehanenin kedisi sobanın dibinde ya da boş bir sandalyede 
 gerinir, yalanır, başka bir köşeye geçer, bazen de dönüp sana bakar.
 
 **SaklıBahçe**, kahvehanenin müdavimlerine karşı oynadığın birinci şahıs 3B bir masaüstü oyunudur
-(C++17 + raylib 6.0, macOS). Masada yedi oyun var: **101**, **Eşli 101**, **Okey**, **Tavla**, **Pişti**,
+(C++17 + raylib 6.0; macOS, Linux'ta da derlenir). Masada yedi oyun var: **101**, **Eşli 101**, **Okey**, **Tavla**, **Pişti**,
 **Batak** ve **King**. Görüntülerin tamamı kodla üretilir: hiçbir resim ya da model dosyası yoktur; yazı
 tipleri macOS'un kendi yazı tiplerinden alınır. Canın oynamak istemediğinde **Yapay Zeka** modunu açıp arkana
 yaslanabilirsin: taşlarını senin yerine yapay zeka oynar, sen çayını içip izlersin.
@@ -35,7 +35,7 @@ parlak, ötekiler soluk), tavlada önce pulunun durduğu haneye sonra yeşil yan
 
 ## Kurulum ve çalıştırma
 
-Gerekenler: macOS, Xcode komut satırı araçları (Apple clang) ve Homebrew.
+Gerekenler (macOS): Xcode komut satırı araçları (Apple clang) ve Homebrew. Linux için aşağıya bakın.
 
 ```sh
 brew install raylib      # raylib 6.0 (/opt/homebrew)
@@ -49,11 +49,38 @@ Diğer hedefler:
 |---|---|
 | `make run` | derler ve oyunu başlatır |
 | `make test` | yedi oyunun kural motoru ve yapay zekâ testleri, ardından kısa bot-bot simülasyonları |
-| `make tablescheck` | tavla ve kâğıt oyunlarını gizli bir pencerede gerçek fare tıklamalarıyla oynatır |
+| `make tablescheck` | tavla ve kâğıt oyunlarını gizli bir pencerede gerçek fare tıklamalarıyla oynatır (`TABLESCHECK_ARGS=--no-3d`: 3B çizimsiz) |
 | `make asan` | AddressSanitizer + UBSan ile `build/asan/` altında oyunu ve testleri derler, testleri çalıştırır |
 | `make clean` | derleme çıktılarını siler |
 
 raylib başka bir yerdeyse: `make RAYLIB=/yol/raylib`.
+
+### Linux
+
+Makefile `uname` ile Linux'u tanır ve `-lGL -lm -lpthread -ldl -lrt -lX11` ile bağlar. raylib 6.0 kaynaktan kurulur:
+
+```sh
+sudo apt-get install clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev \
+                     libasound2-dev fonts-dejavu-core fonts-liberation xvfb
+git clone --depth 1 --branch 6.0 https://github.com/raysan5/raylib.git
+make -C raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC
+sudo make -C raylib/src install          # /usr/local/lib/libraylib.a ve başlıklar
+make && make test
+```
+
+macOS yazı tipleri yoksa DejaVu / Liberation kullanılır; ayarlar ve kayıtlar `~/.local/share/SakliBahce/` altındadır
+(`$XDG_DATA_HOME` varsa orası). Ekransız bir makinede (bulut, CI) görüntüler `xvfb-run` ile alınır; ses aygıtı yoksa
+oyun sessiz sürer. Yazılımsal OpenGL yavaş olduğu için `--render-last N` 3B dünyayı yalnızca son N karede çizer,
+`make tablescheck TABLESCHECK_ARGS=--no-3d` de 3B çizimi atlar (ekran yoksa `make tablescheck` kendiliğinden
+`xvfb-run` kullanır):
+
+```sh
+xvfb-run -a ./saklibahce --seed 5 --game pisti --autoplay --speed 2 --frames 260 --render-last 30 \
+    --snapshot pisti.png --state game --view seat --no-audio
+```
+
+**Sürekli tümleştirme:** `.github/workflows/ci.yml` her push'ta Linux'ta `make test`, 3B çizimsiz `tablescheck`,
+iki görüntü ve `make asan`, macOS'ta da `make test` çalıştırır (raylib 6.0 kaynaktan derlenip önbelleğe alınır).
 
 ## Kontroller
 
@@ -211,6 +238,7 @@ ayarlarına dokunmaz.
 | `--screenshot DOSYA` | `--max-frames` ile: son karede pencerenin görüntüsünü PNG olarak kaydet (`--state title`, `game`, `rules` ya da `settings` ile başlangıç ekranı seçilir) |
 | `--snapshot DOSYA` | gizli pencerede 1600×900 tek bir kare çizip PNG olarak kaydet ve çık |
 | `--frames N` | (`--snapshot` ile) görüntüden önce simüle edilecek kare sayısı |
+| `--render-last N` | (`--snapshot` ile) 3B dünyayı yalnızca son N karede çiz (yazılımsal GL'de, bulutta hızlı) |
 | `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules`, `settings`, `games` ya da `stats` |
 | `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` |
 | `--help` | yardım |

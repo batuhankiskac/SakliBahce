@@ -200,6 +200,13 @@ App calls `ui::uiBeginFrame()` / `ui::uiEndFrame()` around each frame (cursor ha
 ## 6. Build & test conventions
 
 * Toolchain: Apple clang, C++17, raylib 6.0 at `/opt/homebrew` (static lib `/opt/homebrew/lib/libraylib.a`).
+  Linux (the cloud, CI): clang or gcc, raylib 6.0 built from source into `/usr/local`; the Makefile picks
+  `-lGL -lm -lpthread -ldl -lrt -lX11` by `uname`. `r3d/Gfx.cpp` takes the GL 3.3 prototypes from `GL/glext.h`;
+  fonts fall back to DejaVu / Liberation; the save directory is `$XDG_DATA_HOME` or `~/.local/share`.
+  Headless: `xvfb-run` (Mesa llvmpipe, ~0.8 s a frame for the whole room), `--render-last N` and
+  `tables_check --no-3d` skip the 3D pass where nobody looks (`Renderer::discardFrame`). No audio device: silent.
+  CI (`.github/workflows/ci.yml`): Linux `make test`, `tablescheck --no-3d`, two snapshots, `make asan`; macOS
+  `make test`.
 * Compile flags: `-std=c++17 -O2 -Wall -Wextra -Isrc -I/opt/homebrew/include`.
 * Link (UI binaries): `/opt/homebrew/lib/libraylib.a -framework Cocoa -framework IOKit -framework OpenGL
   -framework CoreVideo -framework CoreAudio -framework AudioToolbox -framework CoreFoundation`.
