@@ -251,6 +251,22 @@ them; `ui::Settings::game` is the one the next match plays (the title's "Oyna" o
     `ui::cardgfx`'s procedural atlas, each flying to a target pose; `cardlayout` gives hands, the trick, won piles,
     the deck, Pişti's middle), dealing, the trick held on the felt before it is swept, picking and highlighting the
     player's cards, bot pacing and `Characters::reach` / `react` / `chat` for the people.
+  * Cards play like cards (2026-10): a deal is a little state machine (`CardTableBase::DealAnim`, game time,
+    everything / `speed_`): the dealer riffles (`deckSlot`: the deck splits into two halves that fall back card by
+    card) and cuts — Pişti turns the deck's bottom card up for a moment (`showCutCard`, visual only) —, the cards slide
+    one by one round the table into a little face-down pile per seat (`cardlayout::dealtPile`; `dealtExtras` such as
+    Pişti's table cards come last; the cards that stay in the deck lie under them, `deckRemaining`), then each seat
+    picks its pile up (`pickAt` / `grabAt`). The regulars hold their hand fanned in the left hand
+    (`Characters::holdCards` / `cardFan`, `cardlayout::fanCard`; `Cards3D::follow` keeps the cards on the moving
+    hand, its small glides don't count as `animating()`); a bot's card is pulled out of the fan by the right hand and
+    laid or tossed (`Characters::playCard`, the card leaves at `BOT_GIVE_LEAD`); a trick is pushed together
+    (`cardlayout::gathered`) by the taker's hand (`Characters::gatherCards`) and then goes on to the won pile;
+    Pişti's capture is swept the same way (`sweepTo`), a played card lands with its own turn and spread
+    (`cardlayout::middle(i, up, card)`), a pişti makes the crowd react. The player's fan is held low in front of the
+    eye (`cardlayout::hand(0, …)`); hover raises and tilts a card (`Cards3D::setRaise` / `setTilt`), a click or a
+    drag up onto the felt plays it (`mouseCards`). Sounds: `Sfx::CardShuffle`, `CardSlide`, `CardPlace`,
+    `CardSnap`, `CardGather` (synthesised in Audio.cpp). `tools/cards_snapshot` (`make cardsnapshot`) pictures the
+    hands close up.
   * Tavla uses `r3d::Tavla3D`: the box, 24 inlaid points, 30 checkers that hop between stacks (the engine's position
     is reconciled checker by checker), two dice thrown to their numbers, highlights (lit checkers, green targets)
     and ray picking of points / bar / bear-off. Optional katlama zarı (`tavla::Rules::doubling`: offer / take / drop, Crawford, a

@@ -41,11 +41,7 @@ bool insideRack(Vector3 l, float margin) {
            o > -kRackPlankT - margin && o < kRackFrontO + margin;
 }
 
-// Reaching across the table: the body leans in (up to kMaxExtraLean past its posture) and the shoulder rolls
-// forward (up to kProtract) before the arm is at full stretch.
-constexpr float kMaxExtraLean = 0.62f;
-constexpr float kProtract = 0.04f;
-constexpr float kReachFrac = 0.97f;  // of the arm's length: the elbow stays a little bent
+} // namespace
 
 // Shoulder joint (character-local, upright seat frame) of side sd for a forward lean.
 Vector3 shoulderAt(const PersonLook& L, float sd, float lean) {
@@ -103,8 +99,7 @@ void gripDirs(Vector3 a, Vector3 f, bool left, Vector3& fingers, Vector3& palm) 
     palm = left ? Vector3CrossProduct(f, a) : Vector3CrossProduct(a, f);
 }
 
-Key mk(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float lift = 0.f, int ease = 0,
-       int ev = 0) {
+Key mk(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float lift, int ease, int ev) {
     Key k;
     k.t = t;
     k.pos = pos;
@@ -123,6 +118,8 @@ Key touching(Key k) {
 }
 
 Vector3 mirrorL(Vector3 v, bool left) { return left ? Vector3{-v.x, v.y, v.z} : v; }
+
+namespace {
 
 Matrix blendMatrix(const Matrix& A, const Matrix& B, float t) {
     Vector3 x = Vector3Lerp(mX(A), mX(B), t), y = Vector3Lerp(mY(A), mY(B), t);
@@ -264,7 +261,7 @@ void Cast::setupOpponents() {
 
 // A hand lying on the felt with its palm centre over (x, z): lifted so the lowest point of the hand in this
 // pose (a curled fingertip, a knuckle, the heel of the palm) just touches the cloth.
-static Key onFelt(float x, float z, Vector3 f, Vector3 p, HandPose pose, float hs, bool left) {
+Key onFelt(float x, float z, Vector3 f, Vector3 p, HandPose pose, float hs, bool left) {
     f = vnorm(f);
     p = vnorm(Vector3Subtract(p, Vector3Scale(f, Vector3DotProduct(p, f))));
     Vector3 X, Y, Z;
@@ -339,6 +336,8 @@ void Cast::restPose(Opponent& o, int a, int variant, Key& k) {
 void Cast::startTrack(Seated& s, int a, int kind, std::vector<Key> keys) {
     Arm& A = s.arm[a];
     if (keys.empty()) return;
+    // the left hand holding the cards keeps them (no sips, gestures, tespih flips or idles from it)
+    if (a == 1 && kind != TK_CardHold && s.who >= 1 && s.who <= 3 && opp[s.who].cards) return;
     // a sip cut short: the glass goes back onto its saucer instead of staying glued to the hand
     if (s.who >= 1 && s.who <= 3) {
         TeaGlass& g = glass[s.who];
@@ -557,7 +556,7 @@ void Cast::slamMelds(Opponent& o, int zoneSeat, bool proud) {
 
 void Cast::startSip(Opponent& o) {
     TeaGlass& g = glass[o.seat];
-    if (g.holder >= 0) return;
+    if (g.holder >= 0 || o.cards) return;
     const int a = 1;  // glasses stand at everyone's left
     const bool left = true;
     const float hs = o.L.handScale;
@@ -1954,7 +1953,7 @@ void Cast::updateOpponent(Opponent& o, float dt) {
     for (int a = 0; a < 2; ++a) {
         Arm& A = o.arm[a];
         if (!A.track.on) continue;
-        A.track.t += A.track.kind == TK_Reach ? dt * animSpeed : dt;
+        A.track.t += (A.track.kind == TK_Reach || A.track.kind == TK_CardHold) ? dt * animSpeed : dt;
         while (A.track.nextKey < (int)A.track.keys.size() && A.track.keys[A.track.nextKey].t <= A.track.t) {
             int ev = A.track.keys[A.track.nextKey].event;
             if (ev) onArmEvent(o, a, ev);
@@ -1968,6 +1967,7 @@ void Cast::updateOpponent(Opponent& o, float dt) {
         }
     }
 
+    if (o.cards) updateCardHold(o);
     // gaze follows its goal (quick but not instant); the head springs follow the gaze
     o.gaze = approachExp(o.gaze, o.gazeGoal, 9.f, dt);
     poseSeated(o, dt, o.headStiff);

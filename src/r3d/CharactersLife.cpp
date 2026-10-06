@@ -21,22 +21,6 @@ namespace {
 
 constexpr float BY = w3d::BG_TABLE_Y;
 
-void basis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z) {
-    Z = vnorm(Vector3Negate(fingers));
-    Y = Vector3Negate(palm);
-    Y = Vector3Subtract(Y, Vector3Scale(Z, Vector3DotProduct(Y, Z)));
-    if (Vector3Length(Y) < 1e-4f) Y = std::fabs(Z.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-    Y = vnorm(Y);
-    X = Vector3CrossProduct(Y, Z);
-}
-// Wrist position that puts the hand-space point `off` (right hand; mirrored for the left) at `point`.
-Vector3 wristFor(Vector3 point, Vector3 fingers, Vector3 palm, Vector3 off, float scale, bool left) {
-    Vector3 X, Y, Z;
-    basis(fingers, palm, X, Y, Z);
-    if (left) off.x = -off.x;
-    Vector3 w = Vector3Add(Vector3Add(Vector3Scale(X, off.x), Vector3Scale(Y, off.y)), Vector3Scale(Z, off.z));
-    return Vector3Subtract(point, Vector3Scale(w, scale));
-}
 Key key(float t, Vector3 pos, Vector3 f, Vector3 p, HandPose pose, float lift = 0.f, int ease = 0) {
     Key k;
     k.t = t;

@@ -41,7 +41,7 @@ TESTS    := $(TEST_NAMES:%=$(BUILD)/%)
 
 ASAN_FLAGS := -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra
 
-.PHONY: all test tests run clean asan tablescheck
+.PHONY: all test tests run clean asan tablescheck cardsnapshot
 all: $(GAME)
 
 $(GAME): $(CORE_OBJ) $(UI_OBJ) $(APP_OBJ)
@@ -91,6 +91,13 @@ ifeq ($(DISPLAY),)
 HEADLESS := $(if $(shell command -v xvfb-run),xvfb-run -a -s "-screen 0 1920x1080x24")
 endif
 endif
+# The regulars' card-game hands close up (tools/cards_snapshot.cpp): pictures into build/cards/
+$(BUILD)/cards_snapshot: $(BUILD)/tools/cards_snapshot.o $(TABLES_CHECK_OBJ)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+cardsnapshot: $(BUILD)/cards_snapshot
+	@mkdir -p build/cards
+	$(HEADLESS) $(BUILD)/cards_snapshot build/cards
+
 tablescheck: $(BUILD)/tables_check
 	$(HEADLESS) $(BUILD)/tables_check --hands 2 $(TABLESCHECK_ARGS)
 

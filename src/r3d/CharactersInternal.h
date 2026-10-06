@@ -385,6 +385,7 @@ enum TrackKind {
     TK_Chin,
     TK_Tespih,
     TK_Serve,
+    TK_CardHold,  // the left hand takes up / holds / puts down the card fan (CharactersCards.cpp)
 };
 
 struct Arm {

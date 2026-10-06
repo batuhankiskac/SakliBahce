@@ -51,6 +51,12 @@ protected:
     virtual void layoutExtra() {}                          // cards outside hands / trick / piles (Pişti's middle)
     virtual bool faceUpHand(int seat) const { return seat == 0; } // eşli batak's open dummy
     virtual bool extraBusy() const { return false; }      // the game's own animation the bots must wait for
+    // Dealing: cards outside the hands that come off the deck too (Pişti's table cards), dealt after the hands, and
+    // how many cards stay in the deck (they lie under the ones being dealt).
+    virtual std::vector<std::pair<int, r3d::CardPose>> dealtExtras() const { return {}; }
+    virtual int deckRemaining() const { return 0; }
+    virtual bool showCutCard() const { return false; }    // Pişti: the deck's bottom card is shown at the cut
+    virtual int cutCard() const { return -1; }
     // İpucu: what a Kurt bot of the game would do in the player's seat now (a card to play, or a panel choice), with
     // the Turkish line to show ("İpucu: Kupa Kızı oyna"). False: no hint here.
     struct Hint {
@@ -72,13 +78,22 @@ protected:
 
     // ---- helpers for the games ----
     void resetTable();                                     // all cards hidden, piles and the trick cleared
-    void dealFrom(int dealer);                             // every card of every hand flies out from the deck
-    // Cards that just arrived in hands (a re-deal mid-hand) fly out from `from` instead of appearing there.
-    void dealNew(const r3d::CardPose& from);
+    // A new hand: the dealer shuffles (a riffle and a cut), deals the cards one by one round the table, sliding
+    // across the felt into a little pile in front of each seat (dealtExtras last), then everyone picks theirs up.
+    void dealFrom(int dealer);
+    // Cards that just arrived in hands (a re-deal mid-hand): dealt the same way from the deck, without the shuffle.
+    void dealNew(int dealer);
+    // The deck's slot `i` (from the bottom) by the dealer: riffling while the shuffle runs.
+    r3d::CardPose deckSlot(int dealer, int i) const;
+    bool dealing() const { return deal_.on; }
     void onPlayed(int seat, int card, bool bot);           // a card goes from seat's hand to the trick
+    // A bot's card leaving its fan for `p` (pulled out by the hand, laid or tossed), with its sound on landing.
+    void playFromHand(int seat, int card, const r3d::CardPose& p, bool toss);
     void onTrickWon(int winner, const std::vector<int>& cards); // the trick is swept to the winner after a moment
     void sweepNow();                                       // (hand end) the shown trick goes at once
     void collectTo(int seat, const std::vector<int>& cards, float delay); // cards fly to seat's won pile
+    // Pişti's capture: the taker's hand comes down on the middle and pushes the cards to its pile.
+    void sweepTo(int seat, const std::vector<int>& cards, Vector3 from);
     bool tableBusy() const;                                // deal / trick hold / flights: bots wait
     void say(int seat, const std::string& line, bool important = false);
     void sound(ui::Sfx s);
@@ -119,9 +134,10 @@ protected:
     std::vector<ShownCard> shown_;
     int sweepTo_ = -1;
     float sweepAt_ = -1.f;
+    float collectAt_ = -1.f;                               // the gathered trick goes on to the pile then
     std::array<std::vector<int>, 4> won_{};               // cards in each won pile (bottom first)
     float dealUntil_ = 0.f;
-    std::array<float, r3d::CARD_COUNT> dealDelay_{};      // a dealt card's start delay (used once)
+    std::array<float, r3d::CARD_COUNT> dealDelay_{};      // a card's start delay (used once)
     std::array<bool, r3d::CARD_COUNT> extraPlaced_{};     // layoutExtra() placed it this frame
     int hover_ = -1;
     bool menuReq_ = false, aiReq_ = false;
@@ -137,9 +153,41 @@ protected:
     std::string phase_;                                    // debugPhase()
 
 private:
+    // The deal in progress (times are game time, now_).
+    struct DealAnim {
+        bool on = false;
+        bool shuffle = false;
+        int dealer = 0;
+        int total = 0;                                     // cards dealt
+        int base = 0;                                      // deck slots under them (cards that stay in the deck)
+        float start = 0.f, shuffleEnd = 0.f, dealStart = 0.f, interval = 0.05f;
+        std::array<float, r3d::CARD_COUNT> leave{};        // when the card leaves the deck (< 0: not dealt now)
+        std::array<int, r3d::CARD_COUNT> order{};          // 0 = dealt first
+        std::array<int, r3d::CARD_COUNT> pile{};           // index in its seat's dealt pile
+        std::array<int, r3d::CARD_COUNT> seat{};           // -1: an extra (dealtExtras)
+        std::array<r3d::CardPose, r3d::CARD_COUNT> extra{};
+        std::array<float, 4> pickAt{};                     // when the seat picks its pile up
+        std::array<float, 4> grabAt{};                     // ... and the cards leave the felt (the fingers are there)
+        std::array<bool, 4> picked{};
+        bool handsStarted = false, shuffled = false;
+        int slid = 0;                                      // cards whose slide was heard
+        int cut = -1;                                      // Pişti: the card shown at the cut
+        float cutFrom = 0.f, cutTo = 0.f;
+        float end = 0.f;
+    };
+    void startDeal(int dealer, bool shuffle);
+    void updateDeal();
+    bool dealPose(int card, r3d::CardPose& p) const;       // where a card of the running deal is now (false: in hand)
+    void updateHolding();
     void layoutAll();
     std::vector<int> playableInOrder() const;             // playable cards left to right as the hand shows them
     void keyboardCards(bool hudKeys);
+    void mouseCards(Vector2 mouse, bool canClick);
+    DealAnim deal_;
+    std::array<bool, 4> holding_{};                        // the seat holds its fan (Characters::holdCards)
+    int press_ = -1;                                       // the player's card under the mouse button
+    Vector2 pressAt_{};
+    bool dragging_ = false;
 };
 
 } // namespace app

@@ -30,8 +30,20 @@ kuralları kendi "Nasıl Oynanır?" sayfasındadır (Kurallar), ayarları da Aya
 
 Rakiplerin üç seviyesi (Acemi, Usta, Kurt) her oyunda vardır. Botlar yalnızca masada görülebilenleri bilir;
 Kurt kart oyunlarında görmediği kâğıtları olası dağılımlarla örnekleyip el sonuna kadar oynayarak (Monte Carlo),
-tavlada rakibin 21 zar ihtimaline bakarak karar verir. Kâğıt oyunlarında kâğıdına tıklarsın (oynayabileceklerin
-parlak, ötekiler soluk), tavlada önce pulunun durduğu haneye sonra yeşil yanan haneye tıklarsın.
+tavlada rakibin 21 zar ihtimaline bakarak karar verir. Kâğıt oyunlarında kâğıtların elinde, gözünün hemen altında bir
+yelpaze gibi durur: üzerine gelince kâğıt yelpazeden yukarı kalkıp hafifçe eğilir; tıklayarak ya da yukarı, masanın
+üstüne sürükleyip bırakarak oynarsın (oynayabileceklerin parlak, ötekiler soluk). Tavlada önce pulunun durduğu
+haneye sonra yeşil yanan haneye tıklarsın.
+
+Kâğıtlar gerçekten kâğıt gibi oynanır: dağıtan desteyi karıştırır (iki yarıyı birbirine geçirir) ve keser — pişti'de
+kesilen alt kâğıt herkese gösterilir —, kâğıtları teker teker keçenin üstünde kaydırarak herkesin önüne dağıtır;
+herkes kendi yığınını alıp elinde açar. Hacı Rıza, Kel Mahmut ve Emekli Nuri kâğıtlarını sol ellerinde yelpaze
+yapıp tutar (sırtları bize dönük); sıraları gelince sağ elleriyle yelpazeden bir kâğıt çekip masaya koyar ya da
+atarlar, yelpaze kâğıt eksildikçe toplanır. Batak ve King'de eli alan dört kâğıdı eliyle toplayıp önündeki yığına
+kapalı koyar; aldığı eller üst üste binmiş küçük destelerden bir bakışta sayılır. Pişti'de ortaya atılan kâğıtlar
+hafif dönük ve dağınık düşer, yerdekileri alan eliyle kendi tarafına süpürür; pişti olunca "Pişti!" diye bağırılır,
+kahvehane de tepki verir. Karıştırma, kayma, keçeye çarpan kâğıt ve toplanan elin sesleri kodla üretilir. Hepsi
+Ayarlar'daki animasyon hızına uyar (Yapay Zeka modu ve `--speed` yavaşlamaz).
 
 ## Kurulum ve çalıştırma
 
