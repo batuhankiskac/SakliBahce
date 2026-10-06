@@ -68,11 +68,21 @@ public:
     void update(float dt, bool allowLook);
     void setTitleMode(bool on);
     void glanceAt(Vector3 target, float seconds); // gentle involuntary glance (e.g. at a speaker); optional use
+    // Where the player sits: the default eye, the direction of "straight ahead" (yaw, this camera's convention: + turns
+    // toward +X) and the resting pitch. setOkeySeat(): our okey table (the default); the tavla table has its own.
+    void setSeat(Vector3 eye, float baseYawDeg, float pitchDeg);
+    void setOkeySeat();
+    void setTavlaSeat();
+    // R recentres the view; off where R is a game key (tavla: Zar At).
+    void setRecentreKey(bool on) { recentreKey_ = on; }
     Camera3D camera() const;
     float yawDeg() const;
     float pitchDeg() const;
 
 private:
+    Vector3 eye_{0.f, 1.21f, 0.85f};
+    float baseYaw_ = 0.f, defPitch_ = -24.5f;
+    bool recentreKey_ = true;
     float yaw_ = 0.f, pitch_ = -27.f, fov_ = 66.f;
     float targetYaw_ = 0.f, targetPitch_ = -27.f, targetFov_ = 66.f;
     float time_ = 0.f, titleT_ = 0.f;

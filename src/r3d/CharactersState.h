@@ -97,6 +97,10 @@ struct Opponent : Seated {
     // computed face-part transforms
     Matrix eyeW[2]{}, lidW[2]{}, browW[2]{}, mouthW{}, lipW{};
     int lipVariant = 2;
+    // card games (CharactersCards.cpp): the hand held fanned in the left hand
+    bool cards = false;
+    Matrix fanRel = MatrixIdentity();  // the fan's frame in the left hand's space (world: fanRel then arm[1].hand)
+    Key fanKey;                        // the holding hand at the posture's own lean (updateCardHold moves it along)
 };
 
 enum Gesture {
@@ -275,6 +279,11 @@ struct Cast {
     float spectateT = 0.f;
     Mesh scarf[3]{};
     Mat scarfMat{};
+    // --- the tavla table (CharactersTavla.cpp): who plays there (0 nobody), where the bystanders look
+    int tavlaSeat = 0;
+    Vector3 tableFocus{0.f, w3d::TABLE_Y, 0.f};
+    std::array<Vector3, 4> glassHome{};  // the saucers' places at our table
+    Vector3 ashtrayFor(const Opponent& o) const;
     float humanWait = 0.f;               // seconds the human has been on turn
     float lastHumanEventT = -100.f;
     int submitCount = 0;                 // debug: submissions last frame
@@ -305,6 +314,15 @@ struct Cast {
     void emitSteam(float dt);
     Vector3 viewerPos() const;
     Vector3 headTarget(int seat) const;  // a point to look at for a seat's head
+    // --- CharactersCards.cpp
+    Key cardHoldKey(const Opponent& o, Matrix& fanRel) const;
+    void holdCards(Opponent& o, bool on, const Vector3* pickUpAt);
+    bool cardFan(const Opponent& o, Matrix& frame) const;
+    void updateCardHold(Opponent& o);
+    void playCardFromFan(Opponent& o, Vector3 world, bool toss);
+    void gatherCards(Opponent& o, Vector3 from, Vector3 to);
+    void shuffleDeck(Opponent& o, Vector3 at, float seconds);
+    void dealFromDeck(Opponent& o, Vector3 at, const std::vector<Vector3>& to, float interval);
     // --- CharactersCrowd.cpp
     void setupCrowd();
     void updateCrowd(float dt);
@@ -331,6 +349,25 @@ struct Cast {
     void submitOpponent(Renderer& r, const Opponent& o);
     void submitSeatedBody(Renderer& r, const Seated& s, bool detailed);
 };
+
+// ---- arm helpers (CharactersAnim.cpp), shared with CharactersCards.cpp
+// Reaching across the table: the body leans in (up to kMaxExtraLean past its posture) and the shoulder rolls
+// forward (up to kProtract) before the arm is at full stretch.
+constexpr float kMaxExtraLean = 0.62f;
+constexpr float kProtract = 0.04f;
+constexpr float kReachFrac = 0.97f;  // of the arm's length: the elbow stays a little bent
+Vector3 shoulderAt(const PersonLook& L, float sd, float lean);           // shoulder joint (character-local)
+float leanNeeded(const PersonLook& L, float leanBase, float sd, Vector3 w);
+const std::array<std::array<Vector3, 5>, HAND_POSES>& handTips();
+void handBasis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z);
+// Wrist position that puts hand-space point `off` at `point`.
+Vector3 wristFor(Vector3 point, Vector3 fingers, Vector3 palm, Vector3 off, float scale, bool left);
+void gripDirs(Vector3 a, Vector3 f, bool left, Vector3& fingers, Vector3& palm);
+Key mk(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float lift = 0.f, int ease = 0, int ev = 0);
+Key touching(Key k);
+Vector3 mirrorL(Vector3 v, bool left);
+// A hand lying on the felt with its palm centre over (x, z) (character-local).
+Key onFelt(float x, float z, Vector3 f, Vector3 p, HandPose pose, float hs, bool left);
 
 // For tools/characters_snapshot.cpp only: the state of the most recently initialised Characters.
 Cast* debugLastCast();

@@ -21,22 +21,6 @@ namespace {
 
 constexpr float BY = w3d::BG_TABLE_Y;
 
-void basis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z) {
-    Z = vnorm(Vector3Negate(fingers));
-    Y = Vector3Negate(palm);
-    Y = Vector3Subtract(Y, Vector3Scale(Z, Vector3DotProduct(Y, Z)));
-    if (Vector3Length(Y) < 1e-4f) Y = std::fabs(Z.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-    Y = vnorm(Y);
-    X = Vector3CrossProduct(Y, Z);
-}
-// Wrist position that puts the hand-space point `off` (right hand; mirrored for the left) at `point`.
-Vector3 wristFor(Vector3 point, Vector3 fingers, Vector3 palm, Vector3 off, float scale, bool left) {
-    Vector3 X, Y, Z;
-    basis(fingers, palm, X, Y, Z);
-    if (left) off.x = -off.x;
-    Vector3 w = Vector3Add(Vector3Add(Vector3Scale(X, off.x), Vector3Scale(Y, off.y)), Vector3Scale(Z, off.z));
-    return Vector3Subtract(point, Vector3Scale(w, scale));
-}
 Key key(float t, Vector3 pos, Vector3 f, Vector3 p, HandPose pose, float lift = 0.f, int ease = 0) {
     Key k;
     k.t = t;
@@ -62,6 +46,10 @@ const Vector3 kWayIn[] = {{-4.75f, 0.f, 2.8f}, {-3.9f, 0.f, 2.75f}, {-3.88f, 0.f
                           {-1.65f, 0.f, -0.02f}, {-1.3f, 0.f, -0.92f}};
 const Vector3 kSpot[2] = {{-0.58f, 0.f, -1.56f}, {0.62f, 0.f, -1.62f}};
 const Vector3 kBehind{-0.55f, 0.f, -2.08f};  // the second one walks round behind the first
+// At the tavla table (w3d::TAVLA_TABLE): south of the card players, then up behind the opponent's chair.
+const Vector3 kTavlaWayIn[] = {{-4.75f, 0.f, 2.8f}, {-3.9f, 0.f, 2.75f}, {-3.88f, 0.f, 1.7f}, {-3.6f, 0.f, 0.55f},
+                               {-1.75f, 0.f, 0.55f}, {-1.4f, 0.f, 1.35f}};
+const Vector3 kTavlaSpot[2] = {{-1.24f, 0.f, 2.02f}, {-1.30f, 0.f, 2.66f}};
 const int kWatchVariant[2] = {4, 1};
 
 // Standing / walking legs (the çaycı's gait).
@@ -355,7 +343,7 @@ void Cast::updateWatcher(Watcher& w, float dt) {
         }
     }
     if (w.state == 1) {  // face the table
-        const Vector3 d = Vector3Subtract(Vector3{0, 0, 0}, w.pos);
+        const Vector3 d = Vector3Subtract(Vector3{tableFocus.x, 0, tableFocus.z}, w.pos);
         const float want = std::atan2(-d.x, -d.z);
         w.yaw = wrapAngle(w.yaw + clampf(wrapAngle(want - w.yaw), -2.5f * dt, 2.5f * dt));
         w.wait += dt;
@@ -401,8 +389,8 @@ void Cast::updateWatcher(Watcher& w, float dt) {
     else if (w.gazeHold <= 0.f) {
         w.gazeHold = rng.f(2.f, 5.f);
         const float r = rng.f();
-        gz = r < 0.65f ? Vector3{rng.f(-0.2f, 0.2f), w3d::TABLE_Y, rng.f(-0.15f, 0.2f)}
-                       : (r < 0.85f ? headTarget(2) : viewerPos());
+        gz = r < 0.65f ? Vector3Add(tableFocus, {rng.f(-0.2f, 0.2f), 0.f, rng.f(-0.15f, 0.2f)})
+                       : (r < 0.85f ? headTarget(tavlaSeat > 0 ? tavlaSeat : 2) : viewerPos());
     }
     w.gaze = approachExp(w.gaze, gz, 5.f, dt);
     {
@@ -491,9 +479,14 @@ void Cast::updateLife(float dt) {
             if (w.state != -1 || spectateT < due || w.came) continue;
             w.came = true;
             w.state = 0;
-            w.path.assign(std::begin(kWayIn), std::end(kWayIn));
-            if (i == 1) w.path.push_back(kBehind);
-            w.path.push_back(kSpot[i]);
+            if (tavlaSeat > 0) {
+                w.path.assign(std::begin(kTavlaWayIn), std::end(kTavlaWayIn));
+                w.path.push_back(kTavlaSpot[i]);
+            } else {
+                w.path.assign(std::begin(kWayIn), std::end(kWayIn));
+                if (i == 1) w.path.push_back(kBehind);
+                w.path.push_back(kSpot[i]);
+            }
             for (Vector3& p : w.path) p = Vector3Add(p, {rng.f(-0.04f, 0.04f), 0.f, rng.f(-0.04f, 0.04f)});
             w.pathI = 1;
             w.pos = w.path[0];

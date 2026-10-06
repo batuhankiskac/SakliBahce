@@ -18,6 +18,11 @@
 #if defined(__APPLE__)
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl3.h>
+#elif defined(__linux__)
+// libGL (glvnd / Mesa) exports the GL 3.3 entry points; glext.h declares them
+#define GL_GLEXT_PROTOTYPES
+#include <GL/gl.h>
+#include <GL/glext.h>
 #else
 #error "r3d/Gfx.cpp needs an OpenGL 3.3 header for depth textures and sampler objects"
 #endif
@@ -1506,6 +1511,15 @@ void Renderer::emitSmoke(Vector3 pos, const SmokeParams& sp) {
     I.particles.push_back(p);
 }
 int Renderer::particleCount() const { return (int)impl_->particles.size(); }
+
+void Renderer::discardFrame(const Camera3D& cam) {
+    Impl& I = *impl_;
+    I.lastCam = cam;
+    I.items.clear();
+    I.glows.clear();
+    I.boards.clear();
+    I.points.clear();
+}
 
 void Renderer::render(const Camera3D& cam, RenderTexture2D* target, Color clearColor) {
     Impl& I = *impl_;

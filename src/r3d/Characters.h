@@ -36,6 +36,27 @@ public:
     // something from `target` to their hand, 1 puts something from their hand down at `target` (timed like the
     // tiles: w3d::BOT_TAKE_LEAD / BOT_GIVE_LEAD). `mood`: 0 none, 1 happy, 2 grumpy, 3 surprised.
     void reach(int seat, Vector3 target, int mode);
+    // Tavla at its own table (CharactersTavla.cpp): `seat` (1..3) gets up and sits across the player at the tavla
+    // table (w3d::tavlaFrame), their glass and the player's go along; false brings them back to the okey table.
+    void setTavlaTable(bool on, int seat);
+    int tavlaSeat() const; // 0: nobody plays at the tavla table
+    // ---- the card games (CharactersCards.cpp); seat 1..3, times at animation speed 1 (they follow setAnimationSpeed)
+    // holdCards: the seat takes its hand up (picking the dealt cards off the felt at `pickUpAt` when given) and holds
+    // it fanned in the left hand; false puts the hand down. While held, cardFan gives the fan's frame (world): origin
+    // at the pivot between thumb and palm, x across the cards, y their faces' normal (toward the holder), -z up the
+    // cards; it moves with the hand (cardlayout::fanCard places the cards in it).
+    void holdCards(int seat, bool on, const Vector3* pickUpAt = nullptr);
+    bool cardFan(int seat, Matrix& frame) const;
+    // The right hand pulls a card from the fan and lays it at `target` (toss: lets it go from higher up), on the
+    // cards' timeline: the card leaves the fan at w3d::BOT_GIVE_LEAD and lands about w3d::BOT_TILE_FLIGHT later.
+    void playCard(int seat, Vector3 target, bool toss);
+    // A free hand comes down on the cards at `from` (~0.45 s) and pushes them together to `to` (~0.8 s): a trick
+    // taken, Pişti's middle captured.
+    void gatherCards(int seat, Vector3 from, Vector3 to);
+    // The dealer's hands: a riffle shuffle over the deck at `at` (`seconds` long), then dealing: the left hand holds
+    // the deck, the right pushes card k toward to[k] at k * interval seconds.
+    void shuffleDeck(int seat, Vector3 at, float seconds);
+    void dealCards(int seat, Vector3 at, const std::vector<Vector3>& to, float interval);
     void react(int seat, int mood, Vector3 lookAt);
     // A line for the banter system's rate limits (the other games' reactions): queued like Banter lines.
     bool chat(int seat, const std::string& text, bool important = false);

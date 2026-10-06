@@ -295,11 +295,18 @@ Vector3 Tavla3D::slotWorld(int where, int player, int slot) const {
     return {x, Y0 + (float)k * CH, z};
 }
 
-Vector3 Tavla3D::pointWorld(int idx, int player) const {
+Vector3 Tavla3D::pointLocal(int idx, int player) const {
     int n = 0;
     for (const Checker& c : chk_)
         if (c.where == idx && c.player == player) ++n;
     return slotWorld(idx, player, std::max(0, n - 1));
+}
+
+Vector3 Tavla3D::pointWorld(int idx, int player) const { return toWorld(pointLocal(idx, player)); }
+
+void Tavla3D::setFrame(const Matrix& frame) {
+    frame_ = frame;
+    frameInv_ = MatrixInvert(frame);
 }
 
 void Tavla3D::moveChecker(int player, int from, int to, float delay) {
@@ -566,10 +573,11 @@ bool Tavla3D::animating() const {
 
 void Tavla3D::submit(Renderer& r) {
     if (!ready_) return;
-    r.submit(&boardMesh_, &matWood_, MatrixIdentity(), CastShadow);
-    r.submit(&fieldMesh_, &matField_, MatrixIdentity(), 0);
-    r.submit(&pointMesh_[0], &matPoint_[0], MatrixIdentity(), 0);
-    r.submit(&pointMesh_[1], &matPoint_[1], MatrixIdentity(), 0);
+    const Matrix& F = frame_;
+    r.submit(&boardMesh_, &matWood_, F, CastShadow);
+    r.submit(&fieldMesh_, &matField_, F, 0);
+    r.submit(&pointMesh_[0], &matPoint_[0], F, 0);
+    r.submit(&pointMesh_[1], &matPoint_[1], F, 0);
     // the top checker of every playable point is lit (and lifted a little; the selected one more)
     std::array<int, 26> top;
     top.fill(-1);
@@ -587,13 +595,13 @@ void Tavla3D::submit(Renderer& r) {
         const int l = lit[(size_t)i];
         const float lift = l == 2 ? 0.012f + bob : l == 1 ? 0.003f : 0.f;
         const Mat* m = l == 2 ? &matCheckerSel_ : l == 1 ? &matCheckerHi_ : &matChecker_[c.player];
-        r.submit(&checkerMesh_, m, MatrixTranslate(c.cur.x, c.cur.y + lift, c.cur.z), CastShadow);
+        r.submit(&checkerMesh_, m, MatrixMultiply(MatrixTranslate(c.cur.x, c.cur.y + lift, c.cur.z), F), CastShadow);
     }
     for (const Die& d : dice_) {
         if (!d.visible) continue;
         matDie_.material.maps[MATERIAL_MAP_DIFFUSE].color = d.used ? Color{150, 144, 136, 255} : WHITE;
-        r.submit(&dieMesh_, &matDie_, MatrixMultiply(QuaternionToMatrix(d.qCur), MatrixTranslate(d.cur.x, d.cur.y, d.cur.z)),
-                 CastShadow);
+        r.submit(&dieMesh_, &matDie_,
+                 MatrixMultiply(MatrixMultiply(QuaternionToMatrix(d.qCur), MatrixTranslate(d.cur.x, d.cur.y, d.cur.z)), F), CastShadow);
     }
     if (cube_.visible) {
         // an offer waits in the air, swaying a little
@@ -603,7 +611,7 @@ void Tavla3D::submit(Renderer& r) {
             q = QuaternionMultiply(QuaternionFromAxisAngle({0, 1, 0}, 0.18f * std::sin(time_ * 2.2f)), q);
             p.y += 0.004f * std::sin(time_ * 3.1f);
         }
-        r.submit(&cubeMesh_, &matCube_, MatrixMultiply(QuaternionToMatrix(q), MatrixTranslate(p.x, p.y, p.z)), CastShadow);
+        r.submit(&cubeMesh_, &matCube_, MatrixMultiply(MatrixMultiply(QuaternionToMatrix(q), MatrixTranslate(p.x, p.y, p.z)), F), CastShadow);
     }
     // highlights: playable sources (gold), the selected one (strong gold), where it can go (green)
     auto glowPoint = [&](int i, Mat& m) {
@@ -620,7 +628,7 @@ void Tavla3D::submit(Renderer& r) {
         } else {
             return;
         }
-        r.submit(&glowMesh_, &m, mx, Transparent | DoubleSided | NoFog);
+        r.submit(&glowMesh_, &m, MatrixMultiply(mx, F), Transparent | DoubleSided | NoFog);
     };
     for (int i : sources_)
         if (i == BAR || i == selected_) glowPoint(i, i == selected_ ? matGlowSel_ : matGlow_);
@@ -632,7 +640,10 @@ void Tavla3D::submit(Renderer& r) {
     }
 }
 
-int Tavla3D::pick(const Ray& ray) const {
+int Tavla3D::pick(const Ray& worldRay) const {
+    Ray ray;
+    ray.position = Vector3Transform(worldRay.position, frameInv_);
+    ray.direction = Vector3Subtract(Vector3Transform(Vector3Add(worldRay.position, worldRay.direction), frameInv_), ray.position);
     if (std::fabs(ray.direction.y) < 1e-5f) return -1;
     const float t = (FIELD_Y - ray.position.y) / ray.direction.y;
     if (t <= 0.f) return -1;

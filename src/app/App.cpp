@@ -97,12 +97,18 @@ Vector3 lookDir(float yawDeg, float pitchDeg) {
 }
 
 // Extra snapshot cameras for judging the space (the seat view is the PlayerCamera itself).
-Camera3D viewCamera(const std::string& view, const Camera3D& seat) {
+Camera3D viewCamera(const std::string& view, const Camera3D& seat, bool tavla) {
     Camera3D c = seat;
     c.up = {0, 1, 0};
     c.projection = CAMERA_PERSPECTIVE;
-    if (view == "left" || view == "right") {
-        const float yaw = view == "left" ? -76.f : 76.f;
+    // "straight ahead" of the seat (the tavla table faces another way than ours)
+    const float yaw0 = std::atan2(seat.target.x - seat.position.x, -(seat.target.z - seat.position.z)) * RAD2DEG;
+    if (tavla && view == "back") { // behind the opponent, looking back at our seat at the tavla table
+        c.position = w3d::tavlaToWorld({0.30f, 1.72f, -1.55f});
+        c.target = w3d::tavlaToWorld({-0.04f, 0.90f, 0.35f});
+        c.fovy = 56.f;
+    } else if (view == "left" || view == "right") {
+        const float yaw = yaw0 + (view == "left" ? -76.f : 76.f);
         const Vector3 d = lookDir(yaw, -13.f);
         c.target = {c.position.x + d.x, c.position.y + d.y, c.position.z + d.z};
         c.fovy = w3d::FOVY_DEG;
@@ -216,9 +222,18 @@ std::string watchText(const okey::GameEvent& e) {
 
 // ---------------------------------------------------------------- settings file (interactive runs only)
 std::string supportDir() {
+#if defined(__APPLE__)
     const char* home = std::getenv("HOME");
     if (!home || !*home) return {};
     return std::string(home) + "/Library/Application Support/";
+#else
+    // XDG: $XDG_DATA_HOME, else ~/.local/share
+    const char* xdg = std::getenv("XDG_DATA_HOME");
+    if (xdg && *xdg == '/') return std::string(xdg) + "/";
+    const char* home = std::getenv("HOME");
+    if (!home || !*home) return {};
+    return std::string(home) + "/.local/share/";
+#endif
 }
 std::string statsPath() {
     const std::string dir = supportDir();
@@ -261,6 +276,7 @@ void applySettingLine(ui::Settings& s, const std::string& k, const std::string& 
     else if (k == "tavla") s.tavlaPoints = std::clamp(iv, 1, 15);
     else if (k == "tavlakatlama") s.tavlaDoubling = iv != 0;
     else if (k == "tavlakatmerli") s.tavlaKatmerli = iv != 0;
+    else if (k == "tavlarakip") s.tavlaRakip = std::clamp(iv, 1, 3);
     else if (k == "okeyrenkli") s.okeyRenkli = iv != 0;
     else if (k == "batakkoz") s.batakKozKirilmadan = iv != 0;
     else if (k == "king12") s.king12 = iv != 0;
@@ -294,10 +310,10 @@ std::string settingsText(const ui::Settings& s) {
     std::snprintf(buf, sizeof buf,
                   "oyun=%d\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\n"
                   "katlamali=%d\nyandanceza=%d\nokeypuan=%d\ntavla=%d\nbatakesli=%d\nbatakhedef=%d\npistihedef=%d\n"
-                  "pistimasa=%d\ntavlakatlama=%d\ntavlakatmerli=%d\nokeyrenkli=%d\nbatakkoz=%d\nking12=%d\nrehber=%d\nrehbergoruldu=%d\nvakit=%d\nmevsim=%d\nkonusma=%d\nrenkkorlugu=%d\nbuyukyazi=%d\nhiz=%.2f\nisim=%s\n",
+                  "pistimasa=%d\ntavlakatlama=%d\ntavlakatmerli=%d\ntavlarakip=%d\nokeyrenkli=%d\nbatakkoz=%d\nking12=%d\nrehber=%d\nrehbergoruldu=%d\nvakit=%d\nmevsim=%d\nkonusma=%d\nrenkkorlugu=%d\nbuyukyazi=%d\nhiz=%.2f\nisim=%s\n",
                   s.game, s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
                   s.katlamali ? 1 : 0, s.yandanCeza ? 1 : 0, s.okeyStart, s.tavlaPoints, s.batakEsli ? 1 : 0,
-                  s.batakTarget, s.pistiTarget, s.pistiMode, s.tavlaDoubling ? 1 : 0, s.tavlaKatmerli ? 1 : 0, s.okeyRenkli ? 1 : 0,
+                  s.batakTarget, s.pistiTarget, s.pistiMode, s.tavlaDoubling ? 1 : 0, s.tavlaKatmerli ? 1 : 0, s.tavlaRakip, s.okeyRenkli ? 1 : 0,
                   s.batakKozKirilmadan ? 1 : 0, s.king12 ? 1 : 0, s.guide ? 1 : 0, s.guideSeen, s.dayTime, s.season,
                   s.voices ? 1 : 0, s.colorBlind ? 1 : 0, s.bigText ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
     return buf;
@@ -438,6 +454,7 @@ private:
     bool unattended() const { return snapshot_ || opt_.autoplay || opt_.aiChaos; }
     void recordStats(float cpuMs);
     bool snapshotDone();
+    bool snapshotRenderNow() const;
     bool exportSnapshot();
     void saveWindowShot();
     // flow
@@ -447,6 +464,11 @@ private:
     void startOtherMatch(ui::GameKind kind);
     void toTitle();
     void setTitleMode(bool on);
+    // Which table we sit at: 0 our okey table, 1 the tavla table (with `seat` the regular across). The camera, the
+    // opponent, the glasses and the key light move there behind a short fade.
+    void setLocation(int loc, int seat);
+    int location_ = 0, locationSeat_ = 0;
+    float fade_ = 0.f; // 1 black .. 0 clear (a table change)
     void applySettings();
     void releaseOverrides();
     void persistSettings();
@@ -864,8 +886,15 @@ int App::run() {
         BeginDrawing();
         const bool seatView = !snapshot_ || opt_.view == "seat";
         if (snapshot_) {
-            submitWorld();
-            renderer_.render(renderCam_, &rt_, CLEAR_COLOR);
+            if (snapshotRenderNow()) {
+                submitWorld();
+                renderer_.render(renderCam_, &rt_, CLEAR_COLOR);
+            } else {
+                renderer_.discardFrame(renderCam_);
+                BeginTextureMode(rt_);
+                ClearBackground(CLEAR_COLOR);
+                EndTextureMode();
+            }
             BeginTextureMode(rt_);
             BeginMode2D(ui::viewportCamera(vp));
             drawOverlays(seatView);
@@ -938,6 +967,7 @@ void App::recordStats(float cpuMs) {
 }
 
 void App::tick(float dt) {
+    fade_ = std::max(0.f, fade_ - dt / 0.7f);
     const float simDt = dt * std::max(0.05f, opt_.speed);
     simClock_ += simDt;
     const bool blockedAtStart = screens_.blocksGame();
@@ -963,7 +993,7 @@ void App::tick(float dt) {
         pcam_.update(dt, lookOk || lookDrag_);
     }
     cam_ = fitToCanvas(pcam_.camera(), (float)renderer_.renderWidth() / (float)std::max(1, renderer_.renderHeight()));
-    renderCam_ = (snapshot_ && opt_.view != "seat") ? viewCamera(opt_.view, cam_) : cam_;
+    renderCam_ = (snapshot_ && opt_.view != "seat") ? viewCamera(opt_.view, cam_, location_ == 1) : cam_;
 
     // the table: the human acts through it (never while a screen is up, while an AI plays the seat or in snapshots);
     // in the Yapay Zeka mode the HUD's buttons still take the mouse (switching the mode off, the menu)
@@ -1072,9 +1102,23 @@ void App::drawOverlays(bool hud) {
         drawReplayBadge();
     }
     screens_.draw(flow_ == Flow::Title ? nullptr : &game_);
+    if (fade_ > 0.f) { // a table change: in from black (eased)
+        const float a = fade_ * fade_ * (3.f - 2.f * fade_);
+        DrawRectangle(-200, -200, (int)ui::VW + 400, (int)ui::VH + 400, Color{8, 5, 3, (unsigned char)(a * 255.f)});
+    }
 }
 
 // ---------------------------------------------------------------- snapshots
+// --render-last N: a slow (software) GL only draws the frames that lead up to the picture.
+bool App::snapshotRenderNow() const {
+    if (opt_.renderLast < 0) return true;
+    switch (snapState_) {
+    case SnapState::Summary:
+    case SnapState::MatchOver: return snapReachedAt_ >= 0 && frame_ - snapReachedAt_ + opt_.renderLast >= opt_.frames;
+    default: return frame_ + opt_.renderLast >= opt_.frames;
+    }
+}
+
 bool App::snapshotDone() {
     switch (snapState_) {
     case SnapState::Summary:
@@ -1110,6 +1154,19 @@ void App::saveWindowShot() {
 }
 
 // ---------------------------------------------------------------- flow
+void App::setLocation(int loc, int seat) {
+    if (loc != 1) seat = 0;
+    if (loc == location_ && seat == locationSeat_) return;
+    location_ = loc;
+    locationSeat_ = seat;
+    room_.setTavlaFocus(loc == 1);
+    characters_.setTavlaTable(loc == 1, seat);
+    if (loc == 1) pcam_.setTavlaSeat();
+    else pcam_.setOkeySeat();
+    pcam_.setRecentreKey(loc != 1); // (tavla: R throws the dice)
+    if (!snapshot_) fade_ = 1.f;
+}
+
 void App::setTitleMode(bool on) {
     room_.setTitleMode(on);
     characters_.setTitleMode(on);
@@ -1159,6 +1216,7 @@ void App::startMatch() {
         other_->shutdown();
         other_.reset();
     }
+    setLocation(0, 0);
     table_.setFurnitureOnly(false);
     screens_.clearSheet();
     cfg.variant = kind == ui::GameKind::Okey ? okey::Variant::Okey : okey::Variant::Yuzbir;
@@ -1272,6 +1330,10 @@ void App::startOtherMatch(ui::GameKind kind) {
     flow_ = Flow::Playing;
     matchAiTouched_ = aiMode_;
     other_->startMatch(st, nm, matchSeed);
+    {
+        const std::vector<int> seats = other_->seats();
+        setLocation(other_->location(), seats.size() > 1 ? seats[1] : 0);
+    }
     if (!unattended() && !resuming_ && !replayMode_)
         characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
     maybeShowGuide(kind);
@@ -1315,6 +1377,7 @@ void App::toTitle() {
     game_ = okey::Game(cfg);  // not started: the tiles rest in a heap on the table
     for (auto& b : bots_) b.reset();
     flow_ = Flow::Title;
+    setLocation(0, 0);
     setTitleMode(true);
     lookDrag_ = false;
 }
@@ -1812,7 +1875,7 @@ struct Guide {
     std::string firstTurn; // said when the player's turn first comes
 };
 
-Guide guideFor(ui::GameKind k) {
+Guide guideFor(ui::GameKind k, const std::string& tavlaOpp = "Kel Mahmut") {
     using G = ui::GameKind;
     const std::string hint = "Takılırsan İpucu düğmesi (ya da H tuşu) Kurt'un senin yerinde ne yapacağını gösterir.";
     switch (k) {
@@ -1845,8 +1908,9 @@ Guide guideFor(ui::GameKind k) {
                 "Sıra sende: bir taş çek, sonra atacağın taşı sürükleyip bırak."};
     case G::Tavla:
         return {"Tavlaya Hoş Geldin",
-                {"Kel Mahmut'la karşılıklı oynuyorsun. Amaç 15 pulunu kendi evine (sağ alttaki 6 hane) getirip "
-                 "hepsini toplamak.",
+                {"Tavla kendi masasında oynanır: sedirin önündeki küçük masada " + tavlaOpp +
+                     " karşına oturur (rakibi Ayarlar'dan seçersin). Amaç 15 pulunu kendi evine (sağ alttaki 6 hane) "
+                     "getirip hepsini toplamak.",
                  "Zar At'a bas, sonra oynatacağın pulun hanesine, ardından yeşil yanan haneye tıkla. Geri Al ile "
                  "hamleni geri alabilirsin.",
                  "Tek duran pul vurulabilir; kırılan pul önce rakibin evinden yeniden girmelidir.",
@@ -1883,7 +1947,7 @@ void App::maybeShowGuide(ui::GameKind kind) {
     ui::Settings& st = screens_.settings();
     const int bit = 1 << (int)kind;
     if (resuming_ || (!opt_.guideDemo && (unattended() || aiMode_ || !st.guide || (st.guideSeen & bit)))) return;
-    const Guide g = guideFor(kind);
+    const Guide g = guideFor(kind, names()[(size_t)std::clamp(screens_.settings().tavlaRakip, 1, 3)]);
     if (g.title.empty()) return;
     st.guideSeen |= bit;
     settingsDirty_ = true;
@@ -2470,6 +2534,7 @@ void printUsage(const char* argv0) {
                 "                    (--state title | game | rules | settings ile başlangıç ekranı seçilebilir)\n"
                 "  --snapshot DOSYA  gizli pencerede 1600x900 bir kare çizip PNG olarak kaydet ve çık\n"
                 "      --frames N    görüntüden önce simüle edilecek kare sayısı\n"
+                "      --render-last N  3B dünyayı yalnızca son N karede çiz (yazılımsal GL'de hızlı)\n"
                 "      --state S     title | game | summary | matchover | rules | settings | games\n"
                 "      --view V      seat | left | right | back | corner\n"
                 "  --help            bu yardım\n",
@@ -2587,6 +2652,9 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
         } else if (a == "--snapshot") {
             if (!(s = need(i, "--snapshot"))) return false;
             o.snapshot = s;
+        } else if (a == "--render-last") {
+            if (!(s = need(i, "--render-last")) || !toInt(s, v, "--render-last")) return false;
+            o.renderLast = (int)std::max(1L, v);
         } else if (a == "--frames") {
             if (!(s = need(i, "--frames")) || !toInt(s, v, "--frames")) return false;
             o.frames = (int)std::clamp(v, 1L, 1000000L);

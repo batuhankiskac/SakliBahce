@@ -33,6 +33,9 @@ enum class Sfx {
     CardShuffle,  // shuffling and dealing a deck (riffle, bridge)
     DiceThrow,    // our own tavla dice thrown on the board (close, dry)
     Checker,      // a tavla checker (pul) set down on the board (wooden "tok")
+    CardSlide,    // a dealt card sliding across the felt (a soft papery hiss)
+    CardGather,   // a trick / the middle pushed together and squared (a shuffle of cards, a tap)
+    CardSnap,     // a tossed card landing flat with a snap
     Count
 };
 

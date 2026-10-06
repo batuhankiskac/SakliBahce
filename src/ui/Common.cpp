@@ -17,19 +17,27 @@ struct FontSlot {
 FontSlot g_fonts[(int)FontId::Count];
 Viewport g_viewport;
 
-const char* kFontFiles[(int)FontId::Count][3] = {
+// macOS faces first, then the common Linux ones (DejaVu / Liberation / FreeFont) so the cloud and CI builds have
+// Turkish letters too.
+#define LX_SANS "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+#define LX_SANS_B "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+#define LX_LIB_B "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+#define LX_SERIF_B "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
+const char* kFontFiles[(int)FontId::Count][5] = {
     {"/System/Library/Fonts/Supplemental/Trebuchet MS.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf",
-     nullptr},
+     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", LX_SANS, nullptr},
     {"/System/Library/Fonts/Supplemental/Trebuchet MS Bold.ttf",
-     "/System/Library/Fonts/Supplemental/Arial Bold.ttf", nullptr},
+     "/System/Library/Fonts/Supplemental/Arial Bold.ttf", LX_LIB_B, LX_SANS_B, nullptr},
     {"/System/Library/Fonts/Supplemental/ChalkboardSE.ttc", "/System/Library/Fonts/Noteworthy.ttc",
-     "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf"},
+     "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf", "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+     LX_SANS},
     {"/System/Library/Fonts/Noteworthy.ttc", "/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf",
-     "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf"},
+     "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf", "/usr/share/fonts/truetype/freefont/FreeSerifItalic.ttf",
+     LX_SANS},
     {"/System/Library/Fonts/Supplemental/Rockwell.ttc", "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
-     "/System/Library/Fonts/Supplemental/Trebuchet MS Bold.ttf"},
+     "/System/Library/Fonts/Supplemental/Trebuchet MS Bold.ttf", LX_SERIF_B, LX_SANS_B},
     {"/System/Library/Fonts/Supplemental/Arial Black.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-     nullptr},
+     LX_LIB_B, LX_SANS_B, nullptr},
 };
 const int kFontBaseSize[(int)FontId::Count] = {64, 64, 64, 64, 96, 96};
 

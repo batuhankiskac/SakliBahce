@@ -140,6 +140,7 @@ void Characters::reach(int seat, Vector3 target, int mode) {
     if (o.kind == 0 && pref == 1 && l.x > -0.3f) pref = 0; // Rıza's tespih hand, Mahmut's cigarette hand
     if (o.kind == 1 && pref == 0 && l.x < 0.3f) pref = 1;
     if (o.arm[pref].track.on && o.arm[pref].track.kind == chr::TK_Sip) pref = 1 - pref;
+    if (o.cards) pref = 0; // the left hand holds the cards
     m.reachTo(o, pref, target, mode == 1 ? 1 : 0);
     o.chinRest = false;
 }

@@ -1237,6 +1237,8 @@ constexpr SfxDef kSfx[(int)Sfx::Count] = {
     {"card_place", 4, 3, -12.f, .06f, .15f},  {"card_slap", 3, 2, -6.f, .05f, .1f},
     {"card_shuffle", 2, 1, -11.f, .03f, .05f}, {"dice_throw", 4, 2, -6.f, .04f, .1f},
     {"checker", 4, 3, -8.f, .05f, .12f},
+    {"card_slide", 4, 3, -17.f, .06f, .2f},    {"card_gather", 3, 2, -12.f, .04f, .12f},
+    {"card_snap", 4, 2, -9.f, .05f, .12f},
 };
 
 // ---- the other games: cards, our own dice, tavla checkers
@@ -1278,6 +1280,41 @@ Buf sfxCardShuffle(Synth& s) {
     Mode deck[3] = {{220, .03f, .7f}, {390, .02f, .5f}, {760, .012f, .3f}};
     s.impact(b, D, deck, 3, 1.4f, .6f, .2f);
     s.impact(b, D + s.u(.07f, .11f), deck, 3, 1.2f, .45f, .2f);
+    return b;
+}
+
+// A dealt card skimming the felt: a short band of noise that rises and settles, the cloth's soft hiss.
+Buf sfxCardSlide(Synth& s) {
+    Buf b = s.buf(.26f);
+    s.noiseBurst(b, 0.f, s.u(35.f, 55.f), s.u(110.f, 150.f), 1400.f, 5200.f, .45f);
+    s.noiseBurst(b, s.u(.12f, .16f), .6f, 7.f, 900.f, 4200.f, .35f); // it stops against the pile
+    return b;
+}
+
+// Cards pushed together: several papery brushes in a quick run, then the bundle squared with a tap.
+Buf sfxCardGather(Synth& s) {
+    Buf b = s.buf(.42f);
+    float t = .0f;
+    const int n = 3 + (int)s.u(0.f, 2.99f);
+    for (int i = 0; i < n; ++i) {
+        s.noiseBurst(b, t, 6.f, s.u(30.f, 50.f), 1500.f, 6500.f, s.u(.35f, .55f));
+        t += s.u(.035f, .06f);
+    }
+    Mode deck[3] = {{230, .025f, .7f}, {410, .018f, .5f}, {790, .010f, .3f}};
+    s.jitter(deck, 3, .08f, .2f);
+    s.impact(b, t + .05f, deck, 3, 1.1f, .55f, .2f);
+    return b;
+}
+
+// A tossed card: the air, then a crisp flat snap on the felt (brighter and shorter than a laid card).
+Buf sfxCardSnap(Synth& s) {
+    Buf b = s.buf(.2f);
+    s.noiseBurst(b, 0.f, 2.f, 16.f, 2200.f, 8000.f, .25f);
+    const float t = s.u(.016f, .026f);
+    s.noiseBurst(b, t, .2f, 4.f, 1600.f, 7500.f, 1.f);
+    Mode felt[3] = {{210, .016f, .55f}, {380, .011f, .4f}, {760, .006f, .25f}};
+    s.jitter(felt, 3, .08f, .2f);
+    s.impact(b, t, felt, 3, s.u(1.f, 1.6f), .55f, .2f);
     return b;
 }
 
@@ -1329,6 +1366,9 @@ Buf synthSfx(Sfx id, int v, Synth& s) {
         return b;
     }
     case Sfx::Checker: return sfxChecker(s);
+    case Sfx::CardSlide: return sfxCardSlide(s);
+    case Sfx::CardGather: return sfxCardGather(s);
+    case Sfx::CardSnap: return sfxCardSnap(s);
     default: return Buf(64, 0.f);
     }
 }

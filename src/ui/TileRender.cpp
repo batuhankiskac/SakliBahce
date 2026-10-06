@@ -328,7 +328,9 @@ struct Painter {
 Font loadTileFont() {
     // Same face as FontId::Tile (Arial Black), loaded large for the supersampled atlas.
     const char* files[] = {"/System/Library/Fonts/Supplemental/Arial Black.ttf",
-                           "/System/Library/Fonts/Supplemental/Arial Bold.ttf"};
+                           "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                           "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                           "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"};
     int cps[10];
     for (int i = 0; i < 10; ++i) cps[i] = '0' + i;
     for (const char* f : files) {

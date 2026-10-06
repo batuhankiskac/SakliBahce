@@ -16,6 +16,16 @@ constexpr int CORNER_SEG = 5;
 
 float qdot(Quaternion a, Quaternion b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
+// Matrix with basis columns X, Y, Z and origin T.
+Matrix basisFrame(Vector3 X, Vector3 Y, Vector3 Z, Vector3 T) {
+    Matrix m = MatrixIdentity();
+    m.m0 = X.x, m.m1 = X.y, m.m2 = X.z;
+    m.m4 = Y.x, m.m5 = Y.y, m.m6 = Y.z;
+    m.m8 = Z.x, m.m9 = Z.y, m.m10 = Z.z;
+    m.m12 = T.x, m.m13 = T.y, m.m14 = T.z;
+    return m;
+}
+
 float easeInOut(float t) { return t < 0.5f ? 4.f * t * t * t : 1.f - std::pow(-2.f * t + 2.f, 3.f) / 2.f; }
 
 // Outline of the rounded card in its local XZ plane, counter-clockwise seen from +Y.
@@ -180,8 +190,33 @@ void Cards3D::place(int card, const CardPose& p, bool animate, float delay, floa
     c.t = 0.f;
     c.delay = delay;
     c.arc = arc;
+    c.soft = false;
     const float dist = Vector3Distance(c.from.pos, c.to.pos);
     c.dur = std::clamp(0.22f + dist * 0.55f, 0.25f, 0.75f);
+}
+
+void Cards3D::follow(int card, const CardPose& p) {
+    if (card < 0 || card >= CARD_COUNT) return;
+    Card& c = cards_[card];
+    if (!c.visible) {
+        place(card, p, false);
+        return;
+    }
+    if (c.t < 1.f) { // in flight: it lands where the pose is now
+        c.to = p;
+        return;
+    }
+    if (Vector3Distance(c.cur.pos, p.pos) > 0.004f || std::fabs(qdot(c.cur.rot, p.rot)) < 0.9995f) {
+        c.from = c.cur;
+        c.to = p;
+        c.t = 0.f;
+        c.delay = 0.f;
+        c.arc = 0.f;
+        c.dur = 0.22f;
+        c.soft = true;
+        return;
+    }
+    c.from = c.to = c.cur = p;
 }
 
 void Cards3D::hide(int card) {
@@ -201,6 +236,12 @@ void Cards3D::setTint(int card, Color c) {
 void Cards3D::setLift(int card, float metres) {
     if (card >= 0 && card < CARD_COUNT) cards_[card].lift = metres;
 }
+void Cards3D::setRaise(int card, float metres) {
+    if (card >= 0 && card < CARD_COUNT) cards_[card].raise = metres;
+}
+void Cards3D::setTilt(int card, float deg) {
+    if (card >= 0 && card < CARD_COUNT) cards_[card].tilt = deg;
+}
 void Cards3D::setGlow(int card, float amount) {
     if (card >= 0 && card < CARD_COUNT) cards_[card].glow = amount;
 }
@@ -214,6 +255,8 @@ void Cards3D::update(float dt) {
     for (Card& c : cards_) {
         if (!c.visible) continue;
         c.liftCur += (c.lift - c.liftCur) * std::min(1.f, dt * 14.f);
+        c.raiseCur += (c.raise - c.raiseCur) * std::min(1.f, dt * 14.f);
+        c.tiltCur += (c.tilt - c.tiltCur) * std::min(1.f, dt * 14.f);
         c.glowCur += (c.glow - c.glowCur) * std::min(1.f, dt * 10.f);
         if (c.t >= 1.f) {
             c.cur = c.to;
@@ -231,16 +274,25 @@ void Cards3D::update(float dt) {
     }
 }
 
+// Where a card is drawn: its pose, raised along its top edge, tilted back about its bottom edge, lifted off its face.
+CardPose Cards3D::drawn(const Card& c) {
+    CardPose p = c.cur;
+    if (c.raiseCur > 1e-5f) p.pos = Vector3Add(p.pos, Vector3Scale(Vector3RotateByQuaternion({0, 0, -1}, p.rot), c.raiseCur));
+    if (std::fabs(c.tiltCur) > 1e-3f) {
+        const Vector3 bottom = Vector3Add(p.pos, Vector3RotateByQuaternion({0, 0, CARD_H * 0.5f}, p.rot));
+        p.rot = QuaternionMultiply(p.rot, QuaternionFromAxisAngle({1, 0, 0}, c.tiltCur * DEG2RAD));
+        p.pos = Vector3Subtract(bottom, Vector3RotateByQuaternion({0, 0, CARD_H * 0.5f}, p.rot));
+    }
+    if (c.liftCur > 1e-5f) p.pos = Vector3Add(p.pos, Vector3Scale(Vector3RotateByQuaternion({0, 1, 0}, p.rot), c.liftCur));
+    return p;
+}
+
 void Cards3D::submit(Renderer& r) {
     if (!ready_) return;
     for (int i = 0; i < CARD_COUNT; ++i) {
         const Card& c = cards_[i];
         if (!c.visible) continue;
-        CardPose p = c.cur;
-        if (c.liftCur > 1e-5f) {
-            const Vector3 n = Vector3RotateByQuaternion({0, 1, 0}, p.rot);
-            p.pos = Vector3Add(p.pos, Vector3Scale(n, c.liftCur));
-        }
+        const CardPose p = drawn(c);
         mats_[i].material.maps[MATERIAL_MAP_DIFFUSE].color = c.tint;
         r.submit(&meshes_[i], &mats_[i], cardMatrix(p), CastShadow);
         if (c.glowCur > 0.03f) {
@@ -274,9 +326,7 @@ int Cards3D::pick(const Ray& ray, const std::vector<int>* among) const {
     auto test = [&](int i) {
         const Card& c = cards_[i];
         if (!c.visible) return;
-        CardPose p = c.cur;
-        const Vector3 n = Vector3RotateByQuaternion({0, 1, 0}, p.rot);
-        p.pos = Vector3Add(p.pos, Vector3Scale(n, c.liftCur));
+        const CardPose p = drawn(c);
         const Quaternion inv = QuaternionInvert(p.rot);
         const Vector3 o = Vector3RotateByQuaternion(Vector3Subtract(ray.position, p.pos), inv);
         const Vector3 d = Vector3RotateByQuaternion(ray.direction, inv);
@@ -300,12 +350,19 @@ int Cards3D::pick(const Ray& ray, const std::vector<int>* among) const {
 
 bool Cards3D::animating() const {
     for (const Card& c : cards_)
-        if (c.visible && c.t < 1.f) return true;
+        if (c.visible && c.t < 1.f && !c.soft) return true;
     return false;
 }
 
 // ---------------------------------------------------------------- layouts
 namespace cardlayout {
+
+// The player's fan: held low and close in front of the eye (the camera is at z 0.8, y 1.2), the cards radiating from
+// a pivot near the bottom of the view, their faces turned up toward the eye but not flat to it.
+namespace {
+constexpr Vector3 kHumanPivot{0.f, w3d::TABLE_Y + 0.112f, 0.592f};
+constexpr float kHumanFanTiltDeg = 47.f;   // the fan's plane leans back from upright by this much
+} // namespace
 
 CardPose hand(int seat, int i, int n) {
     CardPose p;
@@ -313,24 +370,57 @@ CardPose hand(int seat, int i, int n) {
     const float mid = (float)(n - 1) * 0.5f;
     const float k = (float)i - mid;
     if (seat == 0) {
-        // the human's fan: an arc near the table edge, standing toward the eye (the camera is at z 0.8, y 1.2)
-        const float spread = std::min(0.034f, 0.42f / (float)n);
-        const float x = k * spread;
-        const float fanDeg = -k * std::min(3.2f, 30.f / (float)n);
-        p.pos = {x, w3d::TABLE_Y + 0.052f + 0.0011f * (float)i - std::fabs(k) * 0.0015f, 0.43f + std::fabs(k) * 0.0012f};
-        Quaternion q = cardStanding(0.f, 62.f, true);
-        q = QuaternionMultiply(q, QuaternionFromAxisAngle({0, 1, 0}, fanDeg * DEG2RAD)); // fan about the card normal
-        p.rot = q;
+        // frame: x across, y the faces (toward the eye), -z up the cards
+        const float tilt = kHumanFanTiltDeg * DEG2RAD;
+        const Vector3 up{0.f, std::cos(tilt), -std::sin(tilt)};
+        const Vector3 face{0.f, std::sin(tilt), std::cos(tilt)};
+        const Matrix frame = basisFrame({1.f, 0.f, 0.f}, face, Vector3Negate(up), kHumanPivot);
+        // a wider, flatter fan than the regulars' (the eye is close): the cards spread more, the radius is longer
+        const float step = std::min(13.f, 76.f / (float)n) * DEG2RAD;
+        const float th = -k * step;
+        const Quaternion spin = QuaternionFromAxisAngle({0, 1, 0}, th);
+        const Vector3 local = Vector3Add(Vector3RotateByQuaternion({0.f, 0.f, -0.040f}, spin), {0.f, 0.0006f * (float)i, 0.f});
+        p.pos = Vector3Transform(local, frame);
+        p.rot = QuaternionMultiply(QuaternionFromMatrix(frame), spin);
         return p;
     }
-    // the others: an upright fan at their istaka spot, faces toward them (backs to the middle)
+    // the others (no people to hold them): an upright fan where their left hand would be, faces toward them
     const float spread = std::min(0.026f, 0.30f / (float)n);
     const float right = -k * spread;
     p.pos = w3d::seatLocal(seat, right, 0.50f, w3d::TABLE_Y + 0.07f + std::fabs(k) * -0.0012f);
-    // held like the player's own fan, turned to the seat: faces toward the owner, backs toward the middle
     Quaternion q = cardStanding(w3d::seatYawDeg(seat), 72.f, true);
     q = QuaternionMultiply(q, QuaternionFromAxisAngle({0, 1, 0}, k * std::min(3.f, 30.f / (float)n) * DEG2RAD));
     p.rot = q;
+    return p;
+}
+
+CardPose fanCard(const Matrix& frame, int i, int n) {
+    n = std::max(1, n);
+    const float k = (float)i - (float)(n - 1) * 0.5f;
+    const float step = std::min(9.f, 84.f / (float)n) * DEG2RAD;
+    const Quaternion spin = QuaternionFromAxisAngle({0, 1, 0}, -k * step);
+    // the pivot sits a little above the cards' bottom edge; later cards lie on top (toward the holder)
+    const Vector3 local = Vector3Add(Vector3RotateByQuaternion({0.f, 0.f, -0.034f}, spin), {0.f, 0.0005f * (float)i, 0.f});
+    CardPose p;
+    p.pos = Vector3Transform(local, frame);
+    p.rot = QuaternionMultiply(QuaternionFromMatrix(frame), spin);
+    return p;
+}
+
+CardPose dealtPile(int seat, int i) {
+    CardPose p;
+    const float out = seat == 0 ? 0.30f : 0.29f;
+    p.pos = w3d::seatLocal(seat, seat == 0 ? -0.05f : 0.03f, out, w3d::TABLE_Y + CARD_T * (0.5f + (float)i));
+    p.rot = cardFlat(w3d::seatYawDeg(seat) + (float)((i * 37) % 9 - 4) * 1.3f, false);
+    p.pos.x += 0.0012f * (float)((i * 13) % 5 - 2);
+    p.pos.z += 0.0012f * (float)((i * 7) % 5 - 2);
+    return p;
+}
+
+CardPose gathered(int seat, int i) {
+    CardPose p;
+    p.pos = w3d::seatLocal(seat, 0.f, 0.05f, w3d::TABLE_Y + CARD_T * (0.5f + (float)i) + 0.0004f);
+    p.rot = cardFlat(w3d::seatYawDeg(seat) + (float)(i % 3 - 1) * 2.f, true);
     return p;
 }
 
@@ -361,11 +451,22 @@ CardPose deck(int seat, int i) {
     return p;
 }
 
-CardPose middle(int i, bool faceUp) {
+CardPose middle(int i, bool faceUp, int card) {
     CardPose p;
     const float a = (float)((i * 53) % 17 - 8);
     p.pos = {0.006f * (float)((i * 29) % 7 - 3) * 0.3f, w3d::TABLE_Y + CARD_T * (0.5f + (float)i), 0.f};
     p.rot = cardFlat(a * 1.8f, faceUp);
+    if (card >= 0) { // thrown on the pile: up to ~25° off and a centimetre or two aside
+        uint32_t h = (uint32_t)(card * 2654435761u) ^ (uint32_t)(i * 40503u);
+        h ^= h >> 13;
+        h *= 0x5bd1e995u;
+        h ^= h >> 15;
+        const float r0 = (float)(h & 1023u) / 1023.f - 0.5f, r1 = (float)((h >> 10) & 1023u) / 1023.f - 0.5f;
+        const float r2 = (float)((h >> 20) & 1023u) / 1023.f - 0.5f;
+        p.pos.x += r0 * 0.028f;
+        p.pos.z += r1 * 0.024f;
+        p.rot = cardFlat(r2 * 50.f, faceUp);
+    }
     return p;
 }
 

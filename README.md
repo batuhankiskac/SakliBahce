@@ -8,7 +8,7 @@ yolcular geçer. Kahvehanenin kedisi sobanın dibinde ya da boş bir sandalyede 
 gerinir, yalanır, başka bir köşeye geçer, bazen de dönüp sana bakar.
 
 **SaklıBahçe**, kahvehanenin müdavimlerine karşı oynadığın birinci şahıs 3B bir masaüstü oyunudur
-(C++17 + raylib 6.0, macOS). Masada yedi oyun var: **101**, **Eşli 101**, **Okey**, **Tavla**, **Pişti**,
+(C++17 + raylib 6.0; macOS, Linux'ta da derlenir). Masada yedi oyun var: **101**, **Eşli 101**, **Okey**, **Tavla**, **Pişti**,
 **Batak** ve **King**. Görüntülerin tamamı kodla üretilir: hiçbir resim ya da model dosyası yoktur; yazı
 tipleri macOS'un kendi yazı tiplerinden alınır. Canın oynamak istemediğinde **Yapay Zeka** modunu açıp arkana
 yaslanabilirsin: taşlarını senin yerine yapay zeka oynar, sen çayını içip izlersin.
@@ -23,19 +23,38 @@ kuralları kendi "Nasıl Oynanır?" sayfasındadır (Kurallar), ayarları da Aya
 | **101** | üç rakip | Per aç, 101'i geç, elini bitir; düşük puan kazanır. Katlamalı oyun ve yandan açma cezası ayarlardan. |
 | **Eşli 101** | Kel Mahmut ortağın | Biriniz bitirince ötekinin eli silinir; takım toplamı düşük olan kazanır. |
 | **Okey** | üç rakip | 14 taşı per ya da yedi çifte diz, 15.'yi atıp bit (12-13-1 geçerli). Herkes 20 puanla başlar, bitiş 2, okey atarak ya da çiftten 4, gösterge 1 düşer; sıfıra inen olunca oyun biter. İsteğe bağlı renkli okey (kırmızı/siyah gösterge ×2). |
-| **Tavla** | Kel Mahmut | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. İsteğe bağlı katlama zarı ve katmerli mars; Hamleler paneli. Hacı Rıza ile Emekli Nuri seyredip laf atar. |
+| **Tavla** | Kel Mahmut (Ayarlar'dan Hacı Rıza ya da Emekli Nuri) | Klasik tavla: kırık pul, kapı, mars (2 sayı); maç 3, 5 ya da 7 sayıya. İsteğe bağlı katlama zarı ve katmerli mars; Hamleler paneli. Kendi masasında oynanır; öteki ikisi okey masasından seyredip laf atar. |
 | **Pişti** | dört kişi, eşli ya da Mahmut'la ikili | Aynı kâğıt ya da vale yerdekileri alır; tek kâğıda pişti 10, valeye vale 20. 101 ya da 151'e. |
 | **Batak** | tekli ya da eşli | İhaleli batak: ihaleyi al, kozu söyle; tutamazsan batarsın. 31, 51 ya da 71'e. "Önce koz açılmalı" kuralı ayarlardan. |
 | **King** | üç rakip | 20 el: her oyuncu 2 koz, 3 ceza seçer (el almaz, kupa almaz, erkek almaz, kız almaz, rıfkı, son iki). Kısa King: 12 el, 1 koz 2 ceza. |
 
 Rakiplerin üç seviyesi (Acemi, Usta, Kurt) her oyunda vardır. Botlar yalnızca masada görülebilenleri bilir;
 Kurt kart oyunlarında görmediği kâğıtları olası dağılımlarla örnekleyip el sonuna kadar oynayarak (Monte Carlo),
-tavlada rakibin 21 zar ihtimaline bakarak karar verir. Kâğıt oyunlarında kâğıdına tıklarsın (oynayabileceklerin
-parlak, ötekiler soluk), tavlada önce pulunun durduğu haneye sonra yeşil yanan haneye tıklarsın.
+tavlada rakibin 21 zar ihtimaline bakarak karar verir. Kâğıt oyunlarında kâğıtların elinde, gözünün hemen altında bir
+yelpaze gibi durur: üzerine gelince kâğıt yelpazeden yukarı kalkıp hafifçe eğilir; tıklayarak ya da yukarı, masanın
+üstüne sürükleyip bırakarak oynarsın (oynayabileceklerin parlak, ötekiler soluk). Tavlada önce pulunun durduğu
+haneye sonra yeşil yanan haneye tıklarsın.
+
+**Tavla kendi masasında oynanır.** Tavla seçilince ekran bir an kararır ve kendini senin sandalyenin arkasında,
+sedirin önündeki iki kişilik küçük ceviz masada bulursun; rakibin (varsayılan Kel Mahmut; Ayarlar → Tavla → Rakip ile
+Hacı Rıza ya da Emekli Nuri) karşına oturur, çay bardaklarınız ve Mahmut'un kül tablası da oradadır. Masanın lambası
+tahtayı aydınlatır, arkada sokak kapısı ve kâğıt oynayanlar görünür. Öteki iki müdavim okey masasında kalıp sizi
+seyreder; uzun bir maçta kapıdan girenler tavla rakibinin arkasında durup izler, çırak çayları oraya getirir. Okey
+oyunlarında ve kâğıt oyunlarında yine okey masasına dönersin.
+
+Kâğıtlar gerçekten kâğıt gibi oynanır: dağıtan desteyi karıştırır (iki yarıyı birbirine geçirir) ve keser — pişti'de
+kesilen alt kâğıt herkese gösterilir —, kâğıtları teker teker keçenin üstünde kaydırarak herkesin önüne dağıtır;
+herkes kendi yığınını alıp elinde açar. Hacı Rıza, Kel Mahmut ve Emekli Nuri kâğıtlarını sol ellerinde yelpaze
+yapıp tutar (sırtları bize dönük); sıraları gelince sağ elleriyle yelpazeden bir kâğıt çekip masaya koyar ya da
+atarlar, yelpaze kâğıt eksildikçe toplanır. Batak ve King'de eli alan dört kâğıdı eliyle toplayıp önündeki yığına
+kapalı koyar; aldığı eller üst üste binmiş küçük destelerden bir bakışta sayılır. Pişti'de ortaya atılan kâğıtlar
+hafif dönük ve dağınık düşer, yerdekileri alan eliyle kendi tarafına süpürür; pişti olunca "Pişti!" diye bağırılır,
+kahvehane de tepki verir. Karıştırma, kayma, keçeye çarpan kâğıt ve toplanan elin sesleri kodla üretilir. Hepsi
+Ayarlar'daki animasyon hızına uyar (Yapay Zeka modu ve `--speed` yavaşlamaz).
 
 ## Kurulum ve çalıştırma
 
-Gerekenler: macOS, Xcode komut satırı araçları (Apple clang) ve Homebrew.
+Gerekenler (macOS): Xcode komut satırı araçları (Apple clang) ve Homebrew. Linux için aşağıya bakın.
 
 ```sh
 brew install raylib      # raylib 6.0 (/opt/homebrew)
@@ -49,11 +68,38 @@ Diğer hedefler:
 |---|---|
 | `make run` | derler ve oyunu başlatır |
 | `make test` | yedi oyunun kural motoru ve yapay zekâ testleri, ardından kısa bot-bot simülasyonları |
-| `make tablescheck` | tavla ve kâğıt oyunlarını gizli bir pencerede gerçek fare tıklamalarıyla oynatır |
+| `make tablescheck` | tavla ve kâğıt oyunlarını gizli bir pencerede gerçek fare tıklamalarıyla oynatır (`TABLESCHECK_ARGS=--no-3d`: 3B çizimsiz) |
 | `make asan` | AddressSanitizer + UBSan ile `build/asan/` altında oyunu ve testleri derler, testleri çalıştırır |
 | `make clean` | derleme çıktılarını siler |
 
 raylib başka bir yerdeyse: `make RAYLIB=/yol/raylib`.
+
+### Linux
+
+Makefile `uname` ile Linux'u tanır ve `-lGL -lm -lpthread -ldl -lrt -lX11` ile bağlar. raylib 6.0 kaynaktan kurulur:
+
+```sh
+sudo apt-get install clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev \
+                     libasound2-dev fonts-dejavu-core fonts-liberation xvfb
+git clone --depth 1 --branch 6.0 https://github.com/raysan5/raylib.git
+make -C raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC
+sudo make -C raylib/src install          # /usr/local/lib/libraylib.a ve başlıklar
+make && make test
+```
+
+macOS yazı tipleri yoksa DejaVu / Liberation kullanılır; ayarlar ve kayıtlar `~/.local/share/SakliBahce/` altındadır
+(`$XDG_DATA_HOME` varsa orası). Ekransız bir makinede (bulut, CI) görüntüler `xvfb-run` ile alınır; ses aygıtı yoksa
+oyun sessiz sürer. Yazılımsal OpenGL yavaş olduğu için `--render-last N` 3B dünyayı yalnızca son N karede çizer,
+`make tablescheck TABLESCHECK_ARGS=--no-3d` de 3B çizimi atlar (ekran yoksa `make tablescheck` kendiliğinden
+`xvfb-run` kullanır):
+
+```sh
+xvfb-run -a ./saklibahce --seed 5 --game pisti --autoplay --speed 2 --frames 260 --render-last 30 \
+    --snapshot pisti.png --state game --view seat --no-audio
+```
+
+**Sürekli tümleştirme:** `.github/workflows/ci.yml` her push'ta Linux'ta `make test`, 3B çizimsiz `tablescheck`,
+iki görüntü ve `make asan`, macOS'ta da `make test` çalıştırır (raylib 6.0 kaynaktan derlenip önbelleğe alınır).
 
 ## Kontroller
 
@@ -63,7 +109,7 @@ Masada, kendi sandalyende oturuyorsun; ıstakan önünde, rakiplerin karşında 
 |---|---|
 | Etrafa bakmak | farenin **sağ tuşunu** basılı tutup sürükle |
 | Yakınlaşmak | **fare tekerleği** |
-| Bakışı masaya ortalamak | **R** ya da sağ tuşa çift tıklama |
+| Bakışı masaya ortalamak | **R** ya da sağ tuşa çift tıklama (tavlada R zar atar: orada yalnızca çift tıklama) |
 | Istakayı dizmek | taşları sürükleyerek 2 sıra × 16 yuvaya yerleştir; yan yana duran taşlar bir grup sayılır, boşluk grupları ayırır |
 | Taş çekmek | ortadaki desteye ya da sol alttaki (soldaki oyuncunun) atık taşına tıkla veya ıstakana sürükle |
 | Taş atmak | taşı sağ alttaki atık yerine sürükle ya da taşa çift tıkla |
@@ -211,8 +257,9 @@ ayarlarına dokunmaz.
 | `--screenshot DOSYA` | `--max-frames` ile: son karede pencerenin görüntüsünü PNG olarak kaydet (`--state title`, `game`, `rules` ya da `settings` ile başlangıç ekranı seçilir) |
 | `--snapshot DOSYA` | gizli pencerede 1600×900 tek bir kare çizip PNG olarak kaydet ve çık |
 | `--frames N` | (`--snapshot` ile) görüntüden önce simüle edilecek kare sayısı |
+| `--render-last N` | (`--snapshot` ile) 3B dünyayı yalnızca son N karede çiz (yazılımsal GL'de, bulutta hızlı) |
 | `--state S` | (`--snapshot` ile) `title`, `game`, `summary`, `matchover`, `rules`, `settings`, `games` ya da `stats` |
-| `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` |
+| `--view V` | (`--snapshot` ile) `seat`, `left`, `right`, `back` ya da `corner` (tavlada `back`: rakibin arkasından) |
 | `--help` | yardım |
 
 Örnekler:

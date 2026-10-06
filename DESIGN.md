@@ -200,6 +200,13 @@ App calls `ui::uiBeginFrame()` / `ui::uiEndFrame()` around each frame (cursor ha
 ## 6. Build & test conventions
 
 * Toolchain: Apple clang, C++17, raylib 6.0 at `/opt/homebrew` (static lib `/opt/homebrew/lib/libraylib.a`).
+  Linux (the cloud, CI): clang or gcc, raylib 6.0 built from source into `/usr/local`; the Makefile picks
+  `-lGL -lm -lpthread -ldl -lrt -lX11` by `uname`. `r3d/Gfx.cpp` takes the GL 3.3 prototypes from `GL/glext.h`;
+  fonts fall back to DejaVu / Liberation; the save directory is `$XDG_DATA_HOME` or `~/.local/share`.
+  Headless: `xvfb-run` (Mesa llvmpipe, ~0.8 s a frame for the whole room), `--render-last N` and
+  `tables_check --no-3d` skip the 3D pass where nobody looks (`Renderer::discardFrame`). No audio device: silent.
+  CI (`.github/workflows/ci.yml`): Linux `make test`, `tablescheck --no-3d`, two snapshots, `make asan`; macOS
+  `make test`.
 * Compile flags: `-std=c++17 -O2 -Wall -Wextra -Isrc -I/opt/homebrew/include`.
 * Link (UI binaries): `/opt/homebrew/lib/libraylib.a -framework Cocoa -framework IOKit -framework OpenGL
   -framework CoreVideo -framework CoreAudio -framework AudioToolbox -framework CoreFoundation`.
@@ -244,6 +251,32 @@ them; `ui::Settings::game` is the one the next match plays (the title's "Oyna" o
     `ui::cardgfx`'s procedural atlas, each flying to a target pose; `cardlayout` gives hands, the trick, won piles,
     the deck, Pişti's middle), dealing, the trick held on the felt before it is swept, picking and highlighting the
     player's cards, bot pacing and `Characters::reach` / `react` / `chat` for the people.
+  * Cards play like cards (2026-10): a deal is a little state machine (`CardTableBase::DealAnim`, game time,
+    everything / `speed_`): the dealer riffles (`deckSlot`: the deck splits into two halves that fall back card by
+    card) and cuts — Pişti turns the deck's bottom card up for a moment (`showCutCard`, visual only) —, the cards slide
+    one by one round the table into a little face-down pile per seat (`cardlayout::dealtPile`; `dealtExtras` such as
+    Pişti's table cards come last; the cards that stay in the deck lie under them, `deckRemaining`), then each seat
+    picks its pile up (`pickAt` / `grabAt`). The regulars hold their hand fanned in the left hand
+    (`Characters::holdCards` / `cardFan`, `cardlayout::fanCard`; `Cards3D::follow` keeps the cards on the moving
+    hand, its small glides don't count as `animating()`); a bot's card is pulled out of the fan by the right hand and
+    laid or tossed (`Characters::playCard`, the card leaves at `BOT_GIVE_LEAD`); a trick is pushed together
+    (`cardlayout::gathered`) by the taker's hand (`Characters::gatherCards`) and then goes on to the won pile;
+    Pişti's capture is swept the same way (`sweepTo`), a played card lands with its own turn and spread
+    (`cardlayout::middle(i, up, card)`), a pişti makes the crowd react. The player's fan is held low in front of the
+    eye (`cardlayout::hand(0, …)`); hover raises and tilts a card (`Cards3D::setRaise` / `setTilt`), a click or a
+    drag up onto the felt plays it (`mouseCards`). Sounds: `Sfx::CardShuffle`, `CardSlide`, `CardPlace`,
+    `CardSnap`, `CardGather` (synthesised in Audio.cpp). `tools/cards_snapshot` (`make cardsnapshot`) pictures the
+    hands close up.
+  * Tavla has its own table (2026-10; `w3d::TAVLA_TABLE`, `tavlaFrame()`): a small two-seat table behind our seat,
+    by the wall bench, turned 90° (the player looks toward the street door). Its frame keeps our table's
+    proportions (same top height, same chair-to-edge distance), so every seated pose fits. `TableGame::location()` 1
+    makes App call `setLocation`: `Room::setTavlaFocus` (its pendant becomes the key light, ours a point light),
+    `Characters::setTavlaTable` (the chosen regular, `Settings::tavlaRakip` 1..3, Kel Mahmut by default, sits
+    across; both glasses go along; Kel Mahmut's ash goes into its ashtray; the bystanders of a long match stand behind
+    him; the çaycı serves the two there from nodes 9 / 16), `PlayerCamera::setTavlaSeat` (eye and base yaw from the
+    frame, a steeper resting pitch, R left to the dice) and a 0.7 s fade in from black. `Tavla3D::setFrame` draws and
+    picks the board in that frame. The other two regulars stay at the okey table and talk; the opponent's lines follow
+    who it is (TavlaTable's `kOpp*` tables). Okey and card games, and the title, bring everything back.
   * Tavla uses `r3d::Tavla3D`: the box, 24 inlaid points, 30 checkers that hop between stacks (the engine's position
     is reconciled checker by checker), two dice thrown to their numbers, highlights (lit checkers, green targets)
     and ray picking of points / bar / bear-off. Optional katlama zarı (`tavla::Rules::doubling`: offer / take / drop, Crawford, a

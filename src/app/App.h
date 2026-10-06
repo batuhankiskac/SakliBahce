@@ -38,6 +38,7 @@ struct Options {
     // --snapshot PATH: render one frame into a 1600x900 PNG from a hidden window and exit
     std::string snapshot;
     int frames = -1;            // --frames N: frames to simulate before the capture (-1 = per state default)
+    int renderLast = -1;        // --render-last N: (--snapshot) draw the 3D world only in the last N frames (-1 = all)
     std::string state;          // --state title|game|summary|matchover|rules|settings (snapshots: game by default)
     std::string view = "seat";  // --view seat|left|right|back|corner
 };

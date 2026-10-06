@@ -1,0 +1,4134 @@
+diff --git a/Makefile b/Makefile
+index 35f4bc4..2a2ef7c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -80,7 +80,7 @@ test: $(TESTS)
+ 	$(BUILD)/test_analysis
+ 
+ # The other table games played by the mouse in a hidden window (needs a display: run it awake, not over ssh)
+-TABLES_CHECK_OBJ := $(CORE_OBJ) $(UI_OBJ) $(filter-out $(BUILD)/src/app/App.o $(BUILD)/src/app/main.o,$(APP_OBJ))
++TABLES_CHECK_OBJ := $(CORE_OBJ) $(UI_OBJ) $(filter-out $(BUILD)/src/app/App%.o $(BUILD)/src/app/main.o,$(APP_OBJ))
+ $(BUILD)/tables_check: $(BUILD)/tools/tables_check.o $(TABLES_CHECK_OBJ)
+ 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+ # Linux without a display (the cloud, CI): a virtual one through xvfb-run. TABLESCHECK_ARGS=--no-3d skips the 3D
+diff --git a/src/app/App.cpp b/src/app/App.cpp
+index 08f9e09..c708499 100644
+--- a/src/app/App.cpp
++++ b/src/app/App.cpp
+@@ -1,66 +1,11 @@
+ // SaklıBahçe — the application: window, main loop, match flow, bot pacing, and the wiring between the engine
+ // (okey::Game / okey::Bot), the 3D world (Room, Characters, Table3D, PlayerCamera), audio and the menu screens.
+-// Frame structure: DESIGN3D.md §2. The Yapay Zeka mode (an AI plays the human's seat) lives here too.
+-#include "app/App.h"
+-#include "app/Analysis.h"
+-#include "app/TableGame.h"
+-
+-#include "core/Bot.h"
+-#include "core/Game.h"
+-#include "core/Rng.h"
+-#include "r3d/Characters.h"
+-#include "r3d/Gfx.h"
+-#include "r3d/Room.h"
+-#include "r3d/Table3D.h"
+-#include "r3d/World.h"
+-#include "ui/Audio.h"
+-#include "ui/Banter.h"
+-#include "ui/Common.h"
+-#include "ui/Memory.h"
+-#include "ui/CardRender.h"
+-#include "ui/TileRender.h"
+-#include "ui/Screens.h"
+-
+-#include <raylib.h>
+-
+-#include <algorithm>
+-#include <array>
+-#include <atomic>
+-#include <chrono>
+-#include <cmath>
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cstring>
+-#include <ctime>
+-#include <functional>
+-#include <future>
+-#include <memory>
+-#include <optional>
+-#include <sstream>
+-#include <thread>
+-#include <string>
+-#include <vector>
++// Frame structure: DESIGN3D.md §2. This file: setup, the frame loop, the world and the 2D layer, the command line;
++// the rest of App is split by topic (AppInternal.h lists the files).
++#include "app/AppInternal.h"
+ 
+ namespace app {
+-
+-namespace {
+-
+-constexpr int HUMAN = 0;
+-constexpr const char* BOT_NAMES[4] = {"", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"};
+-constexpr Vector2 NO_MOUSE{-10000.f, -10000.f};
+-constexpr Color CLEAR_COLOR{14, 10, 7, 255};
+-constexpr int SNAP_W = 1600, SNAP_H = 900;
+-constexpr Vector3 TV_POS{-3.70f, 2.50f, -2.90f};  // the CRT high in the back-left corner (RoomBuild.cpp)
+-
+-constexpr float SUMMARY_DELAY = 2.0f;   // seconds after a hand ends before the score sheet
+-constexpr float AUTO_SUMMARY = 2.5f;    // autoplay: how long the score sheet stays up
+-constexpr float AUTO_MATCHOVER = 3.0f;  // autoplay: how long the final standings stay up
+-constexpr float AUTO_TITLE = 2.0f;      // autoplay (--matches): time on the title screen before "Oyna"
+-constexpr float AI_SUMMARY = 7.0f;      // Yapay Zeka mode: the score sheet presses its button by itself after this
+-constexpr float AI_MATCHOVER = 12.0f;   // ... and the final standings "Yeni Oyun"
+-constexpr float AI_BANTER_GAP = 40.f;   // the regulars remark on the mode at most this often (seconds)
+-constexpr float LANDING_LAG = 0.30f;    // tile flight minus Audio's own 0.12 s gap: clacks land with the tile
+-constexpr int MAX_BOT_ACTIONS = 60;     // watchdog: a bot turn never takes more actions than this
++namespace detail {
+ 
+ uint64_t mix64(uint64_t x) {
+     x += 0x9E3779B97F4A7C15ull;
+@@ -91,39 +36,6 @@ const char* actionName(okey::BotAction::Kind k) {
+     return "?";
+ }
+ 
+-Vector3 lookDir(float yawDeg, float pitchDeg) {
+-    const float y = yawDeg * DEG2RAD, p = pitchDeg * DEG2RAD;
+-    return {std::sin(y) * std::cos(p), std::sin(p), -std::cos(y) * std::cos(p)};
+-}
+-
+-// Extra snapshot cameras for judging the space (the seat view is the PlayerCamera itself).
+-Camera3D viewCamera(const std::string& view, const Camera3D& seat, bool tavla) {
+-    Camera3D c = seat;
+-    c.up = {0, 1, 0};
+-    c.projection = CAMERA_PERSPECTIVE;
+-    // "straight ahead" of the seat (the tavla table faces another way than ours)
+-    const float yaw0 = std::atan2(seat.target.x - seat.position.x, -(seat.target.z - seat.position.z)) * RAD2DEG;
+-    if (tavla && view == "back") { // behind the opponent, looking back at our seat at the tavla table
+-        c.position = w3d::tavlaToWorld({0.30f, 1.72f, -1.55f});
+-        c.target = w3d::tavlaToWorld({-0.04f, 0.90f, 0.35f});
+-        c.fovy = 56.f;
+-    } else if (view == "left" || view == "right") {
+-        const float yaw = yaw0 + (view == "left" ? -76.f : 76.f);
+-        const Vector3 d = lookDir(yaw, -13.f);
+-        c.target = {c.position.x + d.x, c.position.y + d.y, c.position.z + d.z};
+-        c.fovy = w3d::FOVY_DEG;
+-    } else if (view == "back") { // behind Kel Mahmut, looking back at our seat and the wall behind it
+-        c.position = {0.42f, 1.78f, -2.55f};
+-        c.target = {-0.05f, 0.92f, 0.65f};
+-        c.fovy = 58.f;
+-    } else if (view == "corner") { // high in the front-left corner, over the card players
+-        c.position = {-3.80f, 2.50f, 3.25f};
+-        c.target = {0.35f, 0.82f, -0.70f};
+-        c.fovy = 60.f;
+-    }
+-    return c;
+-}
+-
+ // The HUD lives on a 16:9 canvas letterboxed into the window. In a window narrower than 16:9 the vertical field
+ // of view grows so that the horizontal one stays as designed: the 16:9 composition (the whole istaka, both side
+ // players) stays in view and lines up with the HUD, and a taller window just shows more floor and ceiling. Wider
+@@ -155,472 +67,6 @@ std::string trim(const std::string& s) {
+     return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+ }
+ 
+-// ---------------------------------------------------------------- the Yapay Zeka mode's table messages
+-// The engine speaks to the human seat in the second person ("Yandan Kırmızı 5 aldın", "Okey attın: 101 ceza").
+-// While the Yapay Zeka plays that seat the table talks about it instead ("Yapay zeka yandan Kırmızı 5 aldı").
+-bool endsWith(const std::string& s, const std::string& suffix) {
+-    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+-}
+-
+-std::string lowerFirstTR(const std::string& w) {
+-    static const char* const kPairs[][2] = {{"İ", "i"}, {"I", "ı"}, {"Ç", "ç"}, {"Ş", "ş"},
+-                                            {"Ğ", "ğ"}, {"Ö", "ö"}, {"Ü", "ü"}};
+-    for (const auto& p : kPairs) {
+-        const std::string up = p[0];
+-        if (w.compare(0, up.size(), up) == 0) return p[1] + w.substr(up.size());
+-    }
+-    if (!w.empty() && w[0] >= 'A' && w[0] <= 'Z') return std::string(1, (char)(w[0] - 'A' + 'a')) + w.substr(1);
+-    return w;
+-}
+-
+-// Second person singular past -> third person: "aldın" -> "aldı", "verdin" -> "verdi", "aldığın" -> "aldığı".
+-std::string thirdPerson(const std::string& word) {
+-    size_t core = word.size();
+-    while (core > 0 && std::strchr("!?.,:;)", word[core - 1])) --core;
+-    std::string w = word.substr(0, core);
+-    static const char* const kSecond[] = {"dın", "din", "dun", "dün", "tın", "tin", "tun", "tün", "ğın", "ğin", "ğun", "ğün"};
+-    for (const char* suffix : kSecond)
+-        if (endsWith(w, suffix)) {
+-            w.pop_back(); // the final "n"
+-            break;
+-        }
+-    return w + word.substr(core);
+-}
+-
+-std::string watchText(const okey::GameEvent& e) {
+-    using okey::EvType;
+-    if (e.type == EvType::MatchEnd) {
+-        if (e.text == "Maç bitti! Sen kazandın!") return "Maç bitti! Yapay zeka kazandı!";
+-        const std::string head = "Birinciliği ", tail = " ile paylaştın";
+-        const size_t at = e.text.find(head);
+-        if (endsWith(e.text, tail) && at != std::string::npos)
+-            return e.text.substr(0, at) + "Yapay zeka birinciliği " +
+-                   e.text.substr(at + head.size(), e.text.size() - tail.size() - at - head.size()) + " ile paylaştı";
+-        return e.text;
+-    }
+-    if (e.player != HUMAN || e.text.empty()) return e.text;
+-    switch (e.type) {
+-    case EvType::MatchStart:
+-    case EvType::HandStart: return e.text; // (player = the starter: nothing said to anyone)
+-    case EvType::TurnStart: return "Sıra yapay zekada";
+-    default: break;
+-    }
+-    std::istringstream in(e.text);
+-    std::string word, out;
+-    bool first = true;
+-    while (in >> word) {
+-        if (first) { // a sentence-initial verb goes lower case; a tile's name keeps its capital ("Kırmızı 5'i işledin")
+-            static const char* const kNames[] = {"Sarı", "Mavi", "Siyah", "Kırmızı", "Sahte"};
+-            if (std::none_of(std::begin(kNames), std::end(kNames), [&](const char* n) { return word.rfind(n, 0) == 0; }))
+-                word = lowerFirstTR(word);
+-        }
+-        out += (first ? "" : " ") + thirdPerson(word);
+-        first = false;
+-    }
+-    return "Yapay zeka " + out;
+-}
+-
+-// ---------------------------------------------------------------- settings file (interactive runs only)
+-std::string supportDir() {
+-#if defined(__APPLE__)
+-    const char* home = std::getenv("HOME");
+-    if (!home || !*home) return {};
+-    return std::string(home) + "/Library/Application Support/";
+-#else
+-    // XDG: $XDG_DATA_HOME, else ~/.local/share
+-    const char* xdg = std::getenv("XDG_DATA_HOME");
+-    if (xdg && *xdg == '/') return std::string(xdg) + "/";
+-    const char* home = std::getenv("HOME");
+-    if (!home || !*home) return {};
+-    return std::string(home) + "/.local/share/";
+-#endif
+-}
+-std::string statsPath() {
+-    const std::string dir = supportDir();
+-    return dir.empty() ? dir : dir + "SakliBahce/istatistik.txt";
+-}
+-std::string memoryPath() {
+-    const std::string dir = supportDir();
+-    return dir.empty() ? dir : dir + "SakliBahce/hafiza.txt";
+-}
+-std::string settingsPath() {
+-    const std::string dir = supportDir();
+-    return dir.empty() ? dir : dir + "SakliBahce/ayarlar.txt";
+-}
+-// The game was called "Kıraathane 101" before: its settings are read until the new file has been written once.
+-std::string legacySettingsPath() {
+-    const std::string dir = supportDir();
+-    return dir.empty() ? dir : dir + "Kiraathane101/ayarlar.txt";
+-}
+-
+-// One "key=value" line of the settings file (also --set on the command line).
+-void applySettingLine(ui::Settings& s, const std::string& k, const std::string& v) {
+-    const int iv = std::atoi(v.c_str());
+-    if (k == "el") s.numHands = std::clamp(iv, 1, 11);
+-    else if (k == "seviye") s.difficulty = std::clamp(iv, 0, 2);
+-    else if (k == "efekt") s.sfx = iv != 0;
+-    else if (k == "ortam") s.ambient = iv != 0;
+-    else if (k == "muzik") s.music = iv != 0;
+-    else if (k == "ipucu") s.hints = iv != 0;
+-    else if (k == "rehber") s.guide = iv != 0;
+-    else if (k == "vakit") s.dayTime = std::clamp(iv, 0, 4);
+-    else if (k == "mevsim") s.season = std::clamp(iv, 0, 4);
+-    else if (k == "konusma") s.voices = iv != 0;
+-    else if (k == "renkkorlugu") s.colorBlind = iv != 0;
+-    else if (k == "buyukyazi") s.bigText = iv != 0;
+-    else if (k == "rehbergoruldu") s.guideSeen = iv;
+-    else if (k == "katlamali") s.katlamali = iv != 0;
+-    else if (k == "yandanceza") s.yandanCeza = iv != 0;
+-    else if (k == "oyun") s.game = ui::gameAvailable((ui::GameKind)std::clamp(iv, 0, (int)ui::GameKind::Count - 1)) ? std::clamp(iv, 0, (int)ui::GameKind::Count - 1) : 0;
+-    else if (k == "okeypuan") s.okeyStart = std::clamp(iv, 1, 99);
+-    else if (k == "tavla") s.tavlaPoints = std::clamp(iv, 1, 15);
+-    else if (k == "tavlakatlama") s.tavlaDoubling = iv != 0;
+-    else if (k == "tavlakatmerli") s.tavlaKatmerli = iv != 0;
+-    else if (k == "tavlarakip") s.tavlaRakip = std::clamp(iv, 1, 3);
+-    else if (k == "okeyrenkli") s.okeyRenkli = iv != 0;
+-    else if (k == "batakkoz") s.batakKozKirilmadan = iv != 0;
+-    else if (k == "king12") s.king12 = iv != 0;
+-    else if (k == "batakesli") s.batakEsli = iv != 0;
+-    else if (k == "batakhedef") s.batakTarget = std::clamp(iv, 11, 151);
+-    else if (k == "pistihedef") s.pistiTarget = std::clamp(iv, 51, 301);
+-    else if (k == "pistimasa") s.pistiMode = std::clamp(iv, 0, 2);
+-    else if (k == "hiz") s.animSpeed = std::clamp((float)std::atof(v.c_str()), 0.5f, 2.f);
+-    else if (k == "isim" && !v.empty() && v.size() <= 64) s.playerName = v;
+-}
+-
+-void loadSettings(ui::Settings& s) {
+-    std::string path = settingsPath();
+-    if (path.empty()) return;
+-    if (!FileExists(path.c_str())) path = legacySettingsPath();
+-    if (!FileExists(path.c_str())) return;
+-    char* text = LoadFileText(path.c_str());
+-    if (!text) return;
+-    std::istringstream in(text);
+-    UnloadFileText(text);
+-    std::string line;
+-    while (std::getline(in, line)) {
+-        const size_t eq = line.find('=');
+-        if (eq == std::string::npos) continue;
+-        applySettingLine(s, trim(line.substr(0, eq)), trim(line.substr(eq + 1)));
+-    }
+-}
+-
+-std::string settingsText(const ui::Settings& s) {
+-    char buf[1100];
+-    std::snprintf(buf, sizeof buf,
+-                  "oyun=%d\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\n"
+-                  "katlamali=%d\nyandanceza=%d\nokeypuan=%d\ntavla=%d\nbatakesli=%d\nbatakhedef=%d\npistihedef=%d\n"
+-                  "pistimasa=%d\ntavlakatlama=%d\ntavlakatmerli=%d\ntavlarakip=%d\nokeyrenkli=%d\nbatakkoz=%d\nking12=%d\nrehber=%d\nrehbergoruldu=%d\nvakit=%d\nmevsim=%d\nkonusma=%d\nrenkkorlugu=%d\nbuyukyazi=%d\nhiz=%.2f\nisim=%s\n",
+-                  s.game, s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
+-                  s.katlamali ? 1 : 0, s.yandanCeza ? 1 : 0, s.okeyStart, s.tavlaPoints, s.batakEsli ? 1 : 0,
+-                  s.batakTarget, s.pistiTarget, s.pistiMode, s.tavlaDoubling ? 1 : 0, s.tavlaKatmerli ? 1 : 0, s.tavlaRakip, s.okeyRenkli ? 1 : 0,
+-                  s.batakKozKirilmadan ? 1 : 0, s.king12 ? 1 : 0, s.guide ? 1 : 0, s.guideSeen, s.dayTime, s.season,
+-                  s.voices ? 1 : 0, s.colorBlind ? 1 : 0, s.bigText ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
+-    return buf;
+-}
+-
+-bool ensureDirOf(const std::string& path) {
+-    const std::string dir = path.substr(0, path.find_last_of('/'));
+-    return DirectoryExists(dir.c_str()) || MakeDirectory(dir.c_str()) == 0;
+-}
+-
+-void saveSettings(const ui::Settings& s) {
+-    const std::string path = settingsPath();
+-    if (path.empty() || !ensureDirOf(path)) return;
+-    SaveFileText(path.c_str(), ("# SaklıBahçe ayarları\n" + settingsText(s)).c_str());
+-}
+-
+-// ---------------------------------------------------------------- the match left unfinished (kayit.txt)
+-// The game, the rules it was started with (the settings lines), the seed and every action since; resuming starts the
+-// same match again and replays them.
+-std::string savePath() {
+-    const std::string dir = supportDir();
+-    return dir.empty() ? dir : dir + "SakliBahce/kayit.txt";
+-}
+-
+-struct SavedMatch {
+-    int game = -1;
+-    uint64_t seed = 0;
+-    bool aiTouched = false;
+-    std::string label;                 // "101 · 3. el" for the title
+-    std::string date, result;          // tekrarlar: when it was played, how it ended
+-    std::vector<std::string> settings; // "key=value"
+-    std::vector<std::string> actions;  // the engine's own lines
+-};
+-
+-std::string replayDir() {
+-    const std::string dir = supportDir();
+-    return dir.empty() ? dir : dir + "SakliBahce/tekrarlar";
+-}
+-
+-bool readSave(SavedMatch& sv, const std::string& from = std::string()) {
+-    const std::string path = from.empty() ? savePath() : from;
+-    if (path.empty() || !FileExists(path.c_str())) return false;
+-    char* text = LoadFileText(path.c_str());
+-    if (!text) return false;
+-    std::istringstream in(text);
+-    UnloadFileText(text);
+-    std::string line;
+-    while (std::getline(in, line)) {
+-        if (line.size() < 2 || line[1] != ' ') continue;
+-        const std::string v = line.substr(2);
+-        switch (line[0]) {
+-        case 'g': sv.game = std::atoi(v.c_str()); break;
+-        case 's': sv.seed = std::strtoull(v.c_str(), nullptr, 10); break;
+-        case 'y': sv.aiTouched = v == "1"; break;
+-        case 'l': sv.label = v; break;
+-        case 'd': sv.date = v; break;
+-        case 'r': sv.result = v; break;
+-        case 'k': sv.settings.push_back(v); break;
+-        case 'a': sv.actions.push_back(v); break;
+-        default: break;
+-        }
+-    }
+-    return sv.game >= 0 && sv.game < (int)ui::GameKind::Count && ui::gameAvailable((ui::GameKind)sv.game);
+-}
+-
+-// ---------------------------------------------------------------- frame statistics
+-struct FrameStats {
+-    std::vector<float> frameMs, cpuMs;
+-    std::vector<int> particles;
+-    void add(float frame, float cpu, int parts) {
+-        frameMs.push_back(frame);
+-        cpuMs.push_back(cpu);
+-        particles.push_back(parts);
+-    }
+-    static float pct(std::vector<float> v, float p) {
+-        if (v.empty()) return 0.f;
+-        std::sort(v.begin(), v.end());
+-        return v[std::min(v.size() - 1, (size_t)(p * (float)(v.size() - 1) + 0.5f))];
+-    }
+-    static float avg(const std::vector<float>& v) {
+-        double s = 0;
+-        for (float x : v) s += x;
+-        return v.empty() ? 0.f : (float)(s / (double)v.size());
+-    }
+-    void print() const {
+-        if (frameMs.empty()) return;
+-        int pmax = 0;
+-        double psum = 0;
+-        for (int p : particles) {
+-            pmax = std::max(pmax, p);
+-            psum += p;
+-        }
+-        int slow = 0;
+-        for (float f : frameMs)
+-            if (f > 25.f) ++slow;
+-        std::printf("[perf] %zu frames | frame avg %.2f ms, p50 %.2f, p95 %.2f, p99 %.2f, max %.2f, >25 ms: %d | "
+-                    "cpu avg %.2f ms, p99 %.2f, max %.2f | particles avg %.0f, max %d\n",
+-                    frameMs.size(), (double)avg(frameMs), (double)pct(frameMs, 0.5f), (double)pct(frameMs, 0.95f),
+-                    (double)pct(frameMs, 0.99f), (double)pct(frameMs, 1.f), slow, (double)avg(cpuMs),
+-                    (double)pct(cpuMs, 0.99f), (double)pct(cpuMs, 1.f), psum / (double)particles.size(), pmax);
+-    }
+-};
+-
+-// ================================================================ the application
+-class App {
+-public:
+-    explicit App(const Options& o) : opt_(o) {}
+-    int run();
+-
+-private:
+-    enum class Flow { Title, Playing, HandOver, Summary, MatchOver };
+-    enum class SnapState { Title, Game, Summary, MatchOver, Rules, Settings, Games, Stats };
+-
+-    struct Think {                 // the current bot turn's pacing and (possibly asynchronous) decision
+-        int seat = -1, turn = -1, actions = 0;
+-        float wait = 0.f;
+-        bool pending = false, haveReady = false;
+-        okey::BotAction ready;
+-        std::future<okey::BotAction> fut;
+-    };
+-    struct DelayedEvent {
+-        okey::GameEvent e;
+-        float t = 0.f;
+-    };
+-
+-    // setup
+-    bool init();
+-    void initWindow();
+-    void shutdown();
+-    // frame
+-    void tick(float dt);
+-    void updateWorld(float dt, float simDt, const Camera3D& cam, bool blocked);
+-    void submitWorld();
+-    void drawOverlays(bool hud);
+-    // frame statistics are kept (and printed at exit) only for measured runs; a normal session would grow them forever
+-    bool reportStats() const { return opt_.perf || opt_.autoplay || opt_.aiChaos || opt_.maxFrames > 0; }
+-    // runs that play by themselves never read or write the player's settings file
+-    bool unattended() const { return snapshot_ || opt_.autoplay || opt_.aiChaos; }
+-    void recordStats(float cpuMs);
+-    bool snapshotDone();
+-    bool snapshotRenderNow() const;
+-    bool exportSnapshot();
+-    void saveWindowShot();
+-    // flow
+-    void handleScreenAction(ui::ScreenAction a);
+-    void startMatch();
+-    void startNextHand();
+-    void startOtherMatch(ui::GameKind kind);
+-    void toTitle();
+-    void setTitleMode(bool on);
+-    // Which table we sit at: 0 our okey table, 1 the tavla table (with `seat` the regular across). The camera, the
+-    // opponent, the glasses and the key light move there behind a short fade.
+-    void setLocation(int loc, int seat);
+-    int location_ = 0, locationSeat_ = 0;
+-    float fade_ = 0.f; // 1 black .. 0 clear (a table change)
+-    void applySettings();
+-    void releaseOverrides();
+-    void persistSettings();
+-    void updateFlow(float simDt);
+-    bool recording() const;
+-    void saveMatch();
+-    std::string matchText(const std::string& label, const std::vector<std::string>& actions) const;
+-    void archiveMatch(const std::string& result);
+-    // "Hatalarım": Kurt replays a finished match on a worker thread (analysis::analyzeMatch) and names the player's
+-    // most expensive mistakes; the screens get them when it is done (pollAnalysis, every frame).
+-    void startAnalysis(int game, const ui::Settings& rules, uint64_t seed, std::vector<std::string> actions,
+-                       const std::string& title);
+-    void analyzeFinishedMatch();
+-    void analyzeReplay(int index);
+-    void stopAnalysis();
+-    void pollAnalysis();
+-    std::vector<std::string> listReplays() const;
+-    void refreshReplays();
+-    void startReplay(int index);
+-    void updateReplay(float simDt);
+-    void drawReplayBadge();
+-    void crowdAtHandEnd();             // the room reacts to a big finish, a mars, a match lost at the wire
+-    void drawCrowdShouts();
+-    void resumeSaved();
+-    void deleteSave();
+-    void refreshResumable();
+-    void maybeShowGuide(ui::GameKind kind);
+-    void updateFirstTurnTip();
+-    void showOkeyHint();
+-    void recordOkeyHand();
+-    void recordOtherHand();
+-    void noteRankUp();
+-    void updateAutoScreens(float simDt);
+-    void pressBetweenHands();
+-    void pumpEvents();
+-    void routeAudio(const okey::GameEvent& e);
+-    void updateDelayedAudio(float simDt);
+-    void updateScoreboard();
+-    std::array<std::string, 4> names();
+-    float animSpeed() { return std::max(0.25f, screens_.settings().animSpeed); }
+-    // the Yapay Zeka mode: an AI plays the human's seat (as --autoplay's bot does for a whole run)
+-    bool aiSeat() const { return opt_.autoplay || aiMode_; }
+-    void setAiMode(bool on);
+-    void updateChaos(float simDt, bool beforeTable);
+-    // bots
+-    bool isBotSeat(int s) const { return s != HUMAN || aiSeat(); }
+-    void updateBots(float simDt);
+-    void launchThink(int seat);
+-    bool thinkReady();
+-    okey::BotAction takeThink();
+-    void cancelThink();
+-    void applyBot(int seat, const okey::BotAction& a);
+-    void forceLegalMove(int seat);
+-
+-    Options opt_;
+-    bool snapshot_ = false;
+-    SnapState snapState_ = SnapState::Game;
+-    bool audioOn_ = false, audioDevice_ = false;
+-    bool quit_ = false;
+-    int exitCode_ = 0;
+-
+-    r3d::Renderer renderer_;
+-    r3d::Room room_;
+-    r3d::Characters characters_;
+-    r3d::Table3D table_;
+-    r3d::PlayerCamera pcam_;
+-    ui::Audio audio_;
+-    ui::Screens screens_;
+-    okey::Game game_;
+-    std::array<std::unique_ptr<okey::Bot>, 4> bots_;
+-    // the other games (tavla, the card games): the active one, or null while an okey game is played
+-    std::unique_ptr<TableGame> other_;
+-    ui::GameKind otherKind_ = ui::GameKind::Yuzbir;
+-    bool otherInGame() const { return other_ != nullptr && flow_ != Flow::Title; }
+-    RenderTexture2D rt_{};
+-
+-    Flow flow_ = Flow::Title;
+-    // maç tekrarı: a saved match played back action by action
+-    bool replayMode_ = false, replayPaused_ = false;
+-    float replaySpeed_ = 1.f, replayWait_ = 0.f;
+-    std::vector<std::string> replayActions_;
+-    size_t replayPos_ = 0;
+-    std::vector<std::string> replayFiles_;
+-    struct Shout {
+-        std::string text;
+-        Vector3 at;
+-        float t = 0.f;
+-    };
+-    std::vector<Shout> shouts_;        // the other tables' shouts ("Vay be!", "Sağ ol!"), drawn where they came from
+-    std::thread anaThread_;
+-    std::atomic<bool> anaCancel_{false}, anaDone_{false};
+-    std::vector<analysis::Mistake> anaResult_;
+-    std::string anaTitle_;
+-    std::optional<uint64_t> forcedSeed_;  // resume: the saved match's seed
+-    bool resuming_ = false;
+-    uint64_t matchSeed_ = 0;              // the match in play: its seed, game and settings (for the save)
+-    int matchGame_ = 0;
+-    ui::Settings matchSettings_;
+-    std::string firstTurnTip_;            // rehber: said when the player's first turn comes
+-    bool hintShown_ = false;              // --hint-demo
+-    std::unique_ptr<okey::Bot> hintBot_; // İpucu: a Kurt asked what it would do in the player's seat
+-    ui::Memory memory_;            // what the regulars remember of the player (hafiza.txt)
+-    ui::StatsBook record_;         // the player's record (İstatistik screen)
+-    bool matchAiTouched_ = false;  // the Yapay Zeka mode played in this match (it is not recorded)
+-    bool aiMode_ = false;          // Yapay Zeka mode (off at every launch; Title "Yapay Zekayı İzle", --ai)
+-    int aiSwitches_ = 0;
+-    double aiBanterAt_ = -1e9;     // when the regulars last remarked on the mode (simClock_)
+-    double simClock_ = 0.0;        // game time since launch (--speed included)
+-    uint64_t baseSeed_ = 0;
+-    int matchCount_ = 0, matchesDone_ = 0;
+-    okey::Rng paceRng_;
+-    Think think_;
+-    std::vector<DelayedEvent> delayed_;
+-    float handOverT_ = 0.f, screenT_ = 0.f;  // screenT_: how long the current screen has been up (auto-advance)
+-    ui::ScreenId autoScreen_ = ui::ScreenId::Title;
+-    bool lookDrag_ = false;
+-    bool settingsDirty_ = false;
+-    // --hands, --level and --no-audio shape this session only. The settings screen shows the values in force, but
+-    // the file keeps the loaded ones for every setting the player has not moved away from its command-line value.
+-    struct Overridden {
+-        bool hands = false, level = false, sfx = false, ambient = false, music = false, game = false;
+-    } overridden_;
+-    ui::Settings loadedSettings_;  // as read from disk (or the defaults), before the command line
+-    ui::Settings cliSettings_;     // the session's starting values: loadedSettings_ plus the command line
+-    Camera3D cam_{};        // the human's camera this frame
+-    Camera3D renderCam_{};  // what is rendered (== cam_ except for snapshot views)
+-
+-    // bookkeeping / verification
+-    long frame_ = 0;
+-    long snapReachedAt_ = -1;
+-    int handsPlayed_ = 0, rejected_ = 0, fallbackRejected_ = 0, forced_ = 0;
+-    bool matchOverReached_ = false;
+-    double lastFrameT_ = 0.0;
+-    FrameStats stats_;
+-
+-    // --ai-chaos: flips the Yapay Zeka mode at random moments and stands in for the player while it is off
+-    struct Chaos {
+-        okey::Rng rng;
+-        std::unique_ptr<okey::Bot> standIn;  // plays the seat (through the same Game API as the table) while off
+-        float nextFlip = 1.f;                // seconds until the next flip of the mode
+-        float nextPause = 8.f;               // ... until the pause menu is opened
+-        float pauseLeft = -1.f;              // > 0: the pause menu is up
+-        bool pauseFlips = false;             // leave the pause menu through "Yapay Zeka Oynasın / Kontrolü Geri Al"
+-        float actIn = 0.f;                   // the stand-in's reaction time before its next move
+-        float pressIn = -1.f;                // ... before it presses a between-hands button
+-        float titleIn = -1.f;                // ... before it starts a match from the title screen
+-        int flips = 0, pauseFlipCount = 0, pauses = 0, moves = 0, movesRejected = 0, presses = 0, titleStarts = 0;
+-        uint64_t sig = 0;                    // progress watchdog: anything that should move keeps moving
+-        double sigAt = 0.0, worstStall = 0.0;
+-    } chaos_;
+-};
+-
+ // ---------------------------------------------------------------- setup
+ void App::initWindow() {
+     SetTraceLogLevel(LOG_WARNING);
+@@ -961,11 +407,6 @@ int App::run() {
+     return exitCode_;
+ }
+ 
+-void App::recordStats(float cpuMs) {
+-    const float frameMs = GetFrameTime() * 1000.f;
+-    stats_.add(frameMs, cpuMs, renderer_.particleCount());
+-}
+-
+ void App::tick(float dt) {
+     fade_ = std::max(0.f, fade_ - dt / 0.7f);
+     const float simDt = dt * std::max(0.05f, opt_.speed);
+@@ -1108,1409 +549,7 @@ void App::drawOverlays(bool hud) {
+     }
+ }
+ 
+-// ---------------------------------------------------------------- snapshots
+-// --render-last N: a slow (software) GL only draws the frames that lead up to the picture.
+-bool App::snapshotRenderNow() const {
+-    if (opt_.renderLast < 0) return true;
+-    switch (snapState_) {
+-    case SnapState::Summary:
+-    case SnapState::MatchOver: return snapReachedAt_ >= 0 && frame_ - snapReachedAt_ + opt_.renderLast >= opt_.frames;
+-    default: return frame_ + opt_.renderLast >= opt_.frames;
+-    }
+-}
+-
+-bool App::snapshotDone() {
+-    switch (snapState_) {
+-    case SnapState::Summary:
+-    case SnapState::MatchOver: {
+-        const ui::ScreenId want = snapState_ == SnapState::Summary ? ui::ScreenId::HandSummary : ui::ScreenId::MatchOver;
+-        if (snapReachedAt_ < 0 && screens_.current() == want) snapReachedAt_ = frame_;
+-        return snapReachedAt_ >= 0 && frame_ - snapReachedAt_ >= opt_.frames;
+-    }
+-    default: return frame_ >= opt_.frames;
+-    }
+-}
+-
+-bool App::exportSnapshot() {
+-    Image img = LoadImageFromTexture(rt_.texture);
+-    ImageFlipVertical(&img);
+-    // translucent 2D overlays blended into the render target leave alpha < 1 behind: make it opaque
+-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
+-    const bool ok = ExportImage(img, opt_.snapshot.c_str());
+-    UnloadImage(img);
+-    std::printf("[snapshot] %s %s (state %s, view %s, frame %ld, particles %d)\n", ok ? "wrote" : "FAILED to write",
+-                opt_.snapshot.c_str(), opt_.state.empty() ? "game" : opt_.state.c_str(), opt_.view.c_str(), frame_, renderer_.particleCount());
+-    return ok;
+-}
+-
+-// The real window's back buffer (MSAA resolved, HiDPI size), read before the swap.
+-void App::saveWindowShot() {
+-    Image img = LoadImageFromScreen();
+-    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
+-    const bool ok = ExportImage(img, opt_.screenshot.c_str());
+-    std::printf("[screenshot] %s %s (%dx%d pixels, window %dx%d points)\n", ok ? "wrote" : "FAILED to write",
+-                opt_.screenshot.c_str(), img.width, img.height, GetScreenWidth(), GetScreenHeight());
+-    UnloadImage(img);
+-}
+-
+-// ---------------------------------------------------------------- flow
+-void App::setLocation(int loc, int seat) {
+-    if (loc != 1) seat = 0;
+-    if (loc == location_ && seat == locationSeat_) return;
+-    location_ = loc;
+-    locationSeat_ = seat;
+-    room_.setTavlaFocus(loc == 1);
+-    characters_.setTavlaTable(loc == 1, seat);
+-    if (loc == 1) pcam_.setTavlaSeat();
+-    else pcam_.setOkeySeat();
+-    pcam_.setRecentreKey(loc != 1); // (tavla: R throws the dice)
+-    if (!snapshot_) fade_ = 1.f;
+-}
+-
+-void App::setTitleMode(bool on) {
+-    room_.setTitleMode(on);
+-    characters_.setTitleMode(on);
+-    pcam_.setTitleMode(on);
+-    if (!on) pcam_.reset();
+-}
+-
+-void App::handleScreenAction(ui::ScreenAction a) {
+-    using A = ui::ScreenAction;
+-    switch (a) {
+-    case A::None:
+-    case A::Resume: break;
+-    case A::StartMatch:
+-        if (flow_ == Flow::Title) setAiMode(false); // "Oyna": you play ("Yeni Oyun" keeps the mode as it is)
+-        startMatch();
+-        break;
+-    case A::StartAiMatch:
+-        setAiMode(true);
+-        startMatch();
+-        break;
+-    case A::ToggleAiMode: setAiMode(!aiMode_); break;
+-    case A::NextHand: startNextHand(); break;
+-    case A::ShowMatchResult: flow_ = Flow::MatchOver; break;
+-    case A::ResumeSaved: resumeSaved(); break;
+-    case A::WatchReplay: startReplay(screens_.chosenReplay()); break;
+-    case A::AnalyzeReplay: analyzeReplay(screens_.chosenReplay()); break;
+-    case A::ToTitle: toTitle(); break;
+-    case A::Quit: quit_ = true; break;
+-    case A::SettingsChanged:
+-        releaseOverrides();
+-        applySettings();
+-        settingsDirty_ = true;
+-        break;
+-    }
+-}
+-
+-void App::startMatch() {
+-    cancelThink();
+-    const ui::Settings& st = screens_.settings();
+-    okey::RulesConfig cfg;
+-    const ui::GameKind kind = (ui::GameKind)std::clamp(st.game, 0, (int)ui::GameKind::Count - 1);
+-    if (!ui::isOkeyFamily(kind)) {
+-        startOtherMatch(kind);
+-        return;
+-    }
+-    if (other_) {
+-        other_->shutdown();
+-        other_.reset();
+-    }
+-    setLocation(0, 0);
+-    table_.setFurnitureOnly(false);
+-    screens_.clearSheet();
+-    cfg.variant = kind == ui::GameKind::Okey ? okey::Variant::Okey : okey::Variant::Yuzbir;
+-    cfg.teams = kind == ui::GameKind::YuzbirEsli;
+-    cfg.okeyStartPoints = std::clamp(st.okeyStart, 1, 99);
+-    cfg.okeyColorDouble = st.okeyRenkli;
+-    cfg.numHands = std::clamp(st.numHands, 1, 11);
+-    cfg.katlamali = st.katlamali || opt_.katlamali;
+-    cfg.leftOpenPenalty = st.yandanCeza;
+-    game_.setRules(cfg);
+-    const std::array<std::string, 4> nm = names();
+-    for (int s = 0; s < 4; ++s) game_.setPlayer(s, nm[s], s == HUMAN);
+-    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
+-                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
+-                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
+-    matchSeed_ = matchSeed;
+-    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
+-    screens_.setAnalysis(false, true, "", {});
+-    matchGame_ = (int)kind;
+-    matchSettings_ = st;
+-    if (!resuming_) {
+-        deleteSave();
+-        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
+-    }
+-    ++matchCount_;
+-    for (int s = 0; s < 4; ++s) {
+-        // the human's seat always has one too, ready for the Yapay Zeka mode at any moment: a Kurt (--autoplay: an Usta)
+-        const okey::BotLevel lvl = s != HUMAN     ? (okey::BotLevel)std::clamp(st.difficulty, 0, 2)
+-                                   : opt_.autoplay ? okey::BotLevel::Normal
+-                                                   : okey::BotLevel::Hard;
+-        bots_[s] = std::make_unique<okey::Bot>(lvl, mix64(matchSeed * 4u + (uint64_t)s + 0xB07ull));
+-        // the regulars' own ways: Kel Mahmut bold, Emekli Nuri careful (the AI in the player's seat stays neutral)
+-        bots_[s]->setStyle(s == HUMAN ? okey::BotStyle{} : okey::BotStyle::forSeat(s));
+-    }
+-    characters_.setNames(nm);
+-    setTitleMode(false);
+-    table_.setAnimationSpeed(st.animSpeed);
+-    characters_.setAnimationSpeed(st.animSpeed);
+-    table_.setHints(st.hints);
+-    delayed_.clear();
+-    think_ = Think{};
+-    handOverT_ = screenT_ = 0.f;
+-    flow_ = Flow::Playing;
+-    matchAiTouched_ = aiMode_;
+-    game_.startMatch(matchSeed);
+-    pumpEvents();
+-    if (!unattended() && !resuming_ && !replayMode_)
+-        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
+-    maybeShowGuide(kind);
+-    if (aiMode_ && !snapshot_)
+-        table_.toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
+-    if (opt_.autoplay || opt_.aiChaos)
+-        std::printf("[%s] match %d (%s): seed %llu, %d hands (frame %ld)%s\n", opt_.autoplay ? "autoplay" : "aichaos",
+-                    matchCount_, ui::gameInfo(kind).name, (unsigned long long)matchSeed, cfg.numHands, frame_,
+-                    aiMode_ ? ", Yapay Zeka on" : "");
+-}
+-
+-// A match of one of the other games (tavla, the card games): the table shows only its furniture, the game brings
+-// its own pieces.
+-void App::startOtherMatch(ui::GameKind kind) {
+-    const ui::Settings& st = screens_.settings();
+-    if (!other_ || otherKind_ != kind) {
+-        if (other_) other_->shutdown();
+-        other_ = makeTableGame(kind);
+-        otherKind_ = kind;
+-        if (!other_) {
+-            std::fprintf(stderr, "Bu oyun henüz hazır değil.\n");
+-            flow_ = Flow::Title;
+-            return;
+-        }
+-        TableContext ctx;
+-        ctx.renderer = &renderer_;
+-        ctx.characters = &characters_;
+-        ctx.sfx = [this](ui::Sfx s) {
+-            if (audioOn_) audio_.play(s);
+-        };
+-        if (!other_->init(ctx)) {
+-            std::fprintf(stderr, "Oyun masası kurulamadı.\n");
+-            other_.reset();
+-            flow_ = Flow::Title;
+-            return;
+-        }
+-    }
+-    for (auto& b : bots_) b.reset();
+-    game_ = okey::Game(game_.rules()); // the okey game rests (not started)
+-    table_.setFurnitureOnly(true);
+-    screens_.clearSheet();
+-    const std::array<std::string, 4> nm = names();
+-    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
+-                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
+-                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
+-    matchSeed_ = matchSeed;
+-    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
+-    screens_.setAnalysis(false, true, "", {});
+-    matchGame_ = (int)kind;
+-    matchSettings_ = st;
+-    if (!resuming_) {
+-        deleteSave();
+-        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
+-    }
+-    ++matchCount_;
+-    characters_.setNames(nm);
+-    setTitleMode(false);
+-    other_->setLevel(std::clamp(st.difficulty, 0, 2));
+-    other_->setAnimationSpeed(st.animSpeed);
+-    other_->setHints(st.hints);
+-    characters_.setAnimationSpeed(st.animSpeed);
+-    delayed_.clear();
+-    think_ = Think{};
+-    handOverT_ = screenT_ = 0.f;
+-    flow_ = Flow::Playing;
+-    matchAiTouched_ = aiMode_;
+-    other_->startMatch(st, nm, matchSeed);
+-    {
+-        const std::vector<int> seats = other_->seats();
+-        setLocation(other_->location(), seats.size() > 1 ? seats[1] : 0);
+-    }
+-    if (!unattended() && !resuming_ && !replayMode_)
+-        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
+-    maybeShowGuide(kind);
+-    if (aiMode_ && !snapshot_) other_->toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
+-    if (opt_.autoplay)
+-        std::printf("[autoplay] match %d (%s): seed %llu (frame %ld)\n", matchCount_, ui::gameInfo(kind).name,
+-                    (unsigned long long)matchSeed, frame_);
+-}
+-
+-void App::startNextHand() {
+-    cancelThink();
+-    if (otherInGame()) {
+-        if (!other_->handOver() || other_->matchOver()) return;
+-        handOverT_ = 0.f;
+-        flow_ = Flow::Playing;
+-        other_->startNextHand();
+-        return;
+-    }
+-    if (game_.handState() != okey::HandState::HandOver) return;
+-    think_ = Think{};
+-    handOverT_ = 0.f;
+-    flow_ = Flow::Playing;
+-    game_.startNextHand();
+-    pumpEvents();
+-}
+-
+-void App::toTitle() {
+-    saveMatch();
+-    if (replayMode_ && other_) other_->setReplayMode(false);
+-    replayMode_ = false;
+-    cancelThink();
+-    if (other_) {
+-        other_->shutdown();
+-        other_.reset();
+-    }
+-    table_.setFurnitureOnly(false);
+-    screens_.clearSheet();
+-    think_ = Think{};
+-    delayed_.clear();
+-    const okey::RulesConfig cfg = game_.rules();
+-    game_ = okey::Game(cfg);  // not started: the tiles rest in a heap on the table
+-    for (auto& b : bots_) b.reset();
+-    flow_ = Flow::Title;
+-    setLocation(0, 0);
+-    setTitleMode(true);
+-    lookDrag_ = false;
+-}
+-
+-void App::applySettings() {
+-    const ui::Settings& st = screens_.settings();
+-    if (audioOn_) {
+-        audio_.setSfxEnabled(st.sfx);
+-        audio_.setAmbientEnabled(st.ambient);
+-        audio_.setMusicEnabled(st.music);
+-        audio_.setVoicesEnabled(st.voices);
+-    }
+-    table_.setAnimationSpeed(st.animSpeed);
+-    characters_.setAnimationSpeed(st.animSpeed);
+-    table_.setHints(st.hints);
+-    ui::setHudTextScale(st.bigText ? 1.25f : 1.f);
+-    ui::tilegfx::setColorBlind(st.colorBlind);  // repainted on the next refresh()
+-    ui::cardgfx::setFourColour(st.colorBlind);
+-    if (flow_ == Flow::Title) {
+-        characters_.setNames(names());
+-        return;
+-    }
+-    cancelThink();  // nothing may touch a bot while it is thinking on the worker thread
+-    for (int s = 1; s < 4; ++s)
+-        if (bots_[s]) bots_[s]->setLevel((okey::BotLevel)std::clamp(st.difficulty, 0, 2));
+-    if (other_) {
+-        other_->setLevel(std::clamp(st.difficulty, 0, 2));
+-        other_->setAnimationSpeed(st.animSpeed);
+-        other_->setHints(st.hints);
+-    }
+-    if (game_.player(HUMAN).name != st.playerName) {
+-        game_.setPlayer(HUMAN, st.playerName, true);
+-        characters_.setNames(names());
+-    }
+-}
+-
+-// A setting the player moves away from its command-line value is theirs from then on, and is saved as it stands
+-// (even if they later move it back).
+-void App::releaseOverrides() {
+-    const ui::Settings& st = screens_.settings();
+-    Overridden& o = overridden_;
+-    o.hands = o.hands && st.numHands == cliSettings_.numHands;
+-    o.level = o.level && st.difficulty == cliSettings_.difficulty;
+-    o.sfx = o.sfx && st.sfx == cliSettings_.sfx;
+-    o.ambient = o.ambient && st.ambient == cliSettings_.ambient;
+-    o.music = o.music && st.music == cliSettings_.music;
+-    o.game = o.game && st.game == cliSettings_.game;
+-}
+-
+-// Saves the settings file, keeping the loaded value of every setting that is still only a command-line override:
+-// a `--no-audio` or `--hands 3` run must not become the player's saved preference.
+-void App::persistSettings() {
+-    releaseOverrides();
+-    ui::Settings s = screens_.settings();
+-    if (overridden_.hands) s.numHands = loadedSettings_.numHands;
+-    if (overridden_.level) s.difficulty = loadedSettings_.difficulty;
+-    if (overridden_.sfx) s.sfx = loadedSettings_.sfx;
+-    if (overridden_.ambient) s.ambient = loadedSettings_.ambient;
+-    if (overridden_.music) s.music = loadedSettings_.music;
+-    if (overridden_.game) s.game = loadedSettings_.game;
+-    saveSettings(s);
+-}
+-
+-// ---------------------------------------------------------------- the player's record
+-// Only matches the player played himself go into the book: no unattended runs, and not a match in which the Yapay
+-// Zeka mode took the seat at any moment.
+-bool App::recording() const { return !unattended() && !matchAiTouched_ && !replayMode_; }
+-
+-void App::recordOkeyHand() {
+-    if (!recording()) return;
+-    const ui::Settings& st = screens_.settings();
+-    const int kind = std::clamp(st.game, 0, (int)ui::GameKind::Count - 1);
+-    const okey::HandResult& r = game_.lastHandResult();
+-    const bool won = r.winner == HUMAN || (game_.teams() && r.winner == okey::Game::partnerOf(HUMAN));
+-    record_.hand(kind, won, !game_.classic(), r.score[HUMAN], true);
+-    if (r.winner == HUMAN && r.finishedWithJoker)
+-        for (int s = 1; s <= 3; ++s) memory_.noteMoment(ui::MomentKind::OkeyFinish, 0, s, kind);
+-    if (game_.handState() == okey::HandState::MatchOver) {
+-        const int lead = game_.leaderSeat();
+-        record_.match(kind, st.difficulty, lead == HUMAN || (game_.teams() && lead == okey::Game::partnerOf(HUMAN)));
+-        std::array<int, 4> tot{};
+-        for (int s = 0; s < 4; ++s) tot[(size_t)s] = game_.player(s).totalScore;
+-        memory_.recordMatch(ui::MatchRecord::fromScores(kind, tot, 0xFu, !game_.classic(), game_.teams()));
+-        noteRankUp();
+-    }
+-    record_.save(statsPath());
+-    memory_.save(memoryPath());
+-}
+-
+-void App::recordOtherHand() {
+-    if (!recording() || !other_) return;
+-    const ui::SheetModel sh = other_->sheet(false);
+-    int score = 0;
+-    const bool hasScore = other_->humanHandScore(score);
+-    record_.hand((int)otherKind_, sh.starCol >= 0 && sh.starCol == sh.humanCol, hasScore, score, false);
+-    if (otherKind_ == ui::GameKind::Tavla && sh.taglineRed && sh.starCol >= 0) // a mars, by or to the player
+-        memory_.noteMoment(ui::MomentKind::Mars, sh.starCol == 0 ? 0 : 2, sh.starCol == 0 ? 2 : 0, (int)otherKind_);
+-    if (other_->matchOver()) {
+-        record_.match((int)otherKind_, screens_.settings().difficulty, sh.humanWon);
+-        memory_.recordMatch(ui::MatchRecord::fromStandings((int)otherKind_, other_->seats(), (int)sh.columns.size(),
+-                                                           sh.ranking, sh.rank, sh.totals));
+-        noteRankUp();
+-    }
+-    record_.save(statsPath());
+-    memory_.save(memoryPath());
+-}
+-
+-// A regular congratulates the player when the match just finished lifted his rank.
+-void App::noteRankUp() {
+-    const ui::Rank& rk = ui::StatsBook::rankFor(record_.rankPoints());
+-    if (memory_.noteRank(rk.points)) characters_.banter().rankUp(rk.name);
+-}
+-
+-// ---------------------------------------------------------------- save / resume
+-void App::refreshResumable() {
+-    SavedMatch sv;
+-    const bool ok = !unattended() && readSave(sv);
+-    screens_.setResumable(ok, ok ? sv.label : std::string());
+-}
+-
+-void App::deleteSave() {
+-    const std::string path = savePath();
+-    if (!unattended() && !path.empty() && FileExists(path.c_str())) std::remove(path.c_str());
+-    refreshResumable();
+-}
+-
+-// Writes the match in play (called when the player leaves it: to the title, closing the window, between hands).
+-void App::saveMatch() {
+-    if (unattended() || flow_ == Flow::Title || resuming_ || replayMode_) return;
+-    const bool over = otherInGame() ? other_->matchOver() : game_.handState() == okey::HandState::MatchOver;
+-    if (over || (!otherInGame() && game_.handState() == okey::HandState::NotStarted)) {
+-        deleteSave();
+-        return;
+-    }
+-    std::vector<std::string> actions;
+-    std::string label = ui::gameInfo((ui::GameKind)matchGame_).name;
+-    if (otherInGame()) {
+-        if (!other_->saveState(actions)) return;
+-        label += "  \xC2\xB7  " + other_->scoreTitle();
+-    } else {
+-        for (const okey::LoggedAction& a : game_.actionLog()) actions.push_back(a.encode());
+-        label += "  \xC2\xB7  " + std::to_string(game_.handIndex() + 1) + ". el";
+-    }
+-    const std::string path = savePath();
+-    if (path.empty() || !ensureDirOf(path)) return;
+-    SaveFileText(path.c_str(), ("# SaklıBahçe: yarım kalan maç\n" + matchText(label, actions)).c_str());
+-    refreshResumable();
+-}
+-
+-// The match in play as save / replay text: game, seed, settings and the engine's action lines.
+-std::string App::matchText(const std::string& label, const std::vector<std::string>& actions) const {
+-    std::string out = "g " + std::to_string(matchGame_) + "\ns " + std::to_string(matchSeed_) + "\ny " +
+-                      (matchAiTouched_ ? "1" : "0") + "\nl " + label + "\n";
+-    std::istringstream st(settingsText(matchSettings_));
+-    std::string line;
+-    while (std::getline(st, line)) out += "k " + line + "\n";
+-    for (const std::string& a : actions) out += "a " + a + "\n";
+-    return out;
+-}
+-
+-// ---------------------------------------------------------------- tekrarlar (finished matches, the last 20)
+-void App::archiveMatch(const std::string& result) {
+-    if (unattended() || replayMode_) return;
+-    std::vector<std::string> actions;
+-    if (otherInGame()) {
+-        if (!other_->saveState(actions)) return;
+-    } else {
+-        for (const okey::LoggedAction& a : game_.actionLog()) actions.push_back(a.encode());
+-    }
+-    const std::string dir = replayDir();
+-    if (dir.empty() || (!DirectoryExists(dir.c_str()) && (!ensureDirOf(dir) || MakeDirectory(dir.c_str()) != 0))) return;
+-    const std::time_t now = std::time(nullptr);
+-    char stamp[32], when[48];
+-    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&now));
+-    std::strftime(when, sizeof when, "%d.%m.%Y %H:%M", std::localtime(&now));
+-    const std::string text = "# SaklıBahçe: maç tekrarı\nd " + std::string(when) + "\nr " + result + "\n" +
+-                             matchText(ui::gameInfo((ui::GameKind)matchGame_).name, actions);
+-    SaveFileText((dir + "/" + stamp + ".txt").c_str(), text.c_str());
+-    std::vector<std::string> files = listReplays(); // keep the newest 20
+-    for (size_t i = 20; i < files.size(); ++i) std::remove(files[i].c_str());
+-    refreshReplays();
+-}
+-
+-// ---------------------------------------------------------------- hatalarım
+-namespace {
+-std::string costText(const analysis::Mistake& m) {
+-    char buf[32];
+-    if (m.cost >= 9.95) std::snprintf(buf, sizeof buf, "%.0f", m.cost);
+-    else std::snprintf(buf, sizeof buf, "%.1f", m.cost);
+-    std::string n = buf;
+-    for (char& c : n)
+-        if (c == '.') c = ',';
+-    return "-" + n + (m.unit == "%" ? std::string(" puan şans") : " " + m.unit);
+-}
+-} // namespace
+-
+-void App::stopAnalysis() {
+-    if (anaThread_.joinable()) {
+-        anaCancel_ = true;
+-        anaThread_.join();
+-    }
+-    anaCancel_ = false;
+-    anaDone_ = false;
+-}
+-
+-void App::startAnalysis(int game, const ui::Settings& rules, uint64_t seed, std::vector<std::string> actions,
+-                        const std::string& title) {
+-    stopAnalysis();
+-    anaResult_.clear();
+-    anaTitle_ = title;
+-    screens_.setAnalysis(true, false, title, {});
+-    const std::array<std::string, 4> nm = names();
+-    anaThread_ = std::thread([this, game, rules, seed, actions = std::move(actions), nm] {
+-        std::vector<analysis::Mistake> out =
+-            analysis::analyzeMatch((ui::GameKind)game, rules, seed, actions, nm, 3, &anaCancel_);
+-        if (!anaCancel_) anaResult_ = std::move(out);
+-        anaDone_ = true;
+-    });
+-}
+-
+-void App::pollAnalysis() {
+-    if (!anaDone_ || !anaThread_.joinable()) return;
+-    anaThread_.join();
+-    anaDone_ = false;
+-    std::vector<ui::MistakeView> rows;
+-    for (const analysis::Mistake& m : anaResult_) rows.push_back({m.when, m.played, m.better, m.why, costText(m)});
+-    screens_.setAnalysis(true, true, anaTitle_, rows);
+-}
+-
+-// At the end of a match the player played himself (not the Yapay Zeka, not a replay).
+-void App::analyzeFinishedMatch() {
+-    if (replayMode_ || matchAiTouched_) return;
+-    std::vector<std::string> actions;
+-    if (otherInGame()) {
+-        if (!other_->saveState(actions)) return;
+-    } else {
+-        for (const okey::LoggedAction& a : game_.actionLog()) actions.push_back(a.encode());
+-    }
+-    startAnalysis(matchGame_, matchSettings_, matchSeed_, std::move(actions),
+-                  std::string(ui::gameInfo((ui::GameKind)matchGame_).name) + " \xC2\xB7 bu maç");
+-}
+-
+-void App::analyzeReplay(int index) {
+-    SavedMatch sv;
+-    if (index < 0 || index >= (int)replayFiles_.size() || !readSave(sv, replayFiles_[(size_t)index])) {
+-        screens_.setAnalysis(false, true, "", {});
+-        return;
+-    }
+-    ui::Settings rules = screens_.settings();
+-    for (const std::string& kv : sv.settings) {
+-        const size_t eq = kv.find('=');
+-        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
+-    }
+-    rules.game = sv.game;
+-    startAnalysis(sv.game, rules, sv.seed, sv.actions,
+-                  std::string(ui::gameInfo((ui::GameKind)sv.game).name) + " \xC2\xB7 " + sv.date);
+-}
+-
+-// Newest first.
+-std::vector<std::string> App::listReplays() const {
+-    std::vector<std::string> out;
+-    const std::string dir = replayDir();
+-    if (dir.empty() || !DirectoryExists(dir.c_str())) return out;
+-    FilePathList fl = LoadDirectoryFilesEx(dir.c_str(), ".txt", false);
+-    for (unsigned i = 0; i < fl.count; ++i) out.push_back(fl.paths[i]);
+-    UnloadDirectoryFiles(fl);
+-    std::sort(out.begin(), out.end(), std::greater<std::string>());
+-    return out;
+-}
+-
+-void App::refreshReplays() {
+-    replayFiles_.clear();
+-    std::vector<ui::ReplayEntry> rows;
+-    if (!unattended()) {
+-        for (const std::string& f : listReplays()) {
+-            SavedMatch sv;
+-            if (!readSave(sv, f)) continue;
+-            replayFiles_.push_back(f);
+-            rows.push_back({std::string(ui::gameInfo((ui::GameKind)sv.game).name), sv.date, sv.result,
+-                            (int)sv.actions.size()});
+-        }
+-    }
+-    screens_.setReplays(rows);
+-}
+-
+-// Starts watching a saved match: the same match with its rules and seed; its actions are played one by one at the
+-// table's own pace (updateReplay), nobody else moves. Pause / speed with Space and the arrows; the menu leaves.
+-void App::startReplay(int index) {
+-    if (index < 0 || index >= (int)replayFiles_.size()) return;
+-    SavedMatch sv;
+-    if (!readSave(sv, replayFiles_[(size_t)index])) return;
+-    ui::Settings& st = screens_.settings();
+-    const ui::Settings mine = st;
+-    ui::Settings rules = st;
+-    for (const std::string& kv : sv.settings) {
+-        const size_t eq = kv.find('=');
+-        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
+-    }
+-    rules.sfx = mine.sfx, rules.ambient = mine.ambient, rules.music = mine.music, rules.animSpeed = mine.animSpeed;
+-    rules.hints = mine.hints, rules.playerName = mine.playerName, rules.guide = mine.guide, rules.guideSeen = mine.guideSeen;
+-    rules.voices = mine.voices, rules.colorBlind = mine.colorBlind, rules.bigText = mine.bigText;
+-    rules.dayTime = mine.dayTime, rules.season = mine.season;
+-    rules.game = sv.game;
+-    if (aiMode_) setAiMode(false);
+-    st = rules;
+-    forcedSeed_ = sv.seed;
+-    resuming_ = true;
+-    replayMode_ = true;
+-    replayActions_ = sv.actions;
+-    replayPos_ = 0;
+-    replayPaused_ = false;
+-    replayWait_ = 1.0f;
+-    startMatch();
+-    resuming_ = false;
+-    forcedSeed_.reset();
+-    st = mine;
+-    if (otherInGame() && !other_->setReplayMode(true)) {
+-        replayMode_ = false;
+-        toTitle();
+-        screens_.show(ui::ScreenId::Title);
+-        return;
+-    }
+-    screens_.show(ui::ScreenId::None);
+-}
+-
+-void App::updateReplay(float simDt) {
+-    if (IsKeyPressed(KEY_SPACE)) replayPaused_ = !replayPaused_;
+-    if (IsKeyPressed(KEY_RIGHT)) replaySpeed_ = std::min(8.f, replaySpeed_ * 2.f);
+-    if (IsKeyPressed(KEY_LEFT)) replaySpeed_ = std::max(0.5f, replaySpeed_ * 0.5f);
+-    if (replayPaused_ || replayPos_ >= replayActions_.size()) return;
+-    const bool busy = otherInGame() ? other_->animating() : table_.isAnimating();
+-    if (busy) return;
+-    replayWait_ -= simDt * replaySpeed_;
+-    if (replayWait_ > 0.f) return;
+-    const std::string& line = replayActions_[replayPos_];
+-    if (otherInGame()) {
+-        const int r = other_->replayStep(line);
+-        if (r == 0) return;                            // not now (the table is not ready for it yet)
+-        ++replayPos_;
+-        if (r < 0) replayPos_ = replayActions_.size(); // a line that does not apply: the replay ends here
+-    } else {
+-        okey::LoggedAction a;
+-        if (!okey::LoggedAction::decode(line, a)) {
+-            replayPos_ = replayActions_.size();
+-            return;
+-        }
+-        if (a.kind == okey::LogKind::NextHand) {
+-            if (game_.handState() == okey::HandState::HandOver) return; // the score sheet's button deals it
+-            ++replayPos_;                                              // (already dealt)
+-            return;
+-        }
+-        if (game_.handState() != okey::HandState::Playing) return;
+-        ++replayPos_;
+-        if (!game_.replay(a)) {
+-            replayPos_ = replayActions_.size();
+-            return;
+-        }
+-        pumpEvents();
+-    }
+-    replayWait_ = paceRng_.uniform(0.5f, 0.9f) / animSpeed();
+-}
+-
+-void App::drawReplayBadge() {
+-    if (!replayMode_ || screens_.blocksGame()) return;
+-    const bool done = replayPos_ >= replayActions_.size();
+-    char sp[16];
+-    std::snprintf(sp, sizeof sp, replaySpeed_ < 1.f ? "%.1f\xC3\x97" : "%.0f\xC3\x97", (double)replaySpeed_);
+-    const std::string head = std::string("TEKRAR  ") + (done ? "bitti" : replayPaused_ ? "duraklatıldı" : sp);
+-    const std::string help = "Boşluk: durdur   \xC2\xB7   sol / sağ ok: hız   \xC2\xB7   ESC: menü";
+-    const Rectangle r{24.f, 22.f, 430.f, 66.f};
+-    DrawRectangleRounded(r, 0.25f, 8, Color{20, 12, 8, 210});
+-    DrawRectangleRoundedLinesEx(r, 0.25f, 8, 1.5f, ui::pal::Brass);
+-    DrawCircleV({r.x + 22.f, r.y + 22.f}, 6.f, done ? ui::pal::Brass : replayPaused_ ? ui::pal::Highlight : Color{220, 60, 50, 255});
+-    ui::drawText(ui::FontId::UiBold, head, {r.x + 38.f, r.y + 10.f}, 22.f, ui::pal::TextLight);
+-    ui::drawText(ui::FontId::Ui, help, {r.x + 16.f, r.y + 40.f}, 15.f, Color{ui::pal::TextLight.r, ui::pal::TextLight.g, ui::pal::TextLight.b, 180});
+-    const float f = replayActions_.empty() ? 1.f : (float)replayPos_ / (float)replayActions_.size();
+-    DrawRectangleRec({r.x + 240.f, r.y + 20.f, 170.f, 5.f}, Color{60, 40, 28, 255});
+-    DrawRectangleRec({r.x + 240.f, r.y + 20.f, 170.f * f, 5.f}, ui::pal::Brass);
+-}
+-
+-// ---------------------------------------------------------------- the room around us
+-// The other tables cheer a big finish or a mars, groan when the player loses big; at the end of a match the winner
+-// buys a round of tea (the çırak brings it).
+-void App::crowdAtHandEnd() {
+-    if (replayMode_ && replaySpeed_ > 2.f) return;
+-    using C = r3d::Characters;
+-    if (otherInGame()) {
+-        const ui::SheetModel sh = other_->sheet(false);
+-        const bool humanHand = sh.starCol >= 0 && sh.starCol == sh.humanCol;
+-        if (sh.taglineRed) characters_.crowdReact(humanHand ? C::CrowdCheer : C::CrowdLaugh);
+-        if (other_->matchOver()) {
+-            int payer = sh.humanWon ? 0 : 1;
+-            const std::vector<int> seats = other_->seats();
+-            if (!sh.humanWon && !sh.ranking.empty() && sh.columns.size() == seats.size() &&
+-                sh.ranking[0] < (int)seats.size())
+-                payer = seats[(size_t)sh.ranking[0]];
+-            if (payer == 0 && !sh.humanWon) payer = 1;
+-            if (!sh.humanWon) characters_.crowdReact(C::CrowdGroan, Vector3{0.f, 0.8f, 0.f}, 0.5f);
+-            characters_.orderTeaRound(payer);
+-        }
+-        return;
+-    }
+-    const okey::HandResult& r = game_.lastHandResult();
+-    if (r.winner >= 0) {
+-        const bool ours = r.winner == HUMAN || (game_.teams() && r.winner == okey::Game::partnerOf(HUMAN));
+-        if (r.finishedWithJoker || r.multiplier >= 2)
+-            characters_.crowdReact(ours ? C::CrowdCheer : C::CrowdGroan, Vector3{0.f, 0.8f, 0.f}, ours ? 1.f : 0.6f);
+-    }
+-    if (game_.handState() == okey::HandState::MatchOver) characters_.orderTeaRound(game_.leaderSeat());
+-}
+-
+-void App::drawCrowdShouts() {
+-    if (flow_ == Flow::Title || screens_.blocksGame()) return;
+-    for (const Shout& sh : shouts_) {
+-        Vector2 p;
+-        if (!renderer_.projectToVirtual(sh.at, p)) continue;
+-        const float a = std::min(1.f, sh.t / 0.2f) * std::clamp((2.4f - sh.t) / 0.5f, 0.f, 1.f);
+-        p.y -= 30.f + sh.t * 14.f;
+-        p.x = std::clamp(p.x, 90.f, 1510.f);
+-        p.y = std::clamp(p.y, 40.f, 700.f);
+-        const float fs = 19.f * ui::hudTextScale();
+-        const Vector2 sz = ui::measureText(ui::FontId::UiBold, sh.text, fs);
+-        const Rectangle box{p.x - sz.x * 0.5f - 12.f, p.y - sz.y * 0.5f - 6.f, sz.x + 24.f, sz.y + 12.f};
+-        DrawRectangleRounded(box, 0.5f, 8, Color{24, 14, 8, (unsigned char)(170 * a)});
+-        ui::drawTextCentered(ui::FontId::UiBold, sh.text, p, fs, Color{246, 232, 200, (unsigned char)(255 * a)});
+-    }
+-}
+-
+-// "Devam Et": the saved match is started again with its rules and seed, and its actions are replayed.
+-void App::resumeSaved() {
+-    SavedMatch sv;
+-    if (!readSave(sv)) {
+-        refreshResumable();
+-        screens_.show(ui::ScreenId::Title);
+-        return;
+-    }
+-    ui::Settings& st = screens_.settings();
+-    const ui::Settings mine = st;
+-    ui::Settings rules = st;
+-    for (const std::string& kv : sv.settings) {
+-        const size_t eq = kv.find('=');
+-        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
+-    }
+-    // the match's rules and level; the player's own preferences stay
+-    rules.sfx = mine.sfx, rules.ambient = mine.ambient, rules.music = mine.music, rules.animSpeed = mine.animSpeed;
+-    rules.hints = mine.hints, rules.playerName = mine.playerName, rules.guide = mine.guide, rules.guideSeen = mine.guideSeen;
+-    rules.voices = mine.voices, rules.colorBlind = mine.colorBlind, rules.bigText = mine.bigText;
+-    rules.dayTime = mine.dayTime, rules.season = mine.season;
+-    rules.game = sv.game;
+-    st = rules;
+-    forcedSeed_ = sv.seed;
+-    resuming_ = true;
+-    startMatch();
+-    bool ok = true;
+-    if (otherInGame()) {
+-        ok = other_->restoreState(sv.actions);
+-    } else {
+-        for (const std::string& line : sv.actions) {
+-            okey::LoggedAction a;
+-            if (!okey::LoggedAction::decode(line, a) || !game_.replay(a)) {
+-                ok = false;
+-                break;
+-            }
+-        }
+-        game_.drainEvents(); // (what happened is already on the table: nothing to animate)
+-        table_.onHandStart();
+-        updateScoreboard();
+-        if (game_.handState() == okey::HandState::HandOver || game_.handState() == okey::HandState::MatchOver) {
+-            flow_ = Flow::HandOver;
+-            handOverT_ = SUMMARY_DELAY;
+-        }
+-    }
+-    resuming_ = false;
+-    forcedSeed_.reset();
+-    std::printf("[resume] %s: %zu actions replayed%s\n", ui::gameInfo((ui::GameKind)sv.game).name, sv.actions.size(),
+-                ok ? "" : " (FAILED part way)");
+-    matchAiTouched_ = matchAiTouched_ || sv.aiTouched;
+-    st = mine;
+-    st.game = sv.game;
+-    screens_.show(ui::ScreenId::None);
+-    if (!ok) {
+-        // a save from another version: the match goes on from where the replay stopped
+-        if (otherInGame()) other_->toast("Kayıt tam açılamadı, maç kaldığı yerden biraz önceden sürüyor", ui::pal::Bad, 4.f);
+-        else table_.toast("Kayıt tam açılamadı, maç kaldığı yerden biraz önceden sürüyor", ui::pal::Bad, 4.f);
+-    } else {
+-        if (otherInGame()) other_->toast("Kaldığın yerden devam", ui::pal::Highlight, 3.f);
+-        else table_.toast("Kaldığın yerden devam", ui::pal::Highlight, 3.f);
+-    }
+-}
+-
+-// ---------------------------------------------------------------- rehber (a game's first match)
+-struct Guide {
+-    std::string title;
+-    std::vector<std::string> lines;
+-    std::string firstTurn; // said when the player's turn first comes
+-};
+-
+-Guide guideFor(ui::GameKind k, const std::string& tavlaOpp = "Kel Mahmut") {
+-    using G = ui::GameKind;
+-    const std::string hint = "Takılırsan İpucu düğmesi (ya da H tuşu) Kurt'un senin yerinde ne yapacağını gösterir.";
+-    switch (k) {
+-    case G::Yuzbir:
+-    case G::YuzbirEsli: {
+-        Guide g{k == G::Yuzbir ? "101'e Hoş Geldin" : "Eşli 101'e Hoş Geldin", {}, ""};
+-        g.lines = {"Amaç taşlarını perlere dizip masaya açmak ve elini bitirmek. Puanı en düşük olan kazanır.",
+-                   "Sıran gelince ortadaki desteden ya da soldakinin attığı taştan çek, sonra bir taş at.",
+-                   "Açmak için serilerin toplamı en az 101 olmalı ya da 5 çiftin olmalı. Seri Diz / Çift Diz istakanı "
+-                   "düzenler, El Aç ile açarsın.",
+-                   "Açtıktan sonra masadaki perlere taş işleyebilirsin. İşlenebilecek bir taşı ya da okeyi atmak 101 "
+-                   "cezadır."};
+-        if (k == G::YuzbirEsli)
+-            g.lines.push_back("Karşındaki Kel Mahmut ortağın: biriniz bitirince ortağının eli yazılmaz, takımların "
+-                              "toplamı sayılır.");
+-        g.lines.push_back(hint);
+-        g.firstTurn = "Sıra sende: ortadaki desteye ya da soldaki taşa tıkla, sonra atacağın taşı sürükleyip bırak.";
+-        return g;
+-    }
+-    case G::Okey:
+-        return {"Okey'e Hoş Geldin",
+-                {"Amaç 14 taşını perlere (sıralı aynı renk ya da aynı sayı farklı renk) ya da 7 çifte dizip 15. taşı "
+-                 "bırakarak bitirmek.",
+-                 "Sırası gelen ortadan ya da soldan bir taş çeker, bir taş atar.",
+-                 "Elin tamamlanınca fazla taşı masanın ortasındaki Bitir yerine sürükle. Göstergenin eşi elindeyse ilk "
+-                 "taşını atmadan Göster'e bas.",
+-                 "Herkes puanla başlar; bitiren her oyuncudan 2 puan (okey atarak ya da çiftle 4) alır. Biri 0'a "
+-                 "düşünce oyun biter, en çok puanı kalan kazanır.",
+-                 hint},
+-                "Sıra sende: bir taş çek, sonra atacağın taşı sürükleyip bırak."};
+-    case G::Tavla:
+-        return {"Tavlaya Hoş Geldin",
+-                {"Tavla kendi masasında oynanır: sedirin önündeki küçük masada " + tavlaOpp +
+-                     " karşına oturur (rakibi Ayarlar'dan seçersin). Amaç 15 pulunu kendi evine (sağ alttaki 6 hane) "
+-                     "getirip hepsini toplamak.",
+-                 "Zar At'a bas, sonra oynatacağın pulun hanesine, ardından yeşil yanan haneye tıkla. Geri Al ile "
+-                 "hamleni geri alabilirsin.",
+-                 "Tek duran pul vurulabilir; kırılan pul önce rakibin evinden yeniden girmelidir.",
+-                 "Rakip hiç pul toplamadan bitirirsen mars olur: 2 sayı. Maç ayarlardaki sayıya kadar sürer.", hint},
+-                "Sıra sende: Zar At'a bas."};
+-    case G::Pisti:
+-        return {"Pişti'ye Hoş Geldin",
+-                {"Sırası gelen yere bir kâğıt atar. Yerdeki en üstteki kâğıtla aynı sayıyı atan yerdekilerin hepsini "
+-                 "alır; Vale her şeyi alır.",
+-                 "Yerde tek kâğıt varken aynısıyla alırsan pişti: 10 puan (Vale ile Vale: 20).",
+-                 "As, Vale 1; Sinek 2 2; Karo 10 3 puan; en çok kâğıt alan 3 puan daha alır.",
+-                 "Oynayacağın kâğıda tıklaman yeterli.", hint},
+-                "Sıra sende: atacağın kâğıda tıkla."};
+-    case G::Batak:
+-        return {"Batak'a Hoş Geldin",
+-                {"İhalede kaç el alacağını söyle ya da pas de. İhaleyi alan kozu seçer ve ilk kâğıdı atar.",
+-                 "Renge uymak ve yükseltmek zorunlu; o renk yoksa koz çakmalısın. Koz açılmadan kozla başlanmaz.",
+-                 "Sözünü tutarsan aldığın el kadar yazarsın, tutamazsan ihale kadar düşersin. Hiç el alamayan da batar.",
+-                 "Oynanabilir kâğıtların parlak durur; tıkladığın kâğıt oynanır.", hint},
+-                "Sıra sende: ortadaki panelden ihaleni söyle ya da pas de."};
+-    case G::King:
+-        return {"King'e Hoş Geldin",
+-                {"20 el oynanır. Seçme sırası gelen o elin oyununu söyler: herkes 3 kez ceza, 2 kez koz seçer.",
+-                 "Cezalarda amaç almamak: el, kupa, erkek, kız, rıfkı, son iki. Kozda aldığın her el +50.",
+-                 "Renge uymak zorunlu; bazı cezaların kendi zorunlulukları var (Kurallar sayfasında).",
+-                 "Seçme sırası sende olunca ortada açılan panelden oyunu seç; kartlarına tıklayarak oyna.", hint},
+-                "Sıra sende: oynayacağın kâğıda tıkla."};
+-    default: return {};
+-    }
+-}
+-
+-void App::maybeShowGuide(ui::GameKind kind) {
+-    firstTurnTip_.clear();
+-    ui::Settings& st = screens_.settings();
+-    const int bit = 1 << (int)kind;
+-    if (resuming_ || (!opt_.guideDemo && (unattended() || aiMode_ || !st.guide || (st.guideSeen & bit)))) return;
+-    const Guide g = guideFor(kind, names()[(size_t)std::clamp(screens_.settings().tavlaRakip, 1, 3)]);
+-    if (g.title.empty()) return;
+-    st.guideSeen |= bit;
+-    settingsDirty_ = true;
+-    screens_.setGuide(g.title, g.lines);
+-    screens_.show(ui::ScreenId::Guide);
+-    firstTurnTip_ = g.firstTurn;
+-}
+-
+-// The first time the player's turn comes in a guided match: what to do, in one line.
+-void App::updateFirstTurnTip() {
+-    if (firstTurnTip_.empty() || aiSeat() || screens_.blocksGame()) return;
+-    bool mine;
+-    if (otherInGame()) mine = other_->activeSeat() == HUMAN && !other_->animating();
+-    else mine = game_.handState() == okey::HandState::Playing && game_.current() == HUMAN && !table_.isAnimating();
+-    if (!mine) return;
+-    if (otherInGame()) other_->toast(firstTurnTip_, ui::pal::Highlight, 6.f);
+-    else table_.toast(firstTurnTip_, ui::pal::Highlight, 6.f);
+-    firstTurnTip_.clear();
+-}
+-
+-// ---------------------------------------------------------------- İpucu
+-// What a Kurt would do now in the player's seat: the first step of its plan, glowing on the table and said in words.
+-void App::showOkeyHint() {
+-    if (game_.handState() != okey::HandState::Playing || game_.current() != HUMAN || aiSeat()) return;
+-    if (!hintBot_) hintBot_ = std::make_unique<okey::Bot>(okey::BotLevel::Hard, 0x41D7ull);
+-    hintBot_->resetForHand();
+-    const okey::BotAction a = hintBot_->next(game_, HUMAN);
+-    const okey::OkeyInfo& ok = game_.okey();
+-    auto name = [&](int id) { return okey::tileNameTR(id, ok); };
+-    std::vector<int> tiles;
+-    bool pile = false, left = false;
+-    std::string text;
+-    using K = okey::BotAction::Kind;
+-    switch (a.kind) {
+-    case K::DrawPile:
+-        pile = true;
+-        text = "İpucu: ortadan çek";
+-        break;
+-    case K::TakeLeft:
+-        left = true;
+-        text = "İpucu: soldaki taşı al (" + name(game_.topDiscard(okey::Game::leftOf(HUMAN))) + ")";
+-        break;
+-    case K::ReturnLeft:
+-        tiles.push_back(game_.pendingLeftTile());
+-        text = "İpucu: soldan aldığın taşı geri ver, işine yaramıyor";
+-        break;
+-    case K::Open:
+-    case K::LayMelds: {
+-        int value = 0, n = 0;
+-        for (const auto& m : a.melds) {
+-            okey::Meld mm;
+-            if (okey::makeMeld(m, ok, mm, m.size() == 2)) value += mm.value();
+-            ++n;
+-            tiles.insert(tiles.end(), m.begin(), m.end());
+-        }
+-        const bool pairs = !a.melds.empty() && a.melds.front().size() == 2;
+-        text = a.kind == K::Open ? (pairs ? "İpucu: " + std::to_string(n) + " çiftle elini aç"
+-                                          : "İpucu: elini aç (" + std::to_string(value) + ")")
+-                                 : "İpucu: parlayan taşlarla yeni per aç";
+-        break;
+-    }
+-    case K::AddToMeld:
+-        tiles.push_back(a.tile);
+-        text = "İpucu: " + name(a.tile) + " taşını masadaki pere işle";
+-        break;
+-    case K::SwapJoker:
+-        tiles.push_back(a.tile);
+-        text = "İpucu: " + name(a.tile) + " ile masadaki okeyi al";
+-        break;
+-    case K::Discard:
+-        tiles.push_back(a.tile);
+-        text = "İpucu: " + name(a.tile) + " at";
+-        break;
+-    case K::Finish:
+-        tiles.push_back(a.tile);
+-        text = "İpucu: bitirebilirsin! " + name(a.tile) + " taşını bırak (Bitir)";
+-        break;
+-    case K::ShowIndicator:
+-        tiles.push_back(game_.indicatorTwin(HUMAN));
+-        text = "İpucu: göstergeyi göster (Göster)";
+-        break;
+-    }
+-    table_.showHint(tiles, pile, left, text);
+-}
+-
+-void App::updateFlow(float simDt) {
+-    if (otherInGame()) {
+-        if (flow_ == Flow::Playing && other_->handOver()) {
+-            flow_ = Flow::HandOver;
+-            handOverT_ = 0.f;
+-            ++handsPlayed_;
+-            recordOtherHand();
+-            saveMatch();
+-            crowdAtHandEnd();
+-            if (other_->matchOver()) {
+-                const ui::SheetModel sh = other_->sheet(false);
+-                archiveMatch(sh.humanWon ? std::string("Kazandın") : sh.resultTitle);
+-                analyzeFinishedMatch();
+-            }
+-            if (opt_.autoplay && !snapshot_)
+-                std::printf("[autoplay] hand %d: %s\n", handsPlayed_, other_->lastLogLine().c_str());
+-        }
+-        if (flow_ == Flow::HandOver) {
+-            handOverT_ += simDt;
+-            if ((handOverT_ >= SUMMARY_DELAY && !other_->animating()) || handOverT_ >= SUMMARY_DELAY + 5.f) {
+-                screens_.setSheet(other_->sheet(aiMode_));
+-                screens_.show(ui::ScreenId::HandSummary);
+-                flow_ = Flow::Summary;
+-                screenT_ = 0.f;
+-            }
+-        }
+-        return;
+-    }
+-    switch (game_.handState()) {
+-    case okey::HandState::Playing:
+-        if (replayMode_) updateReplay(simDt);
+-        else updateBots(simDt);
+-        break;
+-    case okey::HandState::HandOver:
+-    case okey::HandState::MatchOver:
+-        if (flow_ == Flow::HandOver) {
+-            // let everyone see the revealed istakas before the score sheet covers the table
+-            handOverT_ += simDt;
+-            if ((handOverT_ >= SUMMARY_DELAY && !table_.isAnimating()) || handOverT_ >= SUMMARY_DELAY + 5.f) {
+-                screens_.show(ui::ScreenId::HandSummary);
+-                flow_ = Flow::Summary;
+-                screenT_ = 0.f;
+-            }
+-        }
+-        break;
+-    case okey::HandState::NotStarted: break;
+-    }
+-}
+-
+-// Autoplay and the Yapay Zeka mode press the score sheet's button by themselves (autoplay also leaves after the
+-// final standings); the button shows the countdown. A player can still press it (or anything else) first.
+-void App::updateAutoScreens(float simDt) {
+-    const ui::ScreenId cur = screens_.current();
+-    if (cur != autoScreen_) { // every screen gets its full time, however it came up
+-        autoScreen_ = cur;
+-        screenT_ = 0.f;
+-    }
+-    float wait = -1.f;
+-    if (cur == ui::ScreenId::HandSummary) wait = opt_.autoplay ? AUTO_SUMMARY : aiMode_ ? AI_SUMMARY : -1.f;
+-    else if (cur == ui::ScreenId::MatchOver) wait = opt_.autoplay ? AUTO_MATCHOVER : aiMode_ ? AI_MATCHOVER : -1.f;
+-    if (replayMode_ && cur == ui::ScreenId::HandSummary) wait = AI_SUMMARY; // a replay moves on by itself (not past the end)
+-    if (cur == ui::ScreenId::MatchOver && (opt_.autoplay || opt_.aiChaos)) matchOverReached_ = true;
+-    const bool picture = snapshot_ && ((snapState_ == SnapState::Summary && cur == ui::ScreenId::HandSummary) ||
+-                                       (snapState_ == SnapState::MatchOver && cur == ui::ScreenId::MatchOver && opt_.matches <= 1));
+-    if (wait < 0.f || picture) { // (a snapshot of the sheet or the final standings keeps it up: it is the picture)
+-        screens_.setAutoAdvance(-1.f);
+-        if (opt_.autoplay && cur == ui::ScreenId::Title && flow_ == Flow::Title && matchCount_ > 0) {
+-            screenT_ += simDt;
+-            if (screenT_ < AUTO_TITLE) return;
+-            screenT_ = 0.f;
+-            screens_.show(ui::ScreenId::None);
+-            startMatch();
+-        }
+-        return;
+-    }
+-    screenT_ += simDt;
+-    screens_.setAutoAdvance(std::max(0.f, wait - screenT_) / std::max(0.05f, opt_.speed));
+-    if (screenT_ >= wait) pressBetweenHands();
+-}
+-
+-// The main button of the score sheet ("Sonraki El" / "Sonuçlar") or the final standings ("Yeni Oyun"), pressed for
+-// the player: by autoplay, the Yapay Zeka mode or the --ai-chaos stand-in. Autoplay and the test count the matches
+-// and leave after the last one; autoplay goes through the title screen every other time.
+-void App::pressBetweenHands() {
+-    const ui::ScreenId cur = screens_.current();
+-    screenT_ = 0.f;
+-    if (cur == ui::ScreenId::HandSummary) {
+-        if (otherInGame() ? other_->matchOver() : game_.handState() == okey::HandState::MatchOver) {
+-            screens_.show(ui::ScreenId::MatchOver);
+-            flow_ = Flow::MatchOver;
+-        } else {
+-            screens_.show(ui::ScreenId::None);
+-            startNextHand();
+-        }
+-    } else if (cur == ui::ScreenId::MatchOver) {
+-        if ((opt_.autoplay || opt_.aiChaos) && ++matchesDone_ >= opt_.matches) {
+-            quit_ = true;
+-        } else if (opt_.autoplay && matchesDone_ % 2 == 1) { // "Ana Menü", then "Oyna" a little later
+-            screens_.show(ui::ScreenId::Title);
+-            toTitle();
+-        } else if (opt_.aiChaos && matchesDone_ % 2 == 1) { // the title's "Oyna" or "Yapay Zekayı İzle" later
+-            screens_.show(ui::ScreenId::Title);
+-            toTitle();
+-            chaos_.titleIn = chaos_.rng.uniform(0.3f, 2.f);
+-        } else {                                             // "Yeni Oyun" straight from the final standings
+-            screens_.show(ui::ScreenId::None);
+-            startMatch();
+-        }
+-    }
+-}
+-
+-void App::pumpEvents() {
+-    const std::vector<okey::GameEvent> events = game_.drainEvents();
+-    for (const okey::GameEvent& e : events) {
+-        using okey::EvType;
+-        if (aiSeat()) { // the table's messages speak about the Yapay Zeka instead of to the player
+-            okey::GameEvent w = e;
+-            w.text = watchText(e);
+-            table_.onEvent(w);
+-        } else {
+-            table_.onEvent(e);
+-        }
+-        characters_.onEvent(e, game_);
+-        routeAudio(e);
+-        if (e.type == EvType::HandStart) {
+-            for (auto& b : bots_)
+-                if (b) b->resetForHand();
+-            table_.onHandStart();
+-        }
+-        for (auto& b : bots_)
+-            if (b) b->observe(e, game_);
+-        switch (e.type) {
+-        case EvType::TurnStart: characters_.setActiveSeat(e.player); break;
+-        case EvType::Open:
+-            // our eyes follow a big moment across the table (never while we handle our own tiles)
+-            if (e.player != HUMAN && e.player >= 0 && !table_.mouseBusy() && !lookDrag_) {
+-                const w3d::RectXZ z = w3d::MELD_ZONE[e.player];
+-                pcam_.glanceAt({(z.x0 + z.x1) * 0.5f, w3d::TABLE_Y, (z.z0 + z.z1) * 0.5f}, 1.1f);
+-            }
+-            // katlamalı: say where the bar is now (while the player still has to open)
+-            if (game_.rules().katlamali && e.player != HUMAN && !game_.player(HUMAN).opened) {
+-                const bool pairs = e.player >= 0 && game_.player(e.player).openedWithPairs;
+-                table_.toast(pairs ? "Katlamalı: çift açmak için artık en az " + std::to_string(game_.pairsOpenNeed()) + " çift"
+-                                   : "Katlamalı: açmak için artık en az " + std::to_string(game_.seriesOpenNeed()),
+-                             ui::pal::Highlight, 3.2f);
+-            }
+-            break;
+-        case EvType::HandEnd: {
+-            cancelThink();
+-            flow_ = Flow::HandOver;
+-            handOverT_ = 0.f;
+-            ++handsPlayed_;
+-            recordOkeyHand();
+-            saveMatch();
+-            crowdAtHandEnd();
+-            if (game_.handState() == okey::HandState::MatchOver) {
+-                const int lead = game_.leaderSeat();
+-                const bool won = lead == HUMAN || (game_.teams() && lead == okey::Game::partnerOf(HUMAN));
+-                archiveMatch(won ? std::string("Kazandın") : game_.player(lead).name + " kazandı");
+-                analyzeFinishedMatch();
+-            }
+-            if (opt_.autoplay && !snapshot_) {
+-                const okey::HandResult& r = game_.lastHandResult();
+-                const std::string of = game_.classic() ? std::string() : "/" + std::to_string(game_.numHands());
+-                std::printf("[autoplay] hand %d%s: %s | scores %d %d %d %d | totals %d %d %d %d\n", game_.handIndex() + 1,
+-                            of.c_str(), e.text.c_str(), r.score[0], r.score[1], r.score[2], r.score[3],
+-                            game_.player(0).totalScore, game_.player(1).totalScore, game_.player(2).totalScore,
+-                            game_.player(3).totalScore);
+-            }
+-            break;
+-        }
+-        case EvType::MatchEnd:
+-            if (opt_.autoplay && !snapshot_) std::printf("[autoplay] %s\n", e.text.c_str());
+-            break;
+-        default: break;
+-        }
+-    }
+-}
+-
+-// Tile sounds that belong to a tile landing are held back so the clack comes when the tile touches the felt;
+-// an opponent's tiles also wait for its hand (w3d::BOT_*_LEAD).
+-void App::routeAudio(const okey::GameEvent& e) {
+-    if (!audioOn_) return;
+-    using okey::EvType;
+-    const bool bot = e.player >= 0 && e.player < 4 && e.player != HUMAN;
+-    switch (e.type) {
+-    case EvType::DrawPile:
+-    case EvType::TakeLeft:
+-        if (bot) delayed_.push_back({e, w3d::BOT_TAKE_LEAD / animSpeed()});
+-        else audio_.onEvent(e);
+-        break;
+-    case EvType::Discard:
+-    case EvType::AddToMeld:
+-    case EvType::SwapJoker: delayed_.push_back({e, (LANDING_LAG + (bot ? w3d::BOT_GIVE_LEAD : 0.f)) / animSpeed()}); break;
+-    case EvType::Open:
+-    case EvType::LayMelds: delayed_.push_back({e, (LANDING_LAG + (bot ? w3d::BOT_MELD_LEAD : 0.f)) / animSpeed()}); break;
+-    default: audio_.onEvent(e); break;
+-    }
+-}
+-
+-void App::updateDelayedAudio(float simDt) {
+-    for (size_t i = 0; i < delayed_.size();) {
+-        delayed_[i].t -= simDt;
+-        if (delayed_[i].t <= 0.f) {
+-            if (audioOn_) audio_.onEvent(delayed_[i].e);
+-            delayed_.erase(delayed_.begin() + (std::ptrdiff_t)i);
+-        } else {
+-            ++i;
+-        }
+-    }
+-}
+-
+-void App::updateScoreboard() {
+-    if (otherInGame()) {
+-        room_.setScoreboard(other_->scoreTitle(), other_->scoreLines());
+-        return;
+-    }
+-    if (flow_ == Flow::Title || game_.handState() == okey::HandState::NotStarted) {
+-        room_.setScoreboard("", {});
+-        return;
+-    }
+-    std::string title;
+-    if (game_.classic())
+-        title = game_.handState() == okey::HandState::MatchOver ? std::string("Okey bitti")
+-                                                                 : "Okey · " + std::to_string(game_.handIndex() + 1) + ". el";
+-    else
+-        title = game_.handState() == okey::HandState::MatchOver
+-                    ? std::string("Maç bitti")
+-                    : std::string(game_.teams() ? "Eşli · " : "") + "El " +
+-                          std::to_string(std::min(game_.handIndex() + 1, game_.numHands())) + " / " +
+-                          std::to_string(game_.numHands()) + (game_.rules().katlamali ? " · Katlamalı" : "");
+-    std::vector<std::string> lines;
+-    for (int s = 0; s < 4; ++s) lines.push_back(game_.player(s).name + " ....... " + std::to_string(game_.player(s).totalScore));
+-    if (game_.teams()) {
+-        lines.clear();
+-        for (int s = 0; s < 2; ++s)
+-            lines.push_back(game_.player(s).name + " + " + game_.player(s + 2).name + " ... " + std::to_string(game_.teamTotal(s)));
+-    }
+-    room_.setScoreboard(title, lines);
+-}
+-
+-// ---------------------------------------------------------------- the Yapay Zeka mode
+-// Switching it on hands the seat to its Kurt (paced like the others by updateBots); switching it off first takes
+-// back a decision still being made on the worker thread, then the player simply goes on from the stage the turn is
+-// in (draw / play / discard). Nothing else changes hands: the game, the scores and the seat stay the player's.
+-void App::setAiMode(bool on) {
+-    if (on == aiMode_) return;
+-    if (opt_.autoplay) { // --autoplay keeps its bot on the seat for the whole run
+-        if (flow_ != Flow::Title) table_.toast("--autoplay: bu koltukta hep yapay zeka oynar", ui::pal::TextLight, 2.4f);
+-        return;
+-    }
+-    if (!on && think_.seat == HUMAN) {
+-        cancelThink(); // joins the worker: its decision is dropped, nothing of it reaches the game
+-        think_ = Think{};
+-    }
+-    aiMode_ = on;
+-    if (on) matchAiTouched_ = true;
+-    screenT_ = 0.f; // a between-hands screen that is up now starts its countdown afresh (or stops it)
+-    table_.setAiMode(aiSeat());
+-    screens_.setAiMode(aiSeat());
+-    ++aiSwitches_;
+-    if (flow_ == Flow::Title || snapshot_) return;
+-    const bool myTurn = game_.handState() == okey::HandState::Playing && game_.current() == HUMAN;
+-    if (on) table_.toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 3.2f);
+-    else table_.toast(myTurn ? "Kontrol sende  \xC2\xB7  sıra sende" : "Kontrol sende", ui::pal::TextLight, 2.6f);
+-    // the regulars notice (now and then, and only while a hand is being played)
+-    if (game_.handState() == okey::HandState::Playing && simClock_ - aiBanterAt_ >= AI_BANTER_GAP && (on || aiSwitches_ > 1)) {
+-        const ui::BanterLine l = ui::Banter::aiModeLine(on, (uint32_t)mix64(baseSeed_ + (uint64_t)aiSwitches_));
+-        characters_.say(l.seat, l.text, l.seconds);
+-        aiBanterAt_ = simClock_;
+-    }
+-}
+-
+-// --ai-chaos. beforeTable: flips of the mode (directly, like the HUD button or Y, or through the pause menu), the
+-// pause menu itself and the between-hands buttons. Otherwise (where the player's clicks act, after the table's
+-// update): the stand-in's moves while the mode is off. A watchdog reports anything that stops moving.
+-void App::updateChaos(float simDt, bool beforeTable) {
+-    Chaos& c = chaos_;
+-    okey::Rng& rng = c.rng;
+-    const ui::ScreenId cur = screens_.current();
+-    if (!beforeTable) {
+-        if (aiSeat() || flow_ != Flow::Playing || game_.handState() != okey::HandState::Playing || game_.current() != HUMAN)
+-            return;
+-        if (table_.isAnimating()) return; // (the table takes no clicks while it deals; flights are waited out too)
+-        c.actIn -= simDt;
+-        if (c.actIn > 0.f) return;
+-        c.actIn = rng.uniform(0.05f, 1.2f);
+-        if (!c.standIn) c.standIn = std::make_unique<okey::Bot>(okey::BotLevel::Normal, rng.next());
+-        const okey::BotAction a = c.standIn->next(game_, HUMAN);
+-        okey::ActionResult r = okey::applyBotAction(game_, HUMAN, a);
+-        ++c.moves;
+-        if (!r.ok) {
+-            ++c.movesRejected;
+-            std::printf("[aichaos] stand-in move rejected (%s): %s\n", actionName(a.kind), r.error.c_str());
+-            r = okey::applyBotAction(game_, HUMAN, okey::fallbackAction(game_, HUMAN));
+-            if (!r.ok) forceLegalMove(HUMAN);
+-        }
+-        return;
+-    }
+-
+-    // watchdog: the turn, the stage, the hand, the screen or the flow must change every now and then
+-    {
+-        const okey::PlayerInfo& p = game_.player(std::clamp(game_.current(), 0, 3));
+-        const uint64_t sig = mix64(((uint64_t)game_.turnNumber() << 20) ^ ((uint64_t)game_.handIndex() << 12) ^
+-                                   ((uint64_t)game_.stage() << 8) ^ ((uint64_t)cur << 4) ^ (uint64_t)flow_ ^
+-                                   ((uint64_t)p.hand.size() << 40) ^ ((uint64_t)matchCount_ << 48) ^
+-                                   ((uint64_t)game_.table().size() << 32));
+-        if (sig != c.sig || c.pauseLeft > 0.f) {
+-            c.sig = sig;
+-            c.sigAt = simClock_;
+-        }
+-        const double stall = simClock_ - c.sigAt;
+-        c.worstStall = std::max(c.worstStall, stall);
+-        if (stall > 90.0) {
+-            std::printf("[aichaos] STUCK for %.0f s: flow %d, screen %d, hand %d, turn %d, seat %d, stage %d, mode %s, "
+-                        "animating %d, think seat %d pending %d\n",
+-                        stall, (int)flow_, (int)cur, game_.handIndex(), game_.turnNumber(), game_.current(),
+-                        (int)game_.stage(), aiMode_ ? "on" : "off", table_.isAnimating() ? 1 : 0, think_.seat,
+-                        think_.pending ? 1 : 0);
+-            exitCode_ = 2;
+-            quit_ = true;
+-            return;
+-        }
+-    }
+-
+-    // the title screen (every other match): "Oyna" or "Yapay Zekayı İzle"
+-    if (flow_ == Flow::Title) {
+-        if (c.titleIn < 0.f) return;
+-        c.titleIn -= simDt;
+-        if (c.titleIn > 0.f) return;
+-        c.titleIn = -1.f;
+-        ++c.titleStarts;
+-        screens_.show(ui::ScreenId::None);
+-        handleScreenAction(rng.chance(0.5f) ? ui::ScreenAction::StartAiMatch : ui::ScreenAction::StartMatch);
+-        return;
+-    }
+-    // the pause menu: up for a moment, left through "Devam" or through the mode's entry
+-    if (c.pauseLeft > 0.f) {
+-        c.pauseLeft -= simDt;
+-        if (c.pauseLeft > 0.f) return;
+-        if (cur == ui::ScreenId::Paused) {
+-            screens_.show(ui::ScreenId::None);
+-            if (c.pauseFlips) {
+-                ++c.flips;
+-                ++c.pauseFlipCount;
+-                handleScreenAction(ui::ScreenAction::ToggleAiMode);
+-            }
+-        }
+-        return;
+-    }
+-    c.nextPause -= simDt;
+-    if (c.nextPause <= 0.f && cur == ui::ScreenId::None && flow_ != Flow::Title) {
+-        c.nextPause = rng.uniform(4.f, 40.f);
+-        c.pauseLeft = rng.uniform(0.1f, 2.5f);
+-        c.pauseFlips = rng.chance(0.5f);
+-        ++c.pauses;
+-        screens_.show(ui::ScreenId::Paused);
+-        return;
+-    }
+-    // flips at random moments: mid-think, mid-flight, mid-deal, between hands (the HUD button / Y)
+-    c.nextFlip -= simDt;
+-    if (c.nextFlip <= 0.f) {
+-        c.nextFlip = rng.chance(0.2f) ? rng.uniform(0.f, 0.3f) : rng.uniform(0.3f, 9.f);
+-        ++c.flips;
+-        setAiMode(!aiMode_);
+-    }
+-    // the between-hands buttons when nobody else presses them (the mode is off)
+-    if (!aiSeat() && (cur == ui::ScreenId::HandSummary || cur == ui::ScreenId::MatchOver)) {
+-        if (c.pressIn < 0.f) c.pressIn = rng.uniform(0.2f, 4.f);
+-        c.pressIn -= simDt;
+-        if (c.pressIn <= 0.f) {
+-            c.pressIn = -1.f;
+-            ++c.presses;
+-            pressBetweenHands();
+-        }
+-    } else {
+-        c.pressIn = -1.f;
+-    }
+-}
+-
+-// ---------------------------------------------------------------- bots
+-void App::updateBots(float simDt) {
+-    const int s = game_.current();
+-    if (s < 0 || s > 3 || !isBotSeat(s) || !bots_[s]) return;
+-    if (s != think_.seat || game_.turnNumber() != think_.turn) { // a new bot turn: think a little first
+-        cancelThink();
+-        think_.seat = s;
+-        think_.turn = game_.turnNumber();
+-        think_.actions = 0;
+-        // (the reach itself now takes its time — the hand goes to the tile before it moves — so a little less
+-        // idle thinking keeps the table's rhythm)
+-        think_.wait = paceRng_.uniform(0.45f, 1.0f) / animSpeed();
+-    }
+-    if (!think_.pending) launchThink(s);
+-    if (table_.isAnimating()) return;  // tiles still in the air: nobody moves
+-    think_.wait -= simDt;
+-    if (think_.wait > 0.f || !thinkReady()) return;
+-    const okey::BotAction a = takeThink();
+-    if (++think_.actions > MAX_BOT_ACTIONS) {
+-        TraceLog(LOG_WARNING, "Bot %d: %d hamlede tur bitmedi, zorla bitiriliyor", s, think_.actions);
+-        forceLegalMove(s);
+-    } else {
+-        applyBot(s, a);
+-    }
+-    think_.wait = paceRng_.uniform(0.25f, 0.5f) / animSpeed();
+-}
+-
+-void App::launchThink(int seat) {
+-    okey::Bot* bot = bots_[seat].get();
+-    think_.pending = true;
+-    if (snapshot_) { // frame-exact determinism: decide right here
+-        think_.ready = bot->next(game_, seat);
+-        think_.haveReady = true;
+-        return;
+-    }
+-    // A bot decision can take ~10 ms (Kurt's rollouts): think on a worker thread while the pacing delay runs.
+-    // Nothing mutates the game until the result is applied on this thread; cancelThink() joins first.
+-    const okey::Game* g = &game_;
+-    think_.fut = std::async(std::launch::async, [bot, g, seat] { return bot->next(*g, seat); });
+-}
+-
+-bool App::thinkReady() {
+-    if (think_.haveReady) return true;
+-    return think_.fut.valid() && think_.fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+-}
+-
+-okey::BotAction App::takeThink() {
+-    think_.pending = false;
+-    if (think_.haveReady) {
+-        think_.haveReady = false;
+-        return think_.ready;
+-    }
+-    return think_.fut.get();
+-}
+-
+-void App::cancelThink() {
+-    if (think_.fut.valid()) think_.fut.wait();
+-    think_.fut = std::future<okey::BotAction>();
+-    think_.pending = false;
+-    think_.haveReady = false;
+-}
+-
+-void App::applyBot(int seat, const okey::BotAction& a) {
+-    okey::ActionResult r = okey::applyBotAction(game_, seat, a);
+-    if (!r.ok) {
+-        ++rejected_;
+-        TraceLog(LOG_WARNING, "Bot %d hamlesi reddedildi (%s): %s", seat, actionName(a.kind), r.error.c_str());
+-        const okey::BotAction f = okey::fallbackAction(game_, seat);
+-        r = okey::applyBotAction(game_, seat, f);
+-        if (!r.ok) {
+-            ++fallbackRejected_;
+-            TraceLog(LOG_WARNING, "Bot %d yedek hamlesi de reddedildi (%s): %s", seat, actionName(f.kind), r.error.c_str());
+-            forceLegalMove(seat);
+-        }
+-    }
+-    pumpEvents();
+-}
+-
+-// Last resort: any legal step that moves the turn forward, so a bot can never stall the game.
+-void App::forceLegalMove(int seat) {
+-    ++forced_;
+-    if (game_.handState() != okey::HandState::Playing || game_.current() != seat) return;
+-    if (game_.stage() == okey::TurnStage::NeedDraw) {
+-        if (game_.pileCount() > 0 && game_.drawFromPile(seat).ok) return pumpEvents();
+-        if (game_.takeFromLeft(seat).ok) return pumpEvents();
+-        return;
+-    }
+-    if (game_.pendingLeftTile() >= 0 && game_.returnLeftTile(seat).ok) {
+-        game_.drawFromPile(seat);
+-        return pumpEvents();
+-    }
+-    const std::vector<int> hand = game_.player(seat).hand;
+-    for (int t : hand)
+-        if (game_.discard(seat, t).ok) break;
+-    pumpEvents();
+-}
+-
+-} // namespace
++} // namespace detail
+ 
+ // ================================================================ command line
+ void printUsage(const char* argv0) {
+@@ -2686,7 +725,7 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
+ 
+ int run(const Options& options) {
+     // The world is large (meshes, textures, a renderer) — keep it off the stack.
+-    std::unique_ptr<App> app = std::make_unique<App>(options);
++    std::unique_ptr<detail::App> app = std::make_unique<detail::App>(options);
+     return app->run();
+ }
+ 
+diff --git a/src/app/AppAnalysis.cpp b/src/app/AppAnalysis.cpp
+new file mode 100644
+index 0000000..6fd3860
+--- /dev/null
++++ b/src/app/AppAnalysis.cpp
+@@ -0,0 +1,83 @@
++// App: "Hatalarım" (AppInternal.h).
++#include "app/AppInternal.h"
++
++namespace app {
++namespace detail {
++
++// ---------------------------------------------------------------- hatalarım
++namespace {
++std::string costText(const analysis::Mistake& m) {
++    char buf[32];
++    if (m.cost >= 9.95) std::snprintf(buf, sizeof buf, "%.0f", m.cost);
++    else std::snprintf(buf, sizeof buf, "%.1f", m.cost);
++    std::string n = buf;
++    for (char& c : n)
++        if (c == '.') c = ',';
++    return "-" + n + (m.unit == "%" ? std::string(" puan şans") : " " + m.unit);
++}
++} // namespace
++
++void App::stopAnalysis() {
++    if (anaThread_.joinable()) {
++        anaCancel_ = true;
++        anaThread_.join();
++    }
++    anaCancel_ = false;
++    anaDone_ = false;
++}
++
++void App::startAnalysis(int game, const ui::Settings& rules, uint64_t seed, std::vector<std::string> actions,
++                        const std::string& title) {
++    stopAnalysis();
++    anaResult_.clear();
++    anaTitle_ = title;
++    screens_.setAnalysis(true, false, title, {});
++    const std::array<std::string, 4> nm = names();
++    anaThread_ = std::thread([this, game, rules, seed, actions = std::move(actions), nm] {
++        std::vector<analysis::Mistake> out =
++            analysis::analyzeMatch((ui::GameKind)game, rules, seed, actions, nm, 3, &anaCancel_);
++        if (!anaCancel_) anaResult_ = std::move(out);
++        anaDone_ = true;
++    });
++}
++
++void App::pollAnalysis() {
++    if (!anaDone_ || !anaThread_.joinable()) return;
++    anaThread_.join();
++    anaDone_ = false;
++    std::vector<ui::MistakeView> rows;
++    for (const analysis::Mistake& m : anaResult_) rows.push_back({m.when, m.played, m.better, m.why, costText(m)});
++    screens_.setAnalysis(true, true, anaTitle_, rows);
++}
++
++// At the end of a match the player played himself (not the Yapay Zeka, not a replay).
++void App::analyzeFinishedMatch() {
++    if (replayMode_ || matchAiTouched_) return;
++    std::vector<std::string> actions;
++    if (otherInGame()) {
++        if (!other_->saveState(actions)) return;
++    } else {
++        for (const okey::LoggedAction& a : game_.actionLog()) actions.push_back(a.encode());
++    }
++    startAnalysis(matchGame_, matchSettings_, matchSeed_, std::move(actions),
++                  std::string(ui::gameInfo((ui::GameKind)matchGame_).name) + " \xC2\xB7 bu maç");
++}
++
++void App::analyzeReplay(int index) {
++    SavedMatch sv;
++    if (index < 0 || index >= (int)replayFiles_.size() || !readSave(sv, replayFiles_[(size_t)index])) {
++        screens_.setAnalysis(false, true, "", {});
++        return;
++    }
++    ui::Settings rules = screens_.settings();
++    for (const std::string& kv : sv.settings) {
++        const size_t eq = kv.find('=');
++        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
++    }
++    rules.game = sv.game;
++    startAnalysis(sv.game, rules, sv.seed, sv.actions,
++                  std::string(ui::gameInfo((ui::GameKind)sv.game).name) + " \xC2\xB7 " + sv.date);
++}
++
++} // namespace detail
++} // namespace app
+diff --git a/src/app/AppBots.cpp b/src/app/AppBots.cpp
+new file mode 100644
+index 0000000..7e2dc16
+--- /dev/null
++++ b/src/app/AppBots.cpp
+@@ -0,0 +1,202 @@
++// App: the okey bots' pacing and the Yapay Zeka mode (AppInternal.h).
++#include "app/AppInternal.h"
++
++namespace app {
++namespace detail {
++
++// ---------------------------------------------------------------- the Yapay Zeka mode's table messages
++// The engine speaks to the human seat in the second person ("Yandan Kırmızı 5 aldın", "Okey attın: 101 ceza").
++// While the Yapay Zeka plays that seat the table talks about it instead ("Yapay zeka yandan Kırmızı 5 aldı").
++bool endsWith(const std::string& s, const std::string& suffix) {
++    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
++}
++
++std::string lowerFirstTR(const std::string& w) {
++    static const char* const kPairs[][2] = {{"İ", "i"}, {"I", "ı"}, {"Ç", "ç"}, {"Ş", "ş"},
++                                            {"Ğ", "ğ"}, {"Ö", "ö"}, {"Ü", "ü"}};
++    for (const auto& p : kPairs) {
++        const std::string up = p[0];
++        if (w.compare(0, up.size(), up) == 0) return p[1] + w.substr(up.size());
++    }
++    if (!w.empty() && w[0] >= 'A' && w[0] <= 'Z') return std::string(1, (char)(w[0] - 'A' + 'a')) + w.substr(1);
++    return w;
++}
++
++// Second person singular past -> third person: "aldın" -> "aldı", "verdin" -> "verdi", "aldığın" -> "aldığı".
++std::string thirdPerson(const std::string& word) {
++    size_t core = word.size();
++    while (core > 0 && std::strchr("!?.,:;)", word[core - 1])) --core;
++    std::string w = word.substr(0, core);
++    static const char* const kSecond[] = {"dın", "din", "dun", "dün", "tın", "tin", "tun", "tün", "ğın", "ğin", "ğun", "ğün"};
++    for (const char* suffix : kSecond)
++        if (endsWith(w, suffix)) {
++            w.pop_back(); // the final "n"
++            break;
++        }
++    return w + word.substr(core);
++}
++
++std::string watchText(const okey::GameEvent& e) {
++    using okey::EvType;
++    if (e.type == EvType::MatchEnd) {
++        if (e.text == "Maç bitti! Sen kazandın!") return "Maç bitti! Yapay zeka kazandı!";
++        const std::string head = "Birinciliği ", tail = " ile paylaştın";
++        const size_t at = e.text.find(head);
++        if (endsWith(e.text, tail) && at != std::string::npos)
++            return e.text.substr(0, at) + "Yapay zeka birinciliği " +
++                   e.text.substr(at + head.size(), e.text.size() - tail.size() - at - head.size()) + " ile paylaştı";
++        return e.text;
++    }
++    if (e.player != HUMAN || e.text.empty()) return e.text;
++    switch (e.type) {
++    case EvType::MatchStart:
++    case EvType::HandStart: return e.text; // (player = the starter: nothing said to anyone)
++    case EvType::TurnStart: return "Sıra yapay zekada";
++    default: break;
++    }
++    std::istringstream in(e.text);
++    std::string word, out;
++    bool first = true;
++    while (in >> word) {
++        if (first) { // a sentence-initial verb goes lower case; a tile's name keeps its capital ("Kırmızı 5'i işledin")
++            static const char* const kNames[] = {"Sarı", "Mavi", "Siyah", "Kırmızı", "Sahte"};
++            if (std::none_of(std::begin(kNames), std::end(kNames), [&](const char* n) { return word.rfind(n, 0) == 0; }))
++                word = lowerFirstTR(word);
++        }
++        out += (first ? "" : " ") + thirdPerson(word);
++        first = false;
++    }
++    return "Yapay zeka " + out;
++}
++
++// ---------------------------------------------------------------- the Yapay Zeka mode
++// Switching it on hands the seat to its Kurt (paced like the others by updateBots); switching it off first takes
++// back a decision still being made on the worker thread, then the player simply goes on from the stage the turn is
++// in (draw / play / discard). Nothing else changes hands: the game, the scores and the seat stay the player's.
++void App::setAiMode(bool on) {
++    if (on == aiMode_) return;
++    if (opt_.autoplay) { // --autoplay keeps its bot on the seat for the whole run
++        if (flow_ != Flow::Title) table_.toast("--autoplay: bu koltukta hep yapay zeka oynar", ui::pal::TextLight, 2.4f);
++        return;
++    }
++    if (!on && think_.seat == HUMAN) {
++        cancelThink(); // joins the worker: its decision is dropped, nothing of it reaches the game
++        think_ = Think{};
++    }
++    aiMode_ = on;
++    if (on) matchAiTouched_ = true;
++    screenT_ = 0.f; // a between-hands screen that is up now starts its countdown afresh (or stops it)
++    table_.setAiMode(aiSeat());
++    screens_.setAiMode(aiSeat());
++    ++aiSwitches_;
++    if (flow_ == Flow::Title || snapshot_) return;
++    const bool myTurn = game_.handState() == okey::HandState::Playing && game_.current() == HUMAN;
++    if (on) table_.toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 3.2f);
++    else table_.toast(myTurn ? "Kontrol sende  \xC2\xB7  sıra sende" : "Kontrol sende", ui::pal::TextLight, 2.6f);
++    // the regulars notice (now and then, and only while a hand is being played)
++    if (game_.handState() == okey::HandState::Playing && simClock_ - aiBanterAt_ >= AI_BANTER_GAP && (on || aiSwitches_ > 1)) {
++        const ui::BanterLine l = ui::Banter::aiModeLine(on, (uint32_t)mix64(baseSeed_ + (uint64_t)aiSwitches_));
++        characters_.say(l.seat, l.text, l.seconds);
++        aiBanterAt_ = simClock_;
++    }
++}
++
++// ---------------------------------------------------------------- bots
++void App::updateBots(float simDt) {
++    const int s = game_.current();
++    if (s < 0 || s > 3 || !isBotSeat(s) || !bots_[s]) return;
++    if (s != think_.seat || game_.turnNumber() != think_.turn) { // a new bot turn: think a little first
++        cancelThink();
++        think_.seat = s;
++        think_.turn = game_.turnNumber();
++        think_.actions = 0;
++        // (the reach itself now takes its time — the hand goes to the tile before it moves — so a little less
++        // idle thinking keeps the table's rhythm)
++        think_.wait = paceRng_.uniform(0.45f, 1.0f) / animSpeed();
++    }
++    if (!think_.pending) launchThink(s);
++    if (table_.isAnimating()) return;  // tiles still in the air: nobody moves
++    think_.wait -= simDt;
++    if (think_.wait > 0.f || !thinkReady()) return;
++    const okey::BotAction a = takeThink();
++    if (++think_.actions > MAX_BOT_ACTIONS) {
++        TraceLog(LOG_WARNING, "Bot %d: %d hamlede tur bitmedi, zorla bitiriliyor", s, think_.actions);
++        forceLegalMove(s);
++    } else {
++        applyBot(s, a);
++    }
++    think_.wait = paceRng_.uniform(0.25f, 0.5f) / animSpeed();
++}
++
++void App::launchThink(int seat) {
++    okey::Bot* bot = bots_[seat].get();
++    think_.pending = true;
++    if (snapshot_) { // frame-exact determinism: decide right here
++        think_.ready = bot->next(game_, seat);
++        think_.haveReady = true;
++        return;
++    }
++    // A bot decision can take ~10 ms (Kurt's rollouts): think on a worker thread while the pacing delay runs.
++    // Nothing mutates the game until the result is applied on this thread; cancelThink() joins first.
++    const okey::Game* g = &game_;
++    think_.fut = std::async(std::launch::async, [bot, g, seat] { return bot->next(*g, seat); });
++}
++
++bool App::thinkReady() {
++    if (think_.haveReady) return true;
++    return think_.fut.valid() && think_.fut.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
++}
++
++okey::BotAction App::takeThink() {
++    think_.pending = false;
++    if (think_.haveReady) {
++        think_.haveReady = false;
++        return think_.ready;
++    }
++    return think_.fut.get();
++}
++
++void App::cancelThink() {
++    if (think_.fut.valid()) think_.fut.wait();
++    think_.fut = std::future<okey::BotAction>();
++    think_.pending = false;
++    think_.haveReady = false;
++}
++
++void App::applyBot(int seat, const okey::BotAction& a) {
++    okey::ActionResult r = okey::applyBotAction(game_, seat, a);
++    if (!r.ok) {
++        ++rejected_;
++        TraceLog(LOG_WARNING, "Bot %d hamlesi reddedildi (%s): %s", seat, actionName(a.kind), r.error.c_str());
++        const okey::BotAction f = okey::fallbackAction(game_, seat);
++        r = okey::applyBotAction(game_, seat, f);
++        if (!r.ok) {
++            ++fallbackRejected_;
++            TraceLog(LOG_WARNING, "Bot %d yedek hamlesi de reddedildi (%s): %s", seat, actionName(f.kind), r.error.c_str());
++            forceLegalMove(seat);
++        }
++    }
++    pumpEvents();
++}
++
++// Last resort: any legal step that moves the turn forward, so a bot can never stall the game.
++void App::forceLegalMove(int seat) {
++    ++forced_;
++    if (game_.handState() != okey::HandState::Playing || game_.current() != seat) return;
++    if (game_.stage() == okey::TurnStage::NeedDraw) {
++        if (game_.pileCount() > 0 && game_.drawFromPile(seat).ok) return pumpEvents();
++        if (game_.takeFromLeft(seat).ok) return pumpEvents();
++        return;
++    }
++    if (game_.pendingLeftTile() >= 0 && game_.returnLeftTile(seat).ok) {
++        game_.drawFromPile(seat);
++        return pumpEvents();
++    }
++    const std::vector<int> hand = game_.player(seat).hand;
++    for (int t : hand)
++        if (game_.discard(seat, t).ok) break;
++    pumpEvents();
++}
++
++} // namespace detail
++} // namespace app
+diff --git a/src/app/AppDebug.cpp b/src/app/AppDebug.cpp
+new file mode 100644
+index 0000000..e73085c
+--- /dev/null
++++ b/src/app/AppDebug.cpp
+@@ -0,0 +1,202 @@
++// App: snapshots and their extra views, frame statistics, --ai-chaos (AppInternal.h).
++#include "app/AppInternal.h"
++
++namespace app {
++namespace detail {
++
++namespace {
++
++Vector3 lookDir(float yawDeg, float pitchDeg) {
++    const float y = yawDeg * DEG2RAD, p = pitchDeg * DEG2RAD;
++    return {std::sin(y) * std::cos(p), std::sin(p), -std::cos(y) * std::cos(p)};
++}
++
++} // namespace
++
++// Extra snapshot cameras for judging the space (the seat view is the PlayerCamera itself).
++Camera3D viewCamera(const std::string& view, const Camera3D& seat, bool tavla) {
++    Camera3D c = seat;
++    c.up = {0, 1, 0};
++    c.projection = CAMERA_PERSPECTIVE;
++    // "straight ahead" of the seat (the tavla table faces another way than ours)
++    const float yaw0 = std::atan2(seat.target.x - seat.position.x, -(seat.target.z - seat.position.z)) * RAD2DEG;
++    if (tavla && view == "back") { // behind the opponent, looking back at our seat at the tavla table
++        c.position = w3d::tavlaToWorld({0.30f, 1.72f, -1.55f});
++        c.target = w3d::tavlaToWorld({-0.04f, 0.90f, 0.35f});
++        c.fovy = 56.f;
++    } else if (view == "left" || view == "right") {
++        const float yaw = yaw0 + (view == "left" ? -76.f : 76.f);
++        const Vector3 d = lookDir(yaw, -13.f);
++        c.target = {c.position.x + d.x, c.position.y + d.y, c.position.z + d.z};
++        c.fovy = w3d::FOVY_DEG;
++    } else if (view == "back") { // behind Kel Mahmut, looking back at our seat and the wall behind it
++        c.position = {0.42f, 1.78f, -2.55f};
++        c.target = {-0.05f, 0.92f, 0.65f};
++        c.fovy = 58.f;
++    } else if (view == "corner") { // high in the front-left corner, over the card players
++        c.position = {-3.80f, 2.50f, 3.25f};
++        c.target = {0.35f, 0.82f, -0.70f};
++        c.fovy = 60.f;
++    }
++    return c;
++}
++
++// ---------------------------------------------------------------- snapshots
++// --render-last N: a slow (software) GL only draws the frames that lead up to the picture.
++bool App::snapshotRenderNow() const {
++    if (opt_.renderLast < 0) return true;
++    switch (snapState_) {
++    case SnapState::Summary:
++    case SnapState::MatchOver: return snapReachedAt_ >= 0 && frame_ - snapReachedAt_ + opt_.renderLast >= opt_.frames;
++    default: return frame_ + opt_.renderLast >= opt_.frames;
++    }
++}
++
++bool App::snapshotDone() {
++    switch (snapState_) {
++    case SnapState::Summary:
++    case SnapState::MatchOver: {
++        const ui::ScreenId want = snapState_ == SnapState::Summary ? ui::ScreenId::HandSummary : ui::ScreenId::MatchOver;
++        if (snapReachedAt_ < 0 && screens_.current() == want) snapReachedAt_ = frame_;
++        return snapReachedAt_ >= 0 && frame_ - snapReachedAt_ >= opt_.frames;
++    }
++    default: return frame_ >= opt_.frames;
++    }
++}
++
++bool App::exportSnapshot() {
++    Image img = LoadImageFromTexture(rt_.texture);
++    ImageFlipVertical(&img);
++    // translucent 2D overlays blended into the render target leave alpha < 1 behind: make it opaque
++    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
++    const bool ok = ExportImage(img, opt_.snapshot.c_str());
++    UnloadImage(img);
++    std::printf("[snapshot] %s %s (state %s, view %s, frame %ld, particles %d)\n", ok ? "wrote" : "FAILED to write",
++                opt_.snapshot.c_str(), opt_.state.empty() ? "game" : opt_.state.c_str(), opt_.view.c_str(), frame_, renderer_.particleCount());
++    return ok;
++}
++
++// The real window's back buffer (MSAA resolved, HiDPI size), read before the swap.
++void App::saveWindowShot() {
++    Image img = LoadImageFromScreen();
++    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8);
++    const bool ok = ExportImage(img, opt_.screenshot.c_str());
++    std::printf("[screenshot] %s %s (%dx%d pixels, window %dx%d points)\n", ok ? "wrote" : "FAILED to write",
++                opt_.screenshot.c_str(), img.width, img.height, GetScreenWidth(), GetScreenHeight());
++    UnloadImage(img);
++}
++
++void App::recordStats(float cpuMs) {
++    const float frameMs = GetFrameTime() * 1000.f;
++    stats_.add(frameMs, cpuMs, renderer_.particleCount());
++}
++
++// --ai-chaos. beforeTable: flips of the mode (directly, like the HUD button or Y, or through the pause menu), the
++// pause menu itself and the between-hands buttons. Otherwise (where the player's clicks act, after the table's
++// update): the stand-in's moves while the mode is off. A watchdog reports anything that stops moving.
++void App::updateChaos(float simDt, bool beforeTable) {
++    Chaos& c = chaos_;
++    okey::Rng& rng = c.rng;
++    const ui::ScreenId cur = screens_.current();
++    if (!beforeTable) {
++        if (aiSeat() || flow_ != Flow::Playing || game_.handState() != okey::HandState::Playing || game_.current() != HUMAN)
++            return;
++        if (table_.isAnimating()) return; // (the table takes no clicks while it deals; flights are waited out too)
++        c.actIn -= simDt;
++        if (c.actIn > 0.f) return;
++        c.actIn = rng.uniform(0.05f, 1.2f);
++        if (!c.standIn) c.standIn = std::make_unique<okey::Bot>(okey::BotLevel::Normal, rng.next());
++        const okey::BotAction a = c.standIn->next(game_, HUMAN);
++        okey::ActionResult r = okey::applyBotAction(game_, HUMAN, a);
++        ++c.moves;
++        if (!r.ok) {
++            ++c.movesRejected;
++            std::printf("[aichaos] stand-in move rejected (%s): %s\n", actionName(a.kind), r.error.c_str());
++            r = okey::applyBotAction(game_, HUMAN, okey::fallbackAction(game_, HUMAN));
++            if (!r.ok) forceLegalMove(HUMAN);
++        }
++        return;
++    }
++
++    // watchdog: the turn, the stage, the hand, the screen or the flow must change every now and then
++    {
++        const okey::PlayerInfo& p = game_.player(std::clamp(game_.current(), 0, 3));
++        const uint64_t sig = mix64(((uint64_t)game_.turnNumber() << 20) ^ ((uint64_t)game_.handIndex() << 12) ^
++                                   ((uint64_t)game_.stage() << 8) ^ ((uint64_t)cur << 4) ^ (uint64_t)flow_ ^
++                                   ((uint64_t)p.hand.size() << 40) ^ ((uint64_t)matchCount_ << 48) ^
++                                   ((uint64_t)game_.table().size() << 32));
++        if (sig != c.sig || c.pauseLeft > 0.f) {
++            c.sig = sig;
++            c.sigAt = simClock_;
++        }
++        const double stall = simClock_ - c.sigAt;
++        c.worstStall = std::max(c.worstStall, stall);
++        if (stall > 90.0) {
++            std::printf("[aichaos] STUCK for %.0f s: flow %d, screen %d, hand %d, turn %d, seat %d, stage %d, mode %s, "
++                        "animating %d, think seat %d pending %d\n",
++                        stall, (int)flow_, (int)cur, game_.handIndex(), game_.turnNumber(), game_.current(),
++                        (int)game_.stage(), aiMode_ ? "on" : "off", table_.isAnimating() ? 1 : 0, think_.seat,
++                        think_.pending ? 1 : 0);
++            exitCode_ = 2;
++            quit_ = true;
++            return;
++        }
++    }
++
++    // the title screen (every other match): "Oyna" or "Yapay Zekayı İzle"
++    if (flow_ == Flow::Title) {
++        if (c.titleIn < 0.f) return;
++        c.titleIn -= simDt;
++        if (c.titleIn > 0.f) return;
++        c.titleIn = -1.f;
++        ++c.titleStarts;
++        screens_.show(ui::ScreenId::None);
++        handleScreenAction(rng.chance(0.5f) ? ui::ScreenAction::StartAiMatch : ui::ScreenAction::StartMatch);
++        return;
++    }
++    // the pause menu: up for a moment, left through "Devam" or through the mode's entry
++    if (c.pauseLeft > 0.f) {
++        c.pauseLeft -= simDt;
++        if (c.pauseLeft > 0.f) return;
++        if (cur == ui::ScreenId::Paused) {
++            screens_.show(ui::ScreenId::None);
++            if (c.pauseFlips) {
++                ++c.flips;
++                ++c.pauseFlipCount;
++                handleScreenAction(ui::ScreenAction::ToggleAiMode);
++            }
++        }
++        return;
++    }
++    c.nextPause -= simDt;
++    if (c.nextPause <= 0.f && cur == ui::ScreenId::None && flow_ != Flow::Title) {
++        c.nextPause = rng.uniform(4.f, 40.f);
++        c.pauseLeft = rng.uniform(0.1f, 2.5f);
++        c.pauseFlips = rng.chance(0.5f);
++        ++c.pauses;
++        screens_.show(ui::ScreenId::Paused);
++        return;
++    }
++    // flips at random moments: mid-think, mid-flight, mid-deal, between hands (the HUD button / Y)
++    c.nextFlip -= simDt;
++    if (c.nextFlip <= 0.f) {
++        c.nextFlip = rng.chance(0.2f) ? rng.uniform(0.f, 0.3f) : rng.uniform(0.3f, 9.f);
++        ++c.flips;
++        setAiMode(!aiMode_);
++    }
++    // the between-hands buttons when nobody else presses them (the mode is off)
++    if (!aiSeat() && (cur == ui::ScreenId::HandSummary || cur == ui::ScreenId::MatchOver)) {
++        if (c.pressIn < 0.f) c.pressIn = rng.uniform(0.2f, 4.f);
++        c.pressIn -= simDt;
++        if (c.pressIn <= 0.f) {
++            c.pressIn = -1.f;
++            ++c.presses;
++            pressBetweenHands();
++        }
++    } else {
++        c.pressIn = -1.f;
++    }
++}
++
++} // namespace detail
++} // namespace app
+diff --git a/src/app/AppFlow.cpp b/src/app/AppFlow.cpp
+new file mode 100644
+index 0000000..13c37de
+--- /dev/null
++++ b/src/app/AppFlow.cpp
+@@ -0,0 +1,695 @@
++// App: the match flow (AppInternal.h).
++#include "app/AppInternal.h"
++
++namespace app {
++namespace detail {
++
++// ---------------------------------------------------------------- flow
++void App::setLocation(int loc, int seat) {
++    if (loc != 1) seat = 0;
++    if (loc == location_ && seat == locationSeat_) return;
++    location_ = loc;
++    locationSeat_ = seat;
++    room_.setTavlaFocus(loc == 1);
++    characters_.setTavlaTable(loc == 1, seat);
++    if (loc == 1) pcam_.setTavlaSeat();
++    else pcam_.setOkeySeat();
++    pcam_.setRecentreKey(loc != 1); // (tavla: R throws the dice)
++    if (!snapshot_) fade_ = 1.f;
++}
++
++void App::setTitleMode(bool on) {
++    room_.setTitleMode(on);
++    characters_.setTitleMode(on);
++    pcam_.setTitleMode(on);
++    if (!on) pcam_.reset();
++}
++
++void App::handleScreenAction(ui::ScreenAction a) {
++    using A = ui::ScreenAction;
++    switch (a) {
++    case A::None:
++    case A::Resume: break;
++    case A::StartMatch:
++        if (flow_ == Flow::Title) setAiMode(false); // "Oyna": you play ("Yeni Oyun" keeps the mode as it is)
++        startMatch();
++        break;
++    case A::StartAiMatch:
++        setAiMode(true);
++        startMatch();
++        break;
++    case A::ToggleAiMode: setAiMode(!aiMode_); break;
++    case A::NextHand: startNextHand(); break;
++    case A::ShowMatchResult: flow_ = Flow::MatchOver; break;
++    case A::ResumeSaved: resumeSaved(); break;
++    case A::WatchReplay: startReplay(screens_.chosenReplay()); break;
++    case A::AnalyzeReplay: analyzeReplay(screens_.chosenReplay()); break;
++    case A::ToTitle: toTitle(); break;
++    case A::Quit: quit_ = true; break;
++    case A::SettingsChanged:
++        releaseOverrides();
++        applySettings();
++        settingsDirty_ = true;
++        break;
++    }
++}
++
++void App::startMatch() {
++    cancelThink();
++    const ui::Settings& st = screens_.settings();
++    okey::RulesConfig cfg;
++    const ui::GameKind kind = (ui::GameKind)std::clamp(st.game, 0, (int)ui::GameKind::Count - 1);
++    if (!ui::isOkeyFamily(kind)) {
++        startOtherMatch(kind);
++        return;
++    }
++    if (other_) {
++        other_->shutdown();
++        other_.reset();
++    }
++    setLocation(0, 0);
++    table_.setFurnitureOnly(false);
++    screens_.clearSheet();
++    cfg.variant = kind == ui::GameKind::Okey ? okey::Variant::Okey : okey::Variant::Yuzbir;
++    cfg.teams = kind == ui::GameKind::YuzbirEsli;
++    cfg.okeyStartPoints = std::clamp(st.okeyStart, 1, 99);
++    cfg.okeyColorDouble = st.okeyRenkli;
++    cfg.numHands = std::clamp(st.numHands, 1, 11);
++    cfg.katlamali = st.katlamali || opt_.katlamali;
++    cfg.leftOpenPenalty = st.yandanCeza;
++    game_.setRules(cfg);
++    const std::array<std::string, 4> nm = names();
++    for (int s = 0; s < 4; ++s) game_.setPlayer(s, nm[s], s == HUMAN);
++    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
++                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
++                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
++    matchSeed_ = matchSeed;
++    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
++    screens_.setAnalysis(false, true, "", {});
++    matchGame_ = (int)kind;
++    matchSettings_ = st;
++    if (!resuming_) {
++        deleteSave();
++        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
++    }
++    ++matchCount_;
++    for (int s = 0; s < 4; ++s) {
++        // the human's seat always has one too, ready for the Yapay Zeka mode at any moment: a Kurt (--autoplay: an Usta)
++        const okey::BotLevel lvl = s != HUMAN     ? (okey::BotLevel)std::clamp(st.difficulty, 0, 2)
++                                   : opt_.autoplay ? okey::BotLevel::Normal
++                                                   : okey::BotLevel::Hard;
++        bots_[s] = std::make_unique<okey::Bot>(lvl, mix64(matchSeed * 4u + (uint64_t)s + 0xB07ull));
++        // the regulars' own ways: Kel Mahmut bold, Emekli Nuri careful (the AI in the player's seat stays neutral)
++        bots_[s]->setStyle(s == HUMAN ? okey::BotStyle{} : okey::BotStyle::forSeat(s));
++    }
++    characters_.setNames(nm);
++    setTitleMode(false);
++    table_.setAnimationSpeed(st.animSpeed);
++    characters_.setAnimationSpeed(st.animSpeed);
++    table_.setHints(st.hints);
++    delayed_.clear();
++    think_ = Think{};
++    handOverT_ = screenT_ = 0.f;
++    flow_ = Flow::Playing;
++    matchAiTouched_ = aiMode_;
++    game_.startMatch(matchSeed);
++    pumpEvents();
++    if (!unattended() && !resuming_ && !replayMode_)
++        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
++    maybeShowGuide(kind);
++    if (aiMode_ && !snapshot_)
++        table_.toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
++    if (opt_.autoplay || opt_.aiChaos)
++        std::printf("[%s] match %d (%s): seed %llu, %d hands (frame %ld)%s\n", opt_.autoplay ? "autoplay" : "aichaos",
++                    matchCount_, ui::gameInfo(kind).name, (unsigned long long)matchSeed, cfg.numHands, frame_,
++                    aiMode_ ? ", Yapay Zeka on" : "");
++}
++
++// A match of one of the other games (tavla, the card games): the table shows only its furniture, the game brings
++// its own pieces.
++void App::startOtherMatch(ui::GameKind kind) {
++    const ui::Settings& st = screens_.settings();
++    if (!other_ || otherKind_ != kind) {
++        if (other_) other_->shutdown();
++        other_ = makeTableGame(kind);
++        otherKind_ = kind;
++        if (!other_) {
++            std::fprintf(stderr, "Bu oyun henüz hazır değil.\n");
++            flow_ = Flow::Title;
++            return;
++        }
++        TableContext ctx;
++        ctx.renderer = &renderer_;
++        ctx.characters = &characters_;
++        ctx.sfx = [this](ui::Sfx s) {
++            if (audioOn_) audio_.play(s);
++        };
++        if (!other_->init(ctx)) {
++            std::fprintf(stderr, "Oyun masası kurulamadı.\n");
++            other_.reset();
++            flow_ = Flow::Title;
++            return;
++        }
++    }
++    for (auto& b : bots_) b.reset();
++    game_ = okey::Game(game_.rules()); // the okey game rests (not started)
++    table_.setFurnitureOnly(true);
++    screens_.clearSheet();
++    const std::array<std::string, 4> nm = names();
++    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
++                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
++                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
++    matchSeed_ = matchSeed;
++    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
++    screens_.setAnalysis(false, true, "", {});
++    matchGame_ = (int)kind;
++    matchSettings_ = st;
++    if (!resuming_) {
++        deleteSave();
++        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
++    }
++    ++matchCount_;
++    characters_.setNames(nm);
++    setTitleMode(false);
++    other_->setLevel(std::clamp(st.difficulty, 0, 2));
++    other_->setAnimationSpeed(st.animSpeed);
++    other_->setHints(st.hints);
++    characters_.setAnimationSpeed(st.animSpeed);
++    delayed_.clear();
++    think_ = Think{};
++    handOverT_ = screenT_ = 0.f;
++    flow_ = Flow::Playing;
++    matchAiTouched_ = aiMode_;
++    other_->startMatch(st, nm, matchSeed);
++    {
++        const std::vector<int> seats = other_->seats();
++        setLocation(other_->location(), seats.size() > 1 ? seats[1] : 0);
++    }
++    if (!unattended() && !resuming_ && !replayMode_)
++        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
++    maybeShowGuide(kind);
++    if (aiMode_ && !snapshot_) other_->toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
++    if (opt_.autoplay)
++        std::printf("[autoplay] match %d (%s): seed %llu (frame %ld)\n", matchCount_, ui::gameInfo(kind).name,
++                    (unsigned long long)matchSeed, frame_);
++}
++
++void App::startNextHand() {
++    cancelThink();
++    if (otherInGame()) {
++        if (!other_->handOver() || other_->matchOver()) return;
++        handOverT_ = 0.f;
++        flow_ = Flow::Playing;
++        other_->startNextHand();
++        return;
++    }
++    if (game_.handState() != okey::HandState::HandOver) return;
++    think_ = Think{};
++    handOverT_ = 0.f;
++    flow_ = Flow::Playing;
++    game_.startNextHand();
++    pumpEvents();
++}
++
++void App::toTitle() {
++    saveMatch();
++    if (replayMode_ && other_) other_->setReplayMode(false);
++    replayMode_ = false;
++    cancelThink();
++    if (other_) {
++        other_->shutdown();
++        other_.reset();
++    }
++    table_.setFurnitureOnly(false);
++    screens_.clearSheet();
++    think_ = Think{};
++    delayed_.clear();
++    const okey::RulesConfig cfg = game_.rules();
++    game_ = okey::Game(cfg);  // not started: the tiles rest in a heap on the table
++    for (auto& b : bots_) b.reset();
++    flow_ = Flow::Title;
++    setLocation(0, 0);
++    setTitleMode(true);
++    lookDrag_ = false;
++}
++
++// ---------------------------------------------------------------- the room around us
++// The other tables cheer a big finish or a mars, groan when the player loses big; at the end of a match the winner
++// buys a round of tea (the çırak brings it).
++void App::crowdAtHandEnd() {
++    if (replayMode_ && replaySpeed_ > 2.f) return;
++    using C = r3d::Characters;
++    if (otherInGame()) {
++        const ui::SheetModel sh = other_->sheet(false);
++        const bool humanHand = sh.starCol >= 0 && sh.starCol == sh.humanCol;
++        if (sh.taglineRed) characters_.crowdReact(humanHand ? C::CrowdCheer : C::CrowdLaugh);
++        if (other_->matchOver()) {
++            int payer = sh.humanWon ? 0 : 1;
++            const std::vector<int> seats = other_->seats();
++            if (!sh.humanWon && !sh.ranking.empty() && sh.columns.size() == seats.size() &&
++                sh.ranking[0] < (int)seats.size())
++                payer = seats[(size_t)sh.ranking[0]];
++            if (payer == 0 && !sh.humanWon) payer = 1;
++            if (!sh.humanWon) characters_.crowdReact(C::CrowdGroan, Vector3{0.f, 0.8f, 0.f}, 0.5f);
++            characters_.orderTeaRound(payer);
++        }
++        return;
++    }
++    const okey::HandResult& r = game_.lastHandResult();
++    if (r.winner >= 0) {
++        const bool ours = r.winner == HUMAN || (game_.teams() && r.winner == okey::Game::partnerOf(HUMAN));
++        if (r.finishedWithJoker || r.multiplier >= 2)
++            characters_.crowdReact(ours ? C::CrowdCheer : C::CrowdGroan, Vector3{0.f, 0.8f, 0.f}, ours ? 1.f : 0.6f);
++    }
++    if (game_.handState() == okey::HandState::MatchOver) characters_.orderTeaRound(game_.leaderSeat());
++}
++
++void App::drawCrowdShouts() {
++    if (flow_ == Flow::Title || screens_.blocksGame()) return;
++    for (const Shout& sh : shouts_) {
++        Vector2 p;
++        if (!renderer_.projectToVirtual(sh.at, p)) continue;
++        const float a = std::min(1.f, sh.t / 0.2f) * std::clamp((2.4f - sh.t) / 0.5f, 0.f, 1.f);
++        p.y -= 30.f + sh.t * 14.f;
++        p.x = std::clamp(p.x, 90.f, 1510.f);
++        p.y = std::clamp(p.y, 40.f, 700.f);
++        const float fs = 19.f * ui::hudTextScale();
++        const Vector2 sz = ui::measureText(ui::FontId::UiBold, sh.text, fs);
++        const Rectangle box{p.x - sz.x * 0.5f - 12.f, p.y - sz.y * 0.5f - 6.f, sz.x + 24.f, sz.y + 12.f};
++        DrawRectangleRounded(box, 0.5f, 8, Color{24, 14, 8, (unsigned char)(170 * a)});
++        ui::drawTextCentered(ui::FontId::UiBold, sh.text, p, fs, Color{246, 232, 200, (unsigned char)(255 * a)});
++    }
++}
++
++// ---------------------------------------------------------------- rehber (a game's first match)
++namespace {
++
++struct Guide {
++    std::string title;
++    std::vector<std::string> lines;
++    std::string firstTurn; // said when the player's turn first comes
++};
++
++Guide guideFor(ui::GameKind k, const std::string& tavlaOpp = "Kel Mahmut") {
++    using G = ui::GameKind;
++    const std::string hint = "Takılırsan İpucu düğmesi (ya da H tuşu) Kurt'un senin yerinde ne yapacağını gösterir.";
++    switch (k) {
++    case G::Yuzbir:
++    case G::YuzbirEsli: {
++        Guide g{k == G::Yuzbir ? "101'e Hoş Geldin" : "Eşli 101'e Hoş Geldin", {}, ""};
++        g.lines = {"Amaç taşlarını perlere dizip masaya açmak ve elini bitirmek. Puanı en düşük olan kazanır.",
++                   "Sıran gelince ortadaki desteden ya da soldakinin attığı taştan çek, sonra bir taş at.",
++                   "Açmak için serilerin toplamı en az 101 olmalı ya da 5 çiftin olmalı. Seri Diz / Çift Diz istakanı "
++                   "düzenler, El Aç ile açarsın.",
++                   "Açtıktan sonra masadaki perlere taş işleyebilirsin. İşlenebilecek bir taşı ya da okeyi atmak 101 "
++                   "cezadır."};
++        if (k == G::YuzbirEsli)
++            g.lines.push_back("Karşındaki Kel Mahmut ortağın: biriniz bitirince ortağının eli yazılmaz, takımların "
++                              "toplamı sayılır.");
++        g.lines.push_back(hint);
++        g.firstTurn = "Sıra sende: ortadaki desteye ya da soldaki taşa tıkla, sonra atacağın taşı sürükleyip bırak.";
++        return g;
++    }
++    case G::Okey:
++        return {"Okey'e Hoş Geldin",
++                {"Amaç 14 taşını perlere (sıralı aynı renk ya da aynı sayı farklı renk) ya da 7 çifte dizip 15. taşı "
++                 "bırakarak bitirmek.",
++                 "Sırası gelen ortadan ya da soldan bir taş çeker, bir taş atar.",
++                 "Elin tamamlanınca fazla taşı masanın ortasındaki Bitir yerine sürükle. Göstergenin eşi elindeyse ilk "
++                 "taşını atmadan Göster'e bas.",
++                 "Herkes puanla başlar; bitiren her oyuncudan 2 puan (okey atarak ya da çiftle 4) alır. Biri 0'a "
++                 "düşünce oyun biter, en çok puanı kalan kazanır.",
++                 hint},
++                "Sıra sende: bir taş çek, sonra atacağın taşı sürükleyip bırak."};
++    case G::Tavla:
++        return {"Tavlaya Hoş Geldin",
++                {"Tavla kendi masasında oynanır: sedirin önündeki küçük masada " + tavlaOpp +
++                     " karşına oturur (rakibi Ayarlar'dan seçersin). Amaç 15 pulunu kendi evine (sağ alttaki 6 hane) "
++                     "getirip hepsini toplamak.",
++                 "Zar At'a bas, sonra oynatacağın pulun hanesine, ardından yeşil yanan haneye tıkla. Geri Al ile "
++                 "hamleni geri alabilirsin.",
++                 "Tek duran pul vurulabilir; kırılan pul önce rakibin evinden yeniden girmelidir.",
++                 "Rakip hiç pul toplamadan bitirirsen mars olur: 2 sayı. Maç ayarlardaki sayıya kadar sürer.", hint},
++                "Sıra sende: Zar At'a bas."};
++    case G::Pisti:
++        return {"Pişti'ye Hoş Geldin",
++                {"Sırası gelen yere bir kâğıt atar. Yerdeki en üstteki kâğıtla aynı sayıyı atan yerdekilerin hepsini "
++                 "alır; Vale her şeyi alır.",
++                 "Yerde tek kâğıt varken aynısıyla alırsan pişti: 10 puan (Vale ile Vale: 20).",
++                 "As, Vale 1; Sinek 2 2; Karo 10 3 puan; en çok kâğıt alan 3 puan daha alır.",
++                 "Oynayacağın kâğıda tıklaman yeterli.", hint},
++                "Sıra sende: atacağın kâğıda tıkla."};
++    case G::Batak:
++        return {"Batak'a Hoş Geldin",
++                {"İhalede kaç el alacağını söyle ya da pas de. İhaleyi alan kozu seçer ve ilk kâğıdı atar.",
++                 "Renge uymak ve yükseltmek zorunlu; o renk yoksa koz çakmalısın. Koz açılmadan kozla başlanmaz.",
++                 "Sözünü tutarsan aldığın el kadar yazarsın, tutamazsan ihale kadar düşersin. Hiç el alamayan da batar.",
++                 "Oynanabilir kâğıtların parlak durur; tıkladığın kâğıt oynanır.", hint},
++                "Sıra sende: ortadaki panelden ihaleni söyle ya da pas de."};
++    case G::King:
++        return {"King'e Hoş Geldin",
++                {"20 el oynanır. Seçme sırası gelen o elin oyununu söyler: herkes 3 kez ceza, 2 kez koz seçer.",
++                 "Cezalarda amaç almamak: el, kupa, erkek, kız, rıfkı, son iki. Kozda aldığın her el +50.",
++                 "Renge uymak zorunlu; bazı cezaların kendi zorunlulukları var (Kurallar sayfasında).",
++                 "Seçme sırası sende olunca ortada açılan panelden oyunu seç; kartlarına tıklayarak oyna.", hint},
++                "Sıra sende: oynayacağın kâğıda tıkla."};
++    default: return {};
++    }
++}
++
++} // namespace
++
++void App::maybeShowGuide(ui::GameKind kind) {
++    firstTurnTip_.clear();
++    ui::Settings& st = screens_.settings();
++    const int bit = 1 << (int)kind;
++    if (resuming_ || (!opt_.guideDemo && (unattended() || aiMode_ || !st.guide || (st.guideSeen & bit)))) return;
++    const Guide g = guideFor(kind, names()[(size_t)std::clamp(screens_.settings().tavlaRakip, 1, 3)]);
++    if (g.title.empty()) return;
++    st.guideSeen |= bit;
++    settingsDirty_ = true;
++    screens_.setGuide(g.title, g.lines);
++    screens_.show(ui::ScreenId::Guide);
++    firstTurnTip_ = g.firstTurn;
++}
++
++// The first time the player's turn comes in a guided match: what to do, in one line.
++void App::updateFirstTurnTip() {
++    if (firstTurnTip_.empty() || aiSeat() || screens_.blocksGame()) return;
++    bool mine;
++    if (otherInGame()) mine = other_->activeSeat() == HUMAN && !other_->animating();
++    else mine = game_.handState() == okey::HandState::Playing && game_.current() == HUMAN && !table_.isAnimating();
++    if (!mine) return;
++    if (otherInGame()) other_->toast(firstTurnTip_, ui::pal::Highlight, 6.f);
++    else table_.toast(firstTurnTip_, ui::pal::Highlight, 6.f);
++    firstTurnTip_.clear();
++}
++
++// ---------------------------------------------------------------- İpucu
++// What a Kurt would do now in the player's seat: the first step of its plan, glowing on the table and said in words.
++void App::showOkeyHint() {
++    if (game_.handState() != okey::HandState::Playing || game_.current() != HUMAN || aiSeat()) return;
++    if (!hintBot_) hintBot_ = std::make_unique<okey::Bot>(okey::BotLevel::Hard, 0x41D7ull);
++    hintBot_->resetForHand();
++    const okey::BotAction a = hintBot_->next(game_, HUMAN);
++    const okey::OkeyInfo& ok = game_.okey();
++    auto name = [&](int id) { return okey::tileNameTR(id, ok); };
++    std::vector<int> tiles;
++    bool pile = false, left = false;
++    std::string text;
++    using K = okey::BotAction::Kind;
++    switch (a.kind) {
++    case K::DrawPile:
++        pile = true;
++        text = "İpucu: ortadan çek";
++        break;
++    case K::TakeLeft:
++        left = true;
++        text = "İpucu: soldaki taşı al (" + name(game_.topDiscard(okey::Game::leftOf(HUMAN))) + ")";
++        break;
++    case K::ReturnLeft:
++        tiles.push_back(game_.pendingLeftTile());
++        text = "İpucu: soldan aldığın taşı geri ver, işine yaramıyor";
++        break;
++    case K::Open:
++    case K::LayMelds: {
++        int value = 0, n = 0;
++        for (const auto& m : a.melds) {
++            okey::Meld mm;
++            if (okey::makeMeld(m, ok, mm, m.size() == 2)) value += mm.value();
++            ++n;
++            tiles.insert(tiles.end(), m.begin(), m.end());
++        }
++        const bool pairs = !a.melds.empty() && a.melds.front().size() == 2;
++        text = a.kind == K::Open ? (pairs ? "İpucu: " + std::to_string(n) + " çiftle elini aç"
++                                          : "İpucu: elini aç (" + std::to_string(value) + ")")
++                                 : "İpucu: parlayan taşlarla yeni per aç";
++        break;
++    }
++    case K::AddToMeld:
++        tiles.push_back(a.tile);
++        text = "İpucu: " + name(a.tile) + " taşını masadaki pere işle";
++        break;
++    case K::SwapJoker:
++        tiles.push_back(a.tile);
++        text = "İpucu: " + name(a.tile) + " ile masadaki okeyi al";
++        break;
++    case K::Discard:
++        tiles.push_back(a.tile);
++        text = "İpucu: " + name(a.tile) + " at";
++        break;
++    case K::Finish:
++        tiles.push_back(a.tile);
++        text = "İpucu: bitirebilirsin! " + name(a.tile) + " taşını bırak (Bitir)";
++        break;
++    case K::ShowIndicator:
++        tiles.push_back(game_.indicatorTwin(HUMAN));
++        text = "İpucu: göstergeyi göster (Göster)";
++        break;
++    }
++    table_.showHint(tiles, pile, left, text);
++}
++
++void App::updateFlow(float simDt) {
++    if (otherInGame()) {
++        if (flow_ == Flow::Playing && other_->handOver()) {
++            flow_ = Flow::HandOver;
++            handOverT_ = 0.f;
++            ++handsPlayed_;
++            recordOtherHand();
++            saveMatch();
++            crowdAtHandEnd();
++            if (other_->matchOver()) {
++                const ui::SheetModel sh = other_->sheet(false);
++                archiveMatch(sh.humanWon ? std::string("Kazandın") : sh.resultTitle);
++                analyzeFinishedMatch();
++            }
++            if (opt_.autoplay && !snapshot_)
++                std::printf("[autoplay] hand %d: %s\n", handsPlayed_, other_->lastLogLine().c_str());
++        }
++        if (flow_ == Flow::HandOver) {
++            handOverT_ += simDt;
++            if ((handOverT_ >= SUMMARY_DELAY && !other_->animating()) || handOverT_ >= SUMMARY_DELAY + 5.f) {
++                screens_.setSheet(other_->sheet(aiMode_));
++                screens_.show(ui::ScreenId::HandSummary);
++                flow_ = Flow::Summary;
++                screenT_ = 0.f;
++            }
++        }
++        return;
++    }
++    switch (game_.handState()) {
++    case okey::HandState::Playing:
++        if (replayMode_) updateReplay(simDt);
++        else updateBots(simDt);
++        break;
++    case okey::HandState::HandOver:
++    case okey::HandState::MatchOver:
++        if (flow_ == Flow::HandOver) {
++            // let everyone see the revealed istakas before the score sheet covers the table
++            handOverT_ += simDt;
++            if ((handOverT_ >= SUMMARY_DELAY && !table_.isAnimating()) || handOverT_ >= SUMMARY_DELAY + 5.f) {
++                screens_.show(ui::ScreenId::HandSummary);
++                flow_ = Flow::Summary;
++                screenT_ = 0.f;
++            }
++        }
++        break;
++    case okey::HandState::NotStarted: break;
++    }
++}
++
++// Autoplay and the Yapay Zeka mode press the score sheet's button by themselves (autoplay also leaves after the
++// final standings); the button shows the countdown. A player can still press it (or anything else) first.
++void App::updateAutoScreens(float simDt) {
++    const ui::ScreenId cur = screens_.current();
++    if (cur != autoScreen_) { // every screen gets its full time, however it came up
++        autoScreen_ = cur;
++        screenT_ = 0.f;
++    }
++    float wait = -1.f;
++    if (cur == ui::ScreenId::HandSummary) wait = opt_.autoplay ? AUTO_SUMMARY : aiMode_ ? AI_SUMMARY : -1.f;
++    else if (cur == ui::ScreenId::MatchOver) wait = opt_.autoplay ? AUTO_MATCHOVER : aiMode_ ? AI_MATCHOVER : -1.f;
++    if (replayMode_ && cur == ui::ScreenId::HandSummary) wait = AI_SUMMARY; // a replay moves on by itself (not past the end)
++    if (cur == ui::ScreenId::MatchOver && (opt_.autoplay || opt_.aiChaos)) matchOverReached_ = true;
++    const bool picture = snapshot_ && ((snapState_ == SnapState::Summary && cur == ui::ScreenId::HandSummary) ||
++                                       (snapState_ == SnapState::MatchOver && cur == ui::ScreenId::MatchOver && opt_.matches <= 1));
++    if (wait < 0.f || picture) { // (a snapshot of the sheet or the final standings keeps it up: it is the picture)
++        screens_.setAutoAdvance(-1.f);
++        if (opt_.autoplay && cur == ui::ScreenId::Title && flow_ == Flow::Title && matchCount_ > 0) {
++            screenT_ += simDt;
++            if (screenT_ < AUTO_TITLE) return;
++            screenT_ = 0.f;
++            screens_.show(ui::ScreenId::None);
++            startMatch();
++        }
++        return;
++    }
++    screenT_ += simDt;
++    screens_.setAutoAdvance(std::max(0.f, wait - screenT_) / std::max(0.05f, opt_.speed));
++    if (screenT_ >= wait) pressBetweenHands();
++}
++
++// The main button of the score sheet ("Sonraki El" / "Sonuçlar") or the final standings ("Yeni Oyun"), pressed for
++// the player: by autoplay, the Yapay Zeka mode or the --ai-chaos stand-in. Autoplay and the test count the matches
++// and leave after the last one; autoplay goes through the title screen every other time.
++void App::pressBetweenHands() {
++    const ui::ScreenId cur = screens_.current();
++    screenT_ = 0.f;
++    if (cur == ui::ScreenId::HandSummary) {
++        if (otherInGame() ? other_->matchOver() : game_.handState() == okey::HandState::MatchOver) {
++            screens_.show(ui::ScreenId::MatchOver);
++            flow_ = Flow::MatchOver;
++        } else {
++            screens_.show(ui::ScreenId::None);
++            startNextHand();
++        }
++    } else if (cur == ui::ScreenId::MatchOver) {
++        if ((opt_.autoplay || opt_.aiChaos) && ++matchesDone_ >= opt_.matches) {
++            quit_ = true;
++        } else if (opt_.autoplay && matchesDone_ % 2 == 1) { // "Ana Menü", then "Oyna" a little later
++            screens_.show(ui::ScreenId::Title);
++            toTitle();
++        } else if (opt_.aiChaos && matchesDone_ % 2 == 1) { // the title's "Oyna" or "Yapay Zekayı İzle" later
++            screens_.show(ui::ScreenId::Title);
++            toTitle();
++            chaos_.titleIn = chaos_.rng.uniform(0.3f, 2.f);
++        } else {                                             // "Yeni Oyun" straight from the final standings
++            screens_.show(ui::ScreenId::None);
++            startMatch();
++        }
++    }
++}
++
++void App::pumpEvents() {
++    const std::vector<okey::GameEvent> events = game_.drainEvents();
++    for (const okey::GameEvent& e : events) {
++        using okey::EvType;
++        if (aiSeat()) { // the table's messages speak about the Yapay Zeka instead of to the player
++            okey::GameEvent w = e;
++            w.text = watchText(e);
++            table_.onEvent(w);
++        } else {
++            table_.onEvent(e);
++        }
++        characters_.onEvent(e, game_);
++        routeAudio(e);
++        if (e.type == EvType::HandStart) {
++            for (auto& b : bots_)
++                if (b) b->resetForHand();
++            table_.onHandStart();
++        }
++        for (auto& b : bots_)
++            if (b) b->observe(e, game_);
++        switch (e.type) {
++        case EvType::TurnStart: characters_.setActiveSeat(e.player); break;
++        case EvType::Open:
++            // our eyes follow a big moment across the table (never while we handle our own tiles)
++            if (e.player != HUMAN && e.player >= 0 && !table_.mouseBusy() && !lookDrag_) {
++                const w3d::RectXZ z = w3d::MELD_ZONE[e.player];
++                pcam_.glanceAt({(z.x0 + z.x1) * 0.5f, w3d::TABLE_Y, (z.z0 + z.z1) * 0.5f}, 1.1f);
++            }
++            // katlamalı: say where the bar is now (while the player still has to open)
++            if (game_.rules().katlamali && e.player != HUMAN && !game_.player(HUMAN).opened) {
++                const bool pairs = e.player >= 0 && game_.player(e.player).openedWithPairs;
++                table_.toast(pairs ? "Katlamalı: çift açmak için artık en az " + std::to_string(game_.pairsOpenNeed()) + " çift"
++                                   : "Katlamalı: açmak için artık en az " + std::to_string(game_.seriesOpenNeed()),
++                             ui::pal::Highlight, 3.2f);
++            }
++            break;
++        case EvType::HandEnd: {
++            cancelThink();
++            flow_ = Flow::HandOver;
++            handOverT_ = 0.f;
++            ++handsPlayed_;
++            recordOkeyHand();
++            saveMatch();
++            crowdAtHandEnd();
++            if (game_.handState() == okey::HandState::MatchOver) {
++                const int lead = game_.leaderSeat();
++                const bool won = lead == HUMAN || (game_.teams() && lead == okey::Game::partnerOf(HUMAN));
++                archiveMatch(won ? std::string("Kazandın") : game_.player(lead).name + " kazandı");
++                analyzeFinishedMatch();
++            }
++            if (opt_.autoplay && !snapshot_) {
++                const okey::HandResult& r = game_.lastHandResult();
++                const std::string of = game_.classic() ? std::string() : "/" + std::to_string(game_.numHands());
++                std::printf("[autoplay] hand %d%s: %s | scores %d %d %d %d | totals %d %d %d %d\n", game_.handIndex() + 1,
++                            of.c_str(), e.text.c_str(), r.score[0], r.score[1], r.score[2], r.score[3],
++                            game_.player(0).totalScore, game_.player(1).totalScore, game_.player(2).totalScore,
++                            game_.player(3).totalScore);
++            }
++            break;
++        }
++        case EvType::MatchEnd:
++            if (opt_.autoplay && !snapshot_) std::printf("[autoplay] %s\n", e.text.c_str());
++            break;
++        default: break;
++        }
++    }
++}
++
++// Tile sounds that belong to a tile landing are held back so the clack comes when the tile touches the felt;
++// an opponent's tiles also wait for its hand (w3d::BOT_*_LEAD).
++void App::routeAudio(const okey::GameEvent& e) {
++    if (!audioOn_) return;
++    using okey::EvType;
++    const bool bot = e.player >= 0 && e.player < 4 && e.player != HUMAN;
++    switch (e.type) {
++    case EvType::DrawPile:
++    case EvType::TakeLeft:
++        if (bot) delayed_.push_back({e, w3d::BOT_TAKE_LEAD / animSpeed()});
++        else audio_.onEvent(e);
++        break;
++    case EvType::Discard:
++    case EvType::AddToMeld:
++    case EvType::SwapJoker: delayed_.push_back({e, (LANDING_LAG + (bot ? w3d::BOT_GIVE_LEAD : 0.f)) / animSpeed()}); break;
++    case EvType::Open:
++    case EvType::LayMelds: delayed_.push_back({e, (LANDING_LAG + (bot ? w3d::BOT_MELD_LEAD : 0.f)) / animSpeed()}); break;
++    default: audio_.onEvent(e); break;
++    }
++}
++
++void App::updateDelayedAudio(float simDt) {
++    for (size_t i = 0; i < delayed_.size();) {
++        delayed_[i].t -= simDt;
++        if (delayed_[i].t <= 0.f) {
++            if (audioOn_) audio_.onEvent(delayed_[i].e);
++            delayed_.erase(delayed_.begin() + (std::ptrdiff_t)i);
++        } else {
++            ++i;
++        }
++    }
++}
++
++void App::updateScoreboard() {
++    if (otherInGame()) {
++        room_.setScoreboard(other_->scoreTitle(), other_->scoreLines());
++        return;
++    }
++    if (flow_ == Flow::Title || game_.handState() == okey::HandState::NotStarted) {
++        room_.setScoreboard("", {});
++        return;
++    }
++    std::string title;
++    if (game_.classic())
++        title = game_.handState() == okey::HandState::MatchOver ? std::string("Okey bitti")
++                                                                 : "Okey · " + std::to_string(game_.handIndex() + 1) + ". el";
++    else
++        title = game_.handState() == okey::HandState::MatchOver
++                    ? std::string("Maç bitti")
++                    : std::string(game_.teams() ? "Eşli · " : "") + "El " +
++                          std::to_string(std::min(game_.handIndex() + 1, game_.numHands())) + " / " +
++                          std::to_string(game_.numHands()) + (game_.rules().katlamali ? " · Katlamalı" : "");
++    std::vector<std::string> lines;
++    for (int s = 0; s < 4; ++s) lines.push_back(game_.player(s).name + " ....... " + std::to_string(game_.player(s).totalScore));
++    if (game_.teams()) {
++        lines.clear();
++        for (int s = 0; s < 2; ++s)
++            lines.push_back(game_.player(s).name + " + " + game_.player(s + 2).name + " ... " + std::to_string(game_.teamTotal(s)));
++    }
++    room_.setScoreboard(title, lines);
++}
++
++} // namespace detail
++} // namespace app
+diff --git a/src/app/AppInternal.h b/src/app/AppInternal.h
+new file mode 100644
+index 0000000..9b3f238
+--- /dev/null
++++ b/src/app/AppInternal.h
+@@ -0,0 +1,349 @@
++#pragma once
++// App's insides, shared by the files the application is split into (one class, by topic; no behaviour lives here):
++//   App.cpp          setup, the frame loop, the 3D world and the 2D layer, the command line, run()
++//   AppFlow.cpp      the match flow: starting / ending matches and hands, the table we sit at, screen actions, the
++//                    engine's events, audio routing, the scoreboard, the room's reactions, rehber and İpucu
++//   AppBots.cpp      the okey bots' pacing and the Yapay Zeka mode (with its table messages)
++//   AppRecord.cpp    the player's record, save / resume ("Devam Et") and Tekrarlar
++//   AppSettings.cpp  the settings file and the command line's session-only overrides
++//   AppAnalysis.cpp  "Hatalarım" on a worker thread
++//   AppDebug.cpp     snapshots and their extra views, frame statistics, --ai-chaos
++#include "app/App.h"
++#include "app/Analysis.h"
++#include "app/TableGame.h"
++
++#include "core/Bot.h"
++#include "core/Game.h"
++#include "core/Rng.h"
++#include "r3d/Characters.h"
++#include "r3d/Gfx.h"
++#include "r3d/Room.h"
++#include "r3d/Table3D.h"
++#include "r3d/World.h"
++#include "ui/Audio.h"
++#include "ui/Banter.h"
++#include "ui/Common.h"
++#include "ui/Memory.h"
++#include "ui/CardRender.h"
++#include "ui/TileRender.h"
++#include "ui/Screens.h"
++
++#include <raylib.h>
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <ctime>
++#include <functional>
++#include <future>
++#include <memory>
++#include <optional>
++#include <sstream>
++#include <thread>
++#include <string>
++#include <vector>
++
++namespace app {
++namespace detail {
++
++constexpr int HUMAN = 0;
++constexpr const char* BOT_NAMES[4] = {"", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"};
++constexpr Vector2 NO_MOUSE{-10000.f, -10000.f};
++constexpr Color CLEAR_COLOR{14, 10, 7, 255};
++constexpr int SNAP_W = 1600, SNAP_H = 900;
++constexpr Vector3 TV_POS{-3.70f, 2.50f, -2.90f};  // the CRT high in the back-left corner (RoomBuild.cpp)
++
++constexpr float SUMMARY_DELAY = 2.0f;   // seconds after a hand ends before the score sheet
++constexpr float AUTO_SUMMARY = 2.5f;    // autoplay: how long the score sheet stays up
++constexpr float AUTO_MATCHOVER = 3.0f;  // autoplay: how long the final standings stay up
++constexpr float AUTO_TITLE = 2.0f;      // autoplay (--matches): time on the title screen before "Oyna"
++constexpr float AI_SUMMARY = 7.0f;      // Yapay Zeka mode: the score sheet presses its button by itself after this
++constexpr float AI_MATCHOVER = 12.0f;   // ... and the final standings "Yeni Oyun"
++constexpr float AI_BANTER_GAP = 40.f;   // the regulars remark on the mode at most this often (seconds)
++constexpr float LANDING_LAG = 0.30f;    // tile flight minus Audio's own 0.12 s gap: clacks land with the tile
++constexpr int MAX_BOT_ACTIONS = 60;     // watchdog: a bot turn never takes more actions than this
++
++// ---- shared helpers (defined in the file of their topic)
++uint64_t mix64(uint64_t x);                                            // App.cpp
++uint64_t clockSeed();
++const char* actionName(okey::BotAction::Kind k);
++Camera3D fitToCanvas(Camera3D c, float aspect);
++Camera2D windowCamera2D(const ui::Viewport& vp);
++std::string trim(const std::string& s);
++Camera3D viewCamera(const std::string& view, const Camera3D& seat, bool tavla); // AppDebug.cpp
++std::string watchText(const okey::GameEvent& e);                       // AppBots.cpp
++std::string supportDir();                                              // AppSettings.cpp
++std::string statsPath();
++std::string memoryPath();
++std::string settingsPath();
++std::string legacySettingsPath();
++void applySettingLine(ui::Settings& s, const std::string& k, const std::string& v);
++void loadSettings(ui::Settings& s);
++std::string settingsText(const ui::Settings& s);
++bool ensureDirOf(const std::string& path);
++void saveSettings(const ui::Settings& s);
++
++// ---------------------------------------------------------------- the match left unfinished (kayit.txt)
++struct SavedMatch {
++    int game = -1;
++    uint64_t seed = 0;
++    bool aiTouched = false;
++    std::string label;                 // "101 · 3. el" for the title
++    std::string date, result;          // tekrarlar: when it was played, how it ended
++    std::vector<std::string> settings; // "key=value"
++    std::vector<std::string> actions;  // the engine's own lines
++};
++
++std::string savePath();                                                // AppRecord.cpp
++std::string replayDir();
++bool readSave(SavedMatch& sv, const std::string& from = std::string());
++
++// ---------------------------------------------------------------- frame statistics
++struct FrameStats {
++    std::vector<float> frameMs, cpuMs;
++    std::vector<int> particles;
++    void add(float frame, float cpu, int parts) {
++        frameMs.push_back(frame);
++        cpuMs.push_back(cpu);
++        particles.push_back(parts);
++    }
++    static float pct(std::vector<float> v, float p) {
++        if (v.empty()) return 0.f;
++        std::sort(v.begin(), v.end());
++        return v[std::min(v.size() - 1, (size_t)(p * (float)(v.size() - 1) + 0.5f))];
++    }
++    static float avg(const std::vector<float>& v) {
++        double s = 0;
++        for (float x : v) s += x;
++        return v.empty() ? 0.f : (float)(s / (double)v.size());
++    }
++    void print() const {
++        if (frameMs.empty()) return;
++        int pmax = 0;
++        double psum = 0;
++        for (int p : particles) {
++            pmax = std::max(pmax, p);
++            psum += p;
++        }
++        int slow = 0;
++        for (float f : frameMs)
++            if (f > 25.f) ++slow;
++        std::printf("[perf] %zu frames | frame avg %.2f ms, p50 %.2f, p95 %.2f, p99 %.2f, max %.2f, >25 ms: %d | "
++                    "cpu avg %.2f ms, p99 %.2f, max %.2f | particles avg %.0f, max %d\n",
++                    frameMs.size(), (double)avg(frameMs), (double)pct(frameMs, 0.5f), (double)pct(frameMs, 0.95f),
++                    (double)pct(frameMs, 0.99f), (double)pct(frameMs, 1.f), slow, (double)avg(cpuMs),
++                    (double)pct(cpuMs, 0.99f), (double)pct(cpuMs, 1.f), psum / (double)particles.size(), pmax);
++    }
++};
++
++// ================================================================ the application
++class App {
++public:
++    explicit App(const Options& o) : opt_(o) {}
++    int run();
++
++private:
++    enum class Flow { Title, Playing, HandOver, Summary, MatchOver };
++    enum class SnapState { Title, Game, Summary, MatchOver, Rules, Settings, Games, Stats };
++
++    struct Think {                 // the current bot turn's pacing and (possibly asynchronous) decision
++        int seat = -1, turn = -1, actions = 0;
++        float wait = 0.f;
++        bool pending = false, haveReady = false;
++        okey::BotAction ready;
++        std::future<okey::BotAction> fut;
++    };
++    struct DelayedEvent {
++        okey::GameEvent e;
++        float t = 0.f;
++    };
++
++    // setup
++    bool init();
++    void initWindow();
++    void shutdown();
++    // frame
++    void tick(float dt);
++    void updateWorld(float dt, float simDt, const Camera3D& cam, bool blocked);
++    void submitWorld();
++    void drawOverlays(bool hud);
++    // frame statistics are kept (and printed at exit) only for measured runs; a normal session would grow them forever
++    bool reportStats() const { return opt_.perf || opt_.autoplay || opt_.aiChaos || opt_.maxFrames > 0; }
++    // runs that play by themselves never read or write the player's settings file
++    bool unattended() const { return snapshot_ || opt_.autoplay || opt_.aiChaos; }
++    void recordStats(float cpuMs);
++    bool snapshotDone();
++    bool snapshotRenderNow() const;
++    bool exportSnapshot();
++    void saveWindowShot();
++    // flow
++    void handleScreenAction(ui::ScreenAction a);
++    void startMatch();
++    void startNextHand();
++    void startOtherMatch(ui::GameKind kind);
++    void toTitle();
++    void setTitleMode(bool on);
++    // Which table we sit at: 0 our okey table, 1 the tavla table (with `seat` the regular across). The camera, the
++    // opponent, the glasses and the key light move there behind a short fade.
++    void setLocation(int loc, int seat);
++    int location_ = 0, locationSeat_ = 0;
++    float fade_ = 0.f; // 1 black .. 0 clear (a table change)
++    void applySettings();
++    void releaseOverrides();
++    void persistSettings();
++    void updateFlow(float simDt);
++    bool recording() const;
++    void saveMatch();
++    std::string matchText(const std::string& label, const std::vector<std::string>& actions) const;
++    void archiveMatch(const std::string& result);
++    // "Hatalarım": Kurt replays a finished match on a worker thread (analysis::analyzeMatch) and names the player's
++    // most expensive mistakes; the screens get them when it is done (pollAnalysis, every frame).
++    void startAnalysis(int game, const ui::Settings& rules, uint64_t seed, std::vector<std::string> actions,
++                       const std::string& title);
++    void analyzeFinishedMatch();
++    void analyzeReplay(int index);
++    void stopAnalysis();
++    void pollAnalysis();
++    std::vector<std::string> listReplays() const;
++    void refreshReplays();
++    void startReplay(int index);
++    void updateReplay(float simDt);
++    void drawReplayBadge();
++    void crowdAtHandEnd();             // the room reacts to a big finish, a mars, a match lost at the wire
++    void drawCrowdShouts();
++    void resumeSaved();
++    void deleteSave();
++    void refreshResumable();
++    void maybeShowGuide(ui::GameKind kind);
++    void updateFirstTurnTip();
++    void showOkeyHint();
++    void recordOkeyHand();
++    void recordOtherHand();
++    void noteRankUp();
++    void updateAutoScreens(float simDt);
++    void pressBetweenHands();
++    void pumpEvents();
++    void routeAudio(const okey::GameEvent& e);
++    void updateDelayedAudio(float simDt);
++    void updateScoreboard();
++    std::array<std::string, 4> names();
++    float animSpeed() { return std::max(0.25f, screens_.settings().animSpeed); }
++    // the Yapay Zeka mode: an AI plays the human's seat (as --autoplay's bot does for a whole run)
++    bool aiSeat() const { return opt_.autoplay || aiMode_; }
++    void setAiMode(bool on);
++    void updateChaos(float simDt, bool beforeTable);
++    // bots
++    bool isBotSeat(int s) const { return s != HUMAN || aiSeat(); }
++    void updateBots(float simDt);
++    void launchThink(int seat);
++    bool thinkReady();
++    okey::BotAction takeThink();
++    void cancelThink();
++    void applyBot(int seat, const okey::BotAction& a);
++    void forceLegalMove(int seat);
++
++    Options opt_;
++    bool snapshot_ = false;
++    SnapState snapState_ = SnapState::Game;
++    bool audioOn_ = false, audioDevice_ = false;
++    bool quit_ = false;
++    int exitCode_ = 0;
++
++    r3d::Renderer renderer_;
++    r3d::Room room_;
++    r3d::Characters characters_;
++    r3d::Table3D table_;
++    r3d::PlayerCamera pcam_;
++    ui::Audio audio_;
++    ui::Screens screens_;
++    okey::Game game_;
++    std::array<std::unique_ptr<okey::Bot>, 4> bots_;
++    // the other games (tavla, the card games): the active one, or null while an okey game is played
++    std::unique_ptr<TableGame> other_;
++    ui::GameKind otherKind_ = ui::GameKind::Yuzbir;
++    bool otherInGame() const { return other_ != nullptr && flow_ != Flow::Title; }
++    RenderTexture2D rt_{};
++
++    Flow flow_ = Flow::Title;
++    // maç tekrarı: a saved match played back action by action
++    bool replayMode_ = false, replayPaused_ = false;
++    float replaySpeed_ = 1.f, replayWait_ = 0.f;
++    std::vector<std::string> replayActions_;
++    size_t replayPos_ = 0;
++    std::vector<std::string> replayFiles_;
++    struct Shout {
++        std::string text;
++        Vector3 at;
++        float t = 0.f;
++    };
++    std::vector<Shout> shouts_;        // the other tables' shouts ("Vay be!", "Sağ ol!"), drawn where they came from
++    std::thread anaThread_;
++    std::atomic<bool> anaCancel_{false}, anaDone_{false};
++    std::vector<analysis::Mistake> anaResult_;
++    std::string anaTitle_;
++    std::optional<uint64_t> forcedSeed_;  // resume: the saved match's seed
++    bool resuming_ = false;
++    uint64_t matchSeed_ = 0;              // the match in play: its seed, game and settings (for the save)
++    int matchGame_ = 0;
++    ui::Settings matchSettings_;
++    std::string firstTurnTip_;            // rehber: said when the player's first turn comes
++    bool hintShown_ = false;              // --hint-demo
++    std::unique_ptr<okey::Bot> hintBot_; // İpucu: a Kurt asked what it would do in the player's seat
++    ui::Memory memory_;            // what the regulars remember of the player (hafiza.txt)
++    ui::StatsBook record_;         // the player's record (İstatistik screen)
++    bool matchAiTouched_ = false;  // the Yapay Zeka mode played in this match (it is not recorded)
++    bool aiMode_ = false;          // Yapay Zeka mode (off at every launch; Title "Yapay Zekayı İzle", --ai)
++    int aiSwitches_ = 0;
++    double aiBanterAt_ = -1e9;     // when the regulars last remarked on the mode (simClock_)
++    double simClock_ = 0.0;        // game time since launch (--speed included)
++    uint64_t baseSeed_ = 0;
++    int matchCount_ = 0, matchesDone_ = 0;
++    okey::Rng paceRng_;
++    Think think_;
++    std::vector<DelayedEvent> delayed_;
++    float handOverT_ = 0.f, screenT_ = 0.f;  // screenT_: how long the current screen has been up (auto-advance)
++    ui::ScreenId autoScreen_ = ui::ScreenId::Title;
++    bool lookDrag_ = false;
++    bool settingsDirty_ = false;
++    // --hands, --level and --no-audio shape this session only. The settings screen shows the values in force, but
++    // the file keeps the loaded ones for every setting the player has not moved away from its command-line value.
++    struct Overridden {
++        bool hands = false, level = false, sfx = false, ambient = false, music = false, game = false;
++    } overridden_;
++    ui::Settings loadedSettings_;  // as read from disk (or the defaults), before the command line
++    ui::Settings cliSettings_;     // the session's starting values: loadedSettings_ plus the command line
++    Camera3D cam_{};        // the human's camera this frame
++    Camera3D renderCam_{};  // what is rendered (== cam_ except for snapshot views)
++
++    // bookkeeping / verification
++    long frame_ = 0;
++    long snapReachedAt_ = -1;
++    int handsPlayed_ = 0, rejected_ = 0, fallbackRejected_ = 0, forced_ = 0;
++    bool matchOverReached_ = false;
++    double lastFrameT_ = 0.0;
++    FrameStats stats_;
++
++    // --ai-chaos: flips the Yapay Zeka mode at random moments and stands in for the player while it is off
++    struct Chaos {
++        okey::Rng rng;
++        std::unique_ptr<okey::Bot> standIn;  // plays the seat (through the same Game API as the table) while off
++        float nextFlip = 1.f;                // seconds until the next flip of the mode
++        float nextPause = 8.f;               // ... until the pause menu is opened
++        float pauseLeft = -1.f;              // > 0: the pause menu is up
++        bool pauseFlips = false;             // leave the pause menu through "Yapay Zeka Oynasın / Kontrolü Geri Al"
++        float actIn = 0.f;                   // the stand-in's reaction time before its next move
++        float pressIn = -1.f;                // ... before it presses a between-hands button
++        float titleIn = -1.f;                // ... before it starts a match from the title screen
++        int flips = 0, pauseFlipCount = 0, pauses = 0, moves = 0, movesRejected = 0, presses = 0, titleStarts = 0;
++        uint64_t sig = 0;                    // progress watchdog: anything that should move keeps moving
++        double sigAt = 0.0, worstStall = 0.0;
++    } chaos_;
++};
++
++} // namespace detail
++} // namespace app
+diff --git a/src/app/AppRecord.cpp b/src/app/AppRecord.cpp
+new file mode 100644
+index 0000000..52843ad
+--- /dev/null
++++ b/src/app/AppRecord.cpp
+@@ -0,0 +1,351 @@
++// App: the player's record, save / resume and Tekrarlar (AppInternal.h).
++#include "app/AppInternal.h"
++
++namespace app {
++namespace detail {
++
++// ---------------------------------------------------------------- the match left unfinished (kayit.txt)
++// The game, the rules it was started with (the settings lines), the seed and every action since; resuming starts the
++// same match again and replays them.
++std::string savePath() {
++    const std::string dir = supportDir();
++    return dir.empty() ? dir : dir + "SakliBahce/kayit.txt";
++}
++
++std::string replayDir() {
++    const std::string dir = supportDir();
++    return dir.empty() ? dir : dir + "SakliBahce/tekrarlar";
++}
++
++bool readSave(SavedMatch& sv, const std::string& from) {
++    const std::string path = from.empty() ? savePath() : from;
++    if (path.empty() || !FileExists(path.c_str())) return false;
++    char* text = LoadFileText(path.c_str());
++    if (!text) return false;
++    std::istringstream in(text);
++    UnloadFileText(text);
++    std::string line;
++    while (std::getline(in, line)) {
++        if (line.size() < 2 || line[1] != ' ') continue;
++        const std::string v = line.substr(2);
++        switch (line[0]) {
++        case 'g': sv.game = std::atoi(v.c_str()); break;
++        case 's': sv.seed = std::strtoull(v.c_str(), nullptr, 10); break;
++        case 'y': sv.aiTouched = v == "1"; break;
++        case 'l': sv.label = v; break;
++        case 'd': sv.date = v; break;
++        case 'r': sv.result = v; break;
++        case 'k': sv.settings.push_back(v); break;
++        case 'a': sv.actions.push_back(v); break;
++        default: break;
++        }
++    }
++    return sv.game >= 0 && sv.game < (int)ui::GameKind::Count && ui::gameAvailable((ui::GameKind)sv.game);
++}
++
++// ---------------------------------------------------------------- the player's record
++// Only matches the player played himself go into the book: no unattended runs, and not a match in which the Yapay
++// Zeka mode took the seat at any moment.
++bool App::recording() const { return !unattended() && !matchAiTouched_ && !replayMode_; }
++
++void App::recordOkeyHand() {
++    if (!recording()) return;
++    const ui::Settings& st = screens_.settings();
++    const int kind = std::clamp(st.game, 0, (int)ui::GameKind::Count - 1);
++    const okey::HandResult& r = game_.lastHandResult();
++    const bool won = r.winner == HUMAN || (game_.teams() && r.winner == okey::Game::partnerOf(HUMAN));
++    record_.hand(kind, won, !game_.classic(), r.score[HUMAN], true);
++    if (r.winner == HUMAN && r.finishedWithJoker)
++        for (int s = 1; s <= 3; ++s) memory_.noteMoment(ui::MomentKind::OkeyFinish, 0, s, kind);
++    if (game_.handState() == okey::HandState::MatchOver) {
++        const int lead = game_.leaderSeat();
++        record_.match(kind, st.difficulty, lead == HUMAN || (game_.teams() && lead == okey::Game::partnerOf(HUMAN)));
++        std::array<int, 4> tot{};
++        for (int s = 0; s < 4; ++s) tot[(size_t)s] = game_.player(s).totalScore;
++        memory_.recordMatch(ui::MatchRecord::fromScores(kind, tot, 0xFu, !game_.classic(), game_.teams()));
++        noteRankUp();
++    }
++    record_.save(statsPath());
++    memory_.save(memoryPath());
++}
++
++void App::recordOtherHand() {
++    if (!recording() || !other_) return;
++    const ui::SheetModel sh = other_->sheet(false);
++    int score = 0;
++    const bool hasScore = other_->humanHandScore(score);
++    record_.hand((int)otherKind_, sh.starCol >= 0 && sh.starCol == sh.humanCol, hasScore, score, false);
++    if (otherKind_ == ui::GameKind::Tavla && sh.taglineRed && sh.starCol >= 0) // a mars, by or to the player
++        memory_.noteMoment(ui::MomentKind::Mars, sh.starCol == 0 ? 0 : 2, sh.starCol == 0 ? 2 : 0, (int)otherKind_);
++    if (other_->matchOver()) {
++        record_.match((int)otherKind_, screens_.settings().difficulty, sh.humanWon);
++        memory_.recordMatch(ui::MatchRecord::fromStandings((int)otherKind_, other_->seats(), (int)sh.columns.size(),
++                                                           sh.ranking, sh.rank, sh.totals));
++        noteRankUp();
++    }
++    record_.save(statsPath());
++    memory_.save(memoryPath());
++}
++
++// A regular congratulates the player when the match just finished lifted his rank.
++void App::noteRankUp() {
++    const ui::Rank& rk = ui::StatsBook::rankFor(record_.rankPoints());
++    if (memory_.noteRank(rk.points)) characters_.banter().rankUp(rk.name);
++}
++
++// ---------------------------------------------------------------- save / resume
++void App::refreshResumable() {
++    SavedMatch sv;
++    const bool ok = !unattended() && readSave(sv);
++    screens_.setResumable(ok, ok ? sv.label : std::string());
++}
++
++void App::deleteSave() {
++    const std::string path = savePath();
++    if (!unattended() && !path.empty() && FileExists(path.c_str())) std::remove(path.c_str());
++    refreshResumable();
++}
++
++// Writes the match in play (called when the player leaves it: to the title, closing the window, between hands).
++void App::saveMatch() {
++    if (unattended() || flow_ == Flow::Title || resuming_ || replayMode_) return;
++    const bool over = otherInGame() ? other_->matchOver() : game_.handState() == okey::HandState::MatchOver;
++    if (over || (!otherInGame() && game_.handState() == okey::HandState::NotStarted)) {
++        deleteSave();
++        return;
++    }
++    std::vector<std::string> actions;
++    std::string label = ui::gameInfo((ui::GameKind)matchGame_).name;
++    if (otherInGame()) {
++        if (!other_->saveState(actions)) return;
++        label += "  \xC2\xB7  " + other_->scoreTitle();
++    } else {
++        for (const okey::LoggedAction& a : game_.actionLog()) actions.push_back(a.encode());
++        label += "  \xC2\xB7  " + std::to_string(game_.handIndex() + 1) + ". el";
++    }
++    const std::string path = savePath();
++    if (path.empty() || !ensureDirOf(path)) return;
++    SaveFileText(path.c_str(), ("# SaklıBahçe: yarım kalan maç\n" + matchText(label, actions)).c_str());
++    refreshResumable();
++}
++
++// The match in play as save / replay text: game, seed, settings and the engine's action lines.
++std::string App::matchText(const std::string& label, const std::vector<std::string>& actions) const {
++    std::string out = "g " + std::to_string(matchGame_) + "\ns " + std::to_string(matchSeed_) + "\ny " +
++                      (matchAiTouched_ ? "1" : "0") + "\nl " + label + "\n";
++    std::istringstream st(settingsText(matchSettings_));
++    std::string line;
++    while (std::getline(st, line)) out += "k " + line + "\n";
++    for (const std::string& a : actions) out += "a " + a + "\n";
++    return out;
++}
++
++// ---------------------------------------------------------------- tekrarlar (finished matches, the last 20)
++void App::archiveMatch(const std::string& result) {
++    if (unattended() || replayMode_) return;
++    std::vector<std::string> actions;
++    if (otherInGame()) {
++        if (!other_->saveState(actions)) return;
++    } else {
++        for (const okey::LoggedAction& a : game_.actionLog()) actions.push_back(a.encode());
++    }
++    const std::string dir = replayDir();
++    if (dir.empty() || (!DirectoryExists(dir.c_str()) && (!ensureDirOf(dir) || MakeDirectory(dir.c_str()) != 0))) return;
++    const std::time_t now = std::time(nullptr);
++    char stamp[32], when[48];
++    std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&now));
++    std::strftime(when, sizeof when, "%d.%m.%Y %H:%M", std::localtime(&now));
++    const std::string text = "# SaklıBahçe: maç tekrarı\nd " + std::string(when) + "\nr " + result + "\n" +
++                             matchText(ui::gameInfo((ui::GameKind)matchGame_).name, actions);
++    SaveFileText((dir + "/" + stamp + ".txt").c_str(), text.c_str());
++    std::vector<std::string> files = listReplays(); // keep the newest 20
++    for (size_t i = 20; i < files.size(); ++i) std::remove(files[i].c_str());
++    refreshReplays();
++}
++
++// Newest first.
++std::vector<std::string> App::listReplays() const {
++    std::vector<std::string> out;
++    const std::string dir = replayDir();
++    if (dir.empty() || !DirectoryExists(dir.c_str())) return out;
++    FilePathList fl = LoadDirectoryFilesEx(dir.c_str(), ".txt", false);
++    for (unsigned i = 0; i < fl.count; ++i) out.push_back(fl.paths[i]);
++    UnloadDirectoryFiles(fl);
++    std::sort(out.begin(), out.end(), std::greater<std::string>());
++    return out;
++}
++
++void App::refreshReplays() {
++    replayFiles_.clear();
++    std::vector<ui::ReplayEntry> rows;
++    if (!unattended()) {
++        for (const std::string& f : listReplays()) {
++            SavedMatch sv;
++            if (!readSave(sv, f)) continue;
++            replayFiles_.push_back(f);
++            rows.push_back({std::string(ui::gameInfo((ui::GameKind)sv.game).name), sv.date, sv.result,
++                            (int)sv.actions.size()});
++        }
++    }
++    screens_.setReplays(rows);
++}
++
++// Starts watching a saved match: the same match with its rules and seed; its actions are played one by one at the
++// table's own pace (updateReplay), nobody else moves. Pause / speed with Space and the arrows; the menu leaves.
++void App::startReplay(int index) {
++    if (index < 0 || index >= (int)replayFiles_.size()) return;
++    SavedMatch sv;
++    if (!readSave(sv, replayFiles_[(size_t)index])) return;
++    ui::Settings& st = screens_.settings();
++    const ui::Settings mine = st;
++    ui::Settings rules = st;
++    for (const std::string& kv : sv.settings) {
++        const size_t eq = kv.find('=');
++        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
++    }
++    rules.sfx = mine.sfx, rules.ambient = mine.ambient, rules.music = mine.music, rules.animSpeed = mine.animSpeed;
++    rules.hints = mine.hints, rules.playerName = mine.playerName, rules.guide = mine.guide, rules.guideSeen = mine.guideSeen;
++    rules.voices = mine.voices, rules.colorBlind = mine.colorBlind, rules.bigText = mine.bigText;
++    rules.dayTime = mine.dayTime, rules.season = mine.season;
++    rules.game = sv.game;
++    if (aiMode_) setAiMode(false);
++    st = rules;
++    forcedSeed_ = sv.seed;
++    resuming_ = true;
++    replayMode_ = true;
++    replayActions_ = sv.actions;
++    replayPos_ = 0;
++    replayPaused_ = false;
++    replayWait_ = 1.0f;
++    startMatch();
++    resuming_ = false;
++    forcedSeed_.reset();
++    st = mine;
++    if (otherInGame() && !other_->setReplayMode(true)) {
++        replayMode_ = false;
++        toTitle();
++        screens_.show(ui::ScreenId::Title);
++        return;
++    }
++    screens_.show(ui::ScreenId::None);
++}
++
++void App::updateReplay(float simDt) {
++    if (IsKeyPressed(KEY_SPACE)) replayPaused_ = !replayPaused_;
++    if (IsKeyPressed(KEY_RIGHT)) replaySpeed_ = std::min(8.f, replaySpeed_ * 2.f);
++    if (IsKeyPressed(KEY_LEFT)) replaySpeed_ = std::max(0.5f, replaySpeed_ * 0.5f);
++    if (replayPaused_ || replayPos_ >= replayActions_.size()) return;
++    const bool busy = otherInGame() ? other_->animating() : table_.isAnimating();
++    if (busy) return;
++    replayWait_ -= simDt * replaySpeed_;
++    if (replayWait_ > 0.f) return;
++    const std::string& line = replayActions_[replayPos_];
++    if (otherInGame()) {
++        const int r = other_->replayStep(line);
++        if (r == 0) return;                            // not now (the table is not ready for it yet)
++        ++replayPos_;
++        if (r < 0) replayPos_ = replayActions_.size(); // a line that does not apply: the replay ends here
++    } else {
++        okey::LoggedAction a;
++        if (!okey::LoggedAction::decode(line, a)) {
++            replayPos_ = replayActions_.size();
++            return;
++        }
++        if (a.kind == okey::LogKind::NextHand) {
++            if (game_.handState() == okey::HandState::HandOver) return; // the score sheet's button deals it
++            ++replayPos_;                                              // (already dealt)
++            return;
++        }
++        if (game_.handState() != okey::HandState::Playing) return;
++        ++replayPos_;
++        if (!game_.replay(a)) {
++            replayPos_ = replayActions_.size();
++            return;
++        }
++        pumpEvents();
++    }
++    replayWait_ = paceRng_.uniform(0.5f, 0.9f) / animSpeed();
++}
++
++void App::drawReplayBadge() {
++    if (!replayMode_ || screens_.blocksGame()) return;
++    const bool done = replayPos_ >= replayActions_.size();
++    char sp[16];
++    std::snprintf(sp, sizeof sp, replaySpeed_ < 1.f ? "%.1f\xC3\x97" : "%.0f\xC3\x97", (double)replaySpeed_);
++    const std::string head = std::string("TEKRAR  ") + (done ? "bitti" : replayPaused_ ? "duraklatıldı" : sp);
++    const std::string help = "Boşluk: durdur   \xC2\xB7   sol / sağ ok: hız   \xC2\xB7   ESC: menü";
++    const Rectangle r{24.f, 22.f, 430.f, 66.f};
++    DrawRectangleRounded(r, 0.25f, 8, Color{20, 12, 8, 210});
++    DrawRectangleRoundedLinesEx(r, 0.25f, 8, 1.5f, ui::pal::Brass);
++    DrawCircleV({r.x + 22.f, r.y + 22.f}, 6.f, done ? ui::pal::Brass : replayPaused_ ? ui::pal::Highlight : Color{220, 60, 50, 255});
++    ui::drawText(ui::FontId::UiBold, head, {r.x + 38.f, r.y + 10.f}, 22.f, ui::pal::TextLight);
++    ui::drawText(ui::FontId::Ui, help, {r.x + 16.f, r.y + 40.f}, 15.f, Color{ui::pal::TextLight.r, ui::pal::TextLight.g, ui::pal::TextLight.b, 180});
++    const float f = replayActions_.empty() ? 1.f : (float)replayPos_ / (float)replayActions_.size();
++    DrawRectangleRec({r.x + 240.f, r.y + 20.f, 170.f, 5.f}, Color{60, 40, 28, 255});
++    DrawRectangleRec({r.x + 240.f, r.y + 20.f, 170.f * f, 5.f}, ui::pal::Brass);
++}
++
++// "Devam Et": the saved match is started again with its rules and seed, and its actions are replayed.
++void App::resumeSaved() {
++    SavedMatch sv;
++    if (!readSave(sv)) {
++        refreshResumable();
++        screens_.show(ui::ScreenId::Title);
++        return;
++    }
++    ui::Settings& st = screens_.settings();
++    const ui::Settings mine = st;
++    ui::Settings rules = st;
++    for (const std::string& kv : sv.settings) {
++        const size_t eq = kv.find('=');
++        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
++    }
++    // the match's rules and level; the player's own preferences stay
++    rules.sfx = mine.sfx, rules.ambient = mine.ambient, rules.music = mine.music, rules.animSpeed = mine.animSpeed;
++    rules.hints = mine.hints, rules.playerName = mine.playerName, rules.guide = mine.guide, rules.guideSeen = mine.guideSeen;
++    rules.voices = mine.voices, rules.colorBlind = mine.colorBlind, rules.bigText = mine.bigText;
++    rules.dayTime = mine.dayTime, rules.season = mine.season;
++    rules.game = sv.game;
++    st = rules;
++    forcedSeed_ = sv.seed;
++    resuming_ = true;
++    startMatch();
++    bool ok = true;
++    if (otherInGame()) {
++        ok = other_->restoreState(sv.actions);
++    } else {
++        for (const std::string& line : sv.actions) {
++            okey::LoggedAction a;
++            if (!okey::LoggedAction::decode(line, a) || !game_.replay(a)) {
++                ok = false;
++                break;
++            }
++        }
++        game_.drainEvents(); // (what happened is already on the table: nothing to animate)
++        table_.onHandStart();
++        updateScoreboard();
++        if (game_.handState() == okey::HandState::HandOver || game_.handState() == okey::HandState::MatchOver) {
++            flow_ = Flow::HandOver;
++            handOverT_ = SUMMARY_DELAY;
++        }
++    }
++    resuming_ = false;
++    forcedSeed_.reset();
++    std::printf("[resume] %s: %zu actions replayed%s\n", ui::gameInfo((ui::GameKind)sv.game).name, sv.actions.size(),
++                ok ? "" : " (FAILED part way)");
++    matchAiTouched_ = matchAiTouched_ || sv.aiTouched;
++    st = mine;
++    st.game = sv.game;
++    screens_.show(ui::ScreenId::None);
++    if (!ok) {
++        // a save from another version: the match goes on from where the replay stopped
++        if (otherInGame()) other_->toast("Kayıt tam açılamadı, maç kaldığı yerden biraz önceden sürüyor", ui::pal::Bad, 4.f);
++        else table_.toast("Kayıt tam açılamadı, maç kaldığı yerden biraz önceden sürüyor", ui::pal::Bad, 4.f);
++    } else {
++        if (otherInGame()) other_->toast("Kaldığın yerden devam", ui::pal::Highlight, 3.f);
++        else table_.toast("Kaldığın yerden devam", ui::pal::Highlight, 3.f);
++    }
++}
++
++} // namespace detail
++} // namespace app
+diff --git a/src/app/AppSettings.cpp b/src/app/AppSettings.cpp
+new file mode 100644
+index 0000000..67290d7
+--- /dev/null
++++ b/src/app/AppSettings.cpp
+@@ -0,0 +1,177 @@
++// App: the settings file and the command line's session-only overrides (AppInternal.h).
++#include "app/AppInternal.h"
++
++namespace app {
++namespace detail {
++
++// ---------------------------------------------------------------- settings file (interactive runs only)
++std::string supportDir() {
++#if defined(__APPLE__)
++    const char* home = std::getenv("HOME");
++    if (!home || !*home) return {};
++    return std::string(home) + "/Library/Application Support/";
++#else
++    // XDG: $XDG_DATA_HOME, else ~/.local/share
++    const char* xdg = std::getenv("XDG_DATA_HOME");
++    if (xdg && *xdg == '/') return std::string(xdg) + "/";
++    const char* home = std::getenv("HOME");
++    if (!home || !*home) return {};
++    return std::string(home) + "/.local/share/";
++#endif
++}
++std::string statsPath() {
++    const std::string dir = supportDir();
++    return dir.empty() ? dir : dir + "SakliBahce/istatistik.txt";
++}
++std::string memoryPath() {
++    const std::string dir = supportDir();
++    return dir.empty() ? dir : dir + "SakliBahce/hafiza.txt";
++}
++std::string settingsPath() {
++    const std::string dir = supportDir();
++    return dir.empty() ? dir : dir + "SakliBahce/ayarlar.txt";
++}
++// The game was called "Kıraathane 101" before: its settings are read until the new file has been written once.
++std::string legacySettingsPath() {
++    const std::string dir = supportDir();
++    return dir.empty() ? dir : dir + "Kiraathane101/ayarlar.txt";
++}
++
++// One "key=value" line of the settings file (also --set on the command line).
++void applySettingLine(ui::Settings& s, const std::string& k, const std::string& v) {
++    const int iv = std::atoi(v.c_str());
++    if (k == "el") s.numHands = std::clamp(iv, 1, 11);
++    else if (k == "seviye") s.difficulty = std::clamp(iv, 0, 2);
++    else if (k == "efekt") s.sfx = iv != 0;
++    else if (k == "ortam") s.ambient = iv != 0;
++    else if (k == "muzik") s.music = iv != 0;
++    else if (k == "ipucu") s.hints = iv != 0;
++    else if (k == "rehber") s.guide = iv != 0;
++    else if (k == "vakit") s.dayTime = std::clamp(iv, 0, 4);
++    else if (k == "mevsim") s.season = std::clamp(iv, 0, 4);
++    else if (k == "konusma") s.voices = iv != 0;
++    else if (k == "renkkorlugu") s.colorBlind = iv != 0;
++    else if (k == "buyukyazi") s.bigText = iv != 0;
++    else if (k == "rehbergoruldu") s.guideSeen = iv;
++    else if (k == "katlamali") s.katlamali = iv != 0;
++    else if (k == "yandanceza") s.yandanCeza = iv != 0;
++    else if (k == "oyun") s.game = ui::gameAvailable((ui::GameKind)std::clamp(iv, 0, (int)ui::GameKind::Count - 1)) ? std::clamp(iv, 0, (int)ui::GameKind::Count - 1) : 0;
++    else if (k == "okeypuan") s.okeyStart = std::clamp(iv, 1, 99);
++    else if (k == "tavla") s.tavlaPoints = std::clamp(iv, 1, 15);
++    else if (k == "tavlakatlama") s.tavlaDoubling = iv != 0;
++    else if (k == "tavlakatmerli") s.tavlaKatmerli = iv != 0;
++    else if (k == "tavlarakip") s.tavlaRakip = std::clamp(iv, 1, 3);
++    else if (k == "okeyrenkli") s.okeyRenkli = iv != 0;
++    else if (k == "batakkoz") s.batakKozKirilmadan = iv != 0;
++    else if (k == "king12") s.king12 = iv != 0;
++    else if (k == "batakesli") s.batakEsli = iv != 0;
++    else if (k == "batakhedef") s.batakTarget = std::clamp(iv, 11, 151);
++    else if (k == "pistihedef") s.pistiTarget = std::clamp(iv, 51, 301);
++    else if (k == "pistimasa") s.pistiMode = std::clamp(iv, 0, 2);
++    else if (k == "hiz") s.animSpeed = std::clamp((float)std::atof(v.c_str()), 0.5f, 2.f);
++    else if (k == "isim" && !v.empty() && v.size() <= 64) s.playerName = v;
++}
++
++void loadSettings(ui::Settings& s) {
++    std::string path = settingsPath();
++    if (path.empty()) return;
++    if (!FileExists(path.c_str())) path = legacySettingsPath();
++    if (!FileExists(path.c_str())) return;
++    char* text = LoadFileText(path.c_str());
++    if (!text) return;
++    std::istringstream in(text);
++    UnloadFileText(text);
++    std::string line;
++    while (std::getline(in, line)) {
++        const size_t eq = line.find('=');
++        if (eq == std::string::npos) continue;
++        applySettingLine(s, trim(line.substr(0, eq)), trim(line.substr(eq + 1)));
++    }
++}
++
++std::string settingsText(const ui::Settings& s) {
++    char buf[1100];
++    std::snprintf(buf, sizeof buf,
++                  "oyun=%d\nel=%d\nseviye=%d\nefekt=%d\nortam=%d\nmuzik=%d\nipucu=%d\n"
++                  "katlamali=%d\nyandanceza=%d\nokeypuan=%d\ntavla=%d\nbatakesli=%d\nbatakhedef=%d\npistihedef=%d\n"
++                  "pistimasa=%d\ntavlakatlama=%d\ntavlakatmerli=%d\ntavlarakip=%d\nokeyrenkli=%d\nbatakkoz=%d\nking12=%d\nrehber=%d\nrehbergoruldu=%d\nvakit=%d\nmevsim=%d\nkonusma=%d\nrenkkorlugu=%d\nbuyukyazi=%d\nhiz=%.2f\nisim=%s\n",
++                  s.game, s.numHands, s.difficulty, s.sfx ? 1 : 0, s.ambient ? 1 : 0, s.music ? 1 : 0, s.hints ? 1 : 0,
++                  s.katlamali ? 1 : 0, s.yandanCeza ? 1 : 0, s.okeyStart, s.tavlaPoints, s.batakEsli ? 1 : 0,
++                  s.batakTarget, s.pistiTarget, s.pistiMode, s.tavlaDoubling ? 1 : 0, s.tavlaKatmerli ? 1 : 0, s.tavlaRakip, s.okeyRenkli ? 1 : 0,
++                  s.batakKozKirilmadan ? 1 : 0, s.king12 ? 1 : 0, s.guide ? 1 : 0, s.guideSeen, s.dayTime, s.season,
++                  s.voices ? 1 : 0, s.colorBlind ? 1 : 0, s.bigText ? 1 : 0, (double)s.animSpeed, s.playerName.c_str());
++    return buf;
++}
++
++bool ensureDirOf(const std::string& path) {
++    const std::string dir = path.substr(0, path.find_last_of('/'));
++    return DirectoryExists(dir.c_str()) || MakeDirectory(dir.c_str()) == 0;
++}
++
++void saveSettings(const ui::Settings& s) {
++    const std::string path = settingsPath();
++    if (path.empty() || !ensureDirOf(path)) return;
++    SaveFileText(path.c_str(), ("# SaklıBahçe ayarları\n" + settingsText(s)).c_str());
++}
++
++void App::applySettings() {
++    const ui::Settings& st = screens_.settings();
++    if (audioOn_) {
++        audio_.setSfxEnabled(st.sfx);
++        audio_.setAmbientEnabled(st.ambient);
++        audio_.setMusicEnabled(st.music);
++        audio_.setVoicesEnabled(st.voices);
++    }
++    table_.setAnimationSpeed(st.animSpeed);
++    characters_.setAnimationSpeed(st.animSpeed);
++    table_.setHints(st.hints);
++    ui::setHudTextScale(st.bigText ? 1.25f : 1.f);
++    ui::tilegfx::setColorBlind(st.colorBlind);  // repainted on the next refresh()
++    ui::cardgfx::setFourColour(st.colorBlind);
++    if (flow_ == Flow::Title) {
++        characters_.setNames(names());
++        return;
++    }
++    cancelThink();  // nothing may touch a bot while it is thinking on the worker thread
++    for (int s = 1; s < 4; ++s)
++        if (bots_[s]) bots_[s]->setLevel((okey::BotLevel)std::clamp(st.difficulty, 0, 2));
++    if (other_) {
++        other_->setLevel(std::clamp(st.difficulty, 0, 2));
++        other_->setAnimationSpeed(st.animSpeed);
++        other_->setHints(st.hints);
++    }
++    if (game_.player(HUMAN).name != st.playerName) {
++        game_.setPlayer(HUMAN, st.playerName, true);
++        characters_.setNames(names());
++    }
++}
++
++// A setting the player moves away from its command-line value is theirs from then on, and is saved as it stands
++// (even if they later move it back).
++void App::releaseOverrides() {
++    const ui::Settings& st = screens_.settings();
++    Overridden& o = overridden_;
++    o.hands = o.hands && st.numHands == cliSettings_.numHands;
++    o.level = o.level && st.difficulty == cliSettings_.difficulty;
++    o.sfx = o.sfx && st.sfx == cliSettings_.sfx;
++    o.ambient = o.ambient && st.ambient == cliSettings_.ambient;
++    o.music = o.music && st.music == cliSettings_.music;
++    o.game = o.game && st.game == cliSettings_.game;
++}
++
++// Saves the settings file, keeping the loaded value of every setting that is still only a command-line override:
++// a `--no-audio` or `--hands 3` run must not become the player's saved preference.
++void App::persistSettings() {
++    releaseOverrides();
++    ui::Settings s = screens_.settings();
++    if (overridden_.hands) s.numHands = loadedSettings_.numHands;
++    if (overridden_.level) s.difficulty = loadedSettings_.difficulty;
++    if (overridden_.sfx) s.sfx = loadedSettings_.sfx;
++    if (overridden_.ambient) s.ambient = loadedSettings_.ambient;
++    if (overridden_.music) s.music = loadedSettings_.music;
++    if (overridden_.game) s.game = loadedSettings_.game;
++    saveSettings(s);
++}
++
++} // namespace detail
++} // namespace app

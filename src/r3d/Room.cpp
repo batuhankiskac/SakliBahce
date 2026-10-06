@@ -199,6 +199,7 @@ void Room::setScoreboard(const std::string& title, const std::vector<std::string
     I.scoreDirty = true;
 }
 void Room::setTitleMode(bool on) { impl_->title = on; }
+void Room::setTavlaFocus(bool on) { impl_->tavlaFocus = on; }
 bool Room::consumeCatMeow(Vector3& where) {
     if (!impl_->catMeowed) return false;
     impl_->catMeowed = false;
@@ -542,7 +543,8 @@ void Room::Impl::submitLights(Renderer& r) {
     f.hazeDensity = 0.5f - 0.12f * D;
     r.setFog(f);
 
-    const Lamp& K = lamps[0];
+    const int keyIdx = keyLamp();
+    const Lamp& K = lamps[(size_t)keyIdx];
     KeyLight k;
     k.position = K.cur;
     k.target = {K.cur.x, w3d::TABLE_Y, K.cur.z};
@@ -554,20 +556,23 @@ void Room::Impl::submitLights(Renderer& r) {
     k.shadows = true;
     r.setKeyLight(k);
 
-    // the room's budget is 9 point lights; a lamp switched off (an empty table by day) or the cold stove leave
-    // their slot to the daylight from the other windows
+    // the room's budget is 9 point lights (10 while tavla is played: our table has no istaka fill then); a lamp
+    // switched off (an empty table by day) or the cold stove leave their slot to the daylight from the other windows
     int n = 0;
+    const int budget = tavlaFocus ? 10 : 9;
     auto add = [&](const PointLight& p) {
-        if (n >= 9 || p.intensity <= 0.01f) return;
+        if (n >= budget || p.intensity <= 0.01f) return;
         r.addPointLight(p);
         ++n;
     };
     // Pendants: the light source sits a little below the shade mouth, so the enamel shade "blocks" most of
     // the light that would otherwise wash the ceiling.
-    for (size_t i = 1; i < lamps.size(); ++i) {
+    for (size_t i = 0; i < lamps.size(); ++i) {
+        if ((int)i == keyIdx) continue;
         const Lamp& L = lamps[i];
         float s = L.small ? 0.7f : 1.f;
-        add({Vector3Add(L.cur, Vector3{0, -0.26f * s, 0}), L.color, L.intensity * L.level, L.range});
+        // (our okey table's lamp, not the key light now, still lights the regulars sitting there)
+        add({Vector3Add(L.cur, Vector3{0, -0.26f * s, 0}), L.color, L.intensity * L.level * (i == 0 ? 1.6f : 1.f), L.range});
     }
     add({tvFront, Color{150, 176, 255, 255}, (0.2f + 0.8f * tvLight) * (1.f - 0.5f * D), 3.2f});
     // cool street light through the left windows (daylight by day); a passing car's headlights drag it along the wall
@@ -601,12 +606,13 @@ void Room::Impl::submitLamps(Renderer& r) {
         Matrix C = MatrixMultiply(MatrixMultiply(MatrixScale(1.f, CY - top, 1.f), MatrixTranslate(L.bulb.x, top, L.bulb.z)), L.xf);
         r.submit(&cordMesh, &mPaint, C, 0);
         if (L.level < 0.02f) continue;
-        r.submitGlow(Vector3Add(L.cur, Vector3{0, -0.03f * s, 0}), (L.key ? 0.2f : 0.17f) * s, Color{255, 214, 150, 255}, 0.6f * L.level);
-        r.submitGlow(Vector3Add(L.cur, Vector3{0, -0.09f * s, 0}), (L.key ? 0.55f : 0.45f) * s, Color{255, 190, 120, 255}, 0.12f * L.level);
+        const bool key = (int)i == keyLamp();
+        r.submitGlow(Vector3Add(L.cur, Vector3{0, -0.03f * s, 0}), (key ? 0.2f : 0.17f) * s, Color{255, 214, 150, 255}, 0.6f * L.level);
+        r.submitGlow(Vector3Add(L.cur, Vector3{0, -0.09f * s, 0}), (key ? 0.55f : 0.45f) * s, Color{255, 190, 120, 255}, 0.12f * L.level);
         // light shaft facing the camera about the vertical axis
         Vector3 rim = Vector3Transform(Vector3Add(L.bulb, Vector3{0, -0.075f * s, 0}), L.xf);
         float yaw = std::atan2(cam.x - rim.x, cam.z - rim.z);
-        L.dust.material.maps[MATERIAL_MAP_ALBEDO].color.a = (unsigned char)std::clamp(26.f * L.level * (L.key ? 0.8f : 1.f), 0.f, 255.f);
+        L.dust.material.maps[MATERIAL_MAP_ALBEDO].color.a = (unsigned char)std::clamp(26.f * L.level * (key ? 0.8f : 1.f), 0.f, 255.f);
         r.submit(&dustMeshes[i], &L.dust, MatrixMultiply(MatrixRotateY(yaw), translate(rim)), Transparent | Additive | DoubleSided | NoFog);
     }
     for (const Mote& m : motes) {
@@ -659,6 +665,10 @@ void Room::Impl::submitProps(Renderer& r) {
             Color{255, (unsigned char)std::clamp(90.f + 60.f * emberHeat, 0.f, 255.f), (unsigned char)std::clamp(20.f + 30.f * emberHeat, 0.f, 255.f), 255};
         r.submit(&ashEmber, &mEmber, A, 0);
         r.submit(&ashGlass, &mGlass, A, Transparent | DoubleSided);
+        // the tavla table's ashtray: a few butts, nothing burning
+        const Matrix TA = translate(w3d::tavlaToWorld(w3d::TAVLA_ASHTRAY_LOCAL));
+        r.submit(&ashInside, &mPaint, TA, CastShadow);
+        r.submit(&ashGlass, &mGlass, TA, Transparent | DoubleSided);
         r.submitGlow(emberPos, 0.011f, Color{255, 130, 50, 255}, 0.9f * emberHeat);
         r.submitGlow(emberPos, 0.035f, Color{255, 110, 40, 255}, 0.22f * emberHeat);
     }

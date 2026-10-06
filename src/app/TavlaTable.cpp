@@ -1,5 +1,5 @@
-// Tavla at our table: you (seat 0, the bottom of the board) against Kel Mahmut (seat 2, across); Hacı Rıza and
-// Emekli Nuri watch and talk. Engine tavla::Game (player 0 = you, player 1 = Mahmut), bots tavla::Bot, Tavla3D.
+// Tavla at its own table (w3d::tavlaFrame): you (seat 0, the bottom of the board) against the regular chosen in Ayarlar
+// (Kel Mahmut by default; Hacı Rıza or Emekli Nuri), across; the other two stay at the okey table, watch and talk. Engine tavla::Game (player 0 = you, player 1 = Mahmut), bots tavla::Bot, Tavla3D.
 #include "app/TableGame.h"
 #include "core/Rng.h"
 #include "core/Tavla.h"
@@ -16,24 +16,70 @@ namespace app {
 
 namespace {
 
-constexpr int OPP_SEAT = 2; // Kel Mahmut plays player 1
-
-const char* const kMahmutHit[] = {"Kırdım abi! Gooool!", "Pulun gitti, kapıdan gir bakalım!", "Vurdum, tribünler ayağa!"};
-const char* const kMahmutHitBy[] = {"Hakem! Bu nasıl zar!", "Kırdın mı? Rövanş var!", "Ofsayttı o, ofsayt!"};
-const char* const kMahmutDouble[] = {"Çift geldi abi, kaçın!", "Gördün mü zarı? Şampiyon zarı!", "Dubeş gibisi yok!"};
-const char* const kWatchHit[3][2] = {
-    {"Kırdı bak, hayırlısı.", "Kırık pul, kırık kalp…"},
+// What the opponent says, by who sits across (seat 1 Hacı Rıza: calm, proverbs; 2 Kel Mahmut: loud, football;
+// 3 Emekli Nuri: careful, "bizim zamanımızda").
+const char* const kOppHit[4][3] = {
     {},
+    {"Kırdım evlat, hayırlısı.", "Sabreden derviş muradına erer: kırdım.", "Açık pul, açık kapı… kırıldı."},
+    {"Kırdım abi! Gooool!", "Pulun gitti, kapıdan gir bakalım!", "Vurdum, tribünler ayağa!"},
+    {"Kırdım. Bizim zamanımızda pul açık bırakılmazdı.", "Açık pulu gördün mü vuracaksın delikanlı.", "Kırdım. Tecrübe."},
+};
+const char* const kOppHitBy[4][3] = {
+    {},
+    {"Vurdun ha, Allah'ın takdiri.", "Kırıldık, olsun; zar döner.", "Her inişin bir çıkışı var evlat."},
+    {"Hakem! Bu nasıl zar!", "Kırdın mı? Rövanş var!", "Ofsayttı o, ofsayt!"},
+    {"Vay, kırdı. Gözlüğüm buğulandı herhalde.", "Bu zarlar eskisi gibi değil.", "Kırdın ha? Şansa bak."},
+};
+const char* const kOppDouble[4][3] = {
+    {},
+    {"Maşallah, çift geldi.", "Çift zar, bereket.", "Hayırlı zar, elhamdülillah."},
+    {"Çift geldi abi, kaçın!", "Gördün mü zarı? Şampiyon zarı!", "Dubeş gibisi yok!"},
+    {"Çift geldi. Hıh.", "Bak sen, çift zar.", "Eski zar ama sağlam."},
+};
+const char* const kOppOffer[4][3] = {
+    {},
+    {"Katlıyorum evlat, hayırlısı.", "Bir kat daha, ne dersin?", "Katladım. Acele işe şeytan karışır, düşün."},
+    {"Katlıyorum! Yürek var mı?", "Hadi bakalım, iki katı!", "Katladım, korkan kaçsın!"},
+    {"Katlıyorum. Düşün taşın, delikanlı.", "Katladım. Temkinli ol.", "Bir kat. Bu yaşta riski hesaplarım."},
+};
+const char* const kOppTake[4][3] = {
+    {},
+    {"Alırım. Tevekkül.", "Kabul. Oyun bitmeden bitmez.", "Alayım bakalım, Allah kerim."},
+    {"Alırım! Mahmut kaçmaz!", "Kabul, oyun daha bitmedi!", "Korkmam, at zarını!"},
+    {"Alırım. Hesabını yaptım.", "Kabul, ama temkinli.", "Alıyorum. Gözlüğümü takayım."},
+};
+const char* const kOppDrop[4][3] = {
+    {},
+    {"Bu el senin olsun evlat.", "Pes ettim; inat iyi değil.", "Vermesini de bilmek lazım."},
+    {"Tamam tamam, bu el senin.", "Pes, ama rövanş var!", "Bu oyunu verdim, maçı vermem."},
+    {"Pes. Hesap ortada.", "Bu eli verdim, maçı vermem.", "Temkin, delikanlı, temkin."},
+};
+const char* const kOppSeesDrop[4][2] = {
+    {}, {"Akıllıca, evlat.", "Pes ettin ha? Hayırlısı."}, {"Kaçtın ha! Bilirdim.", "Pes etti! Tribünler ayakta!"},
+    {"Hıh, kaçtın.", "Pes etti. Bizim zamanımızda pes edilmezdi."},
+};
+const char* const kOppSeesTake[4][2] = {
+    {}, {"Aldın ha? Cesaret güzel.", "Aldın. Hayırlısı olsun."}, {"Aldın ha? Pişman olacaksın!", "Cesaretine hayran kaldım abi."},
+    {"Aldın ha? Gençlik.", "Cesur ama akıllı mı, göreceğiz."},
+};
+const char* const kOppMarsLost[4][3] = {
+    {},
+    {"Mars olduk, nasip.", "Bu da geçer evlat.", "Sabır; bir daha oynarız."},
+    {"Mars mı? Bu zarlarla kim olsa olurdu!", "Hakem, maç satılmış!", "Bir daha, bir daha!"},
+    {"Mars mı? Bu zarlarla kim olsa olurdu.", "Gözlüğüm buğulandı…", "Bizim zamanımızda böyle zar gelmezdi."},
+};
+const char* const kOppMarsThreat[4] = {"", "Bir pul toplayayım da mars olmayalım inşallah.",
+                                       "Dur dur, bir pul toplayayım da mars olmayayım!",
+                                       "Dur hele, bir pul toplayayım, mars olmayayım."};
+// The two at the okey table, watching (by seat).
+const char* const kWatchHit[4][2] = {
+    {},
+    {"Kırdı bak, hayırlısı.", "Kırık pul, kırık kalp…"},
+    {"Kırdı! Gol gibi kırık!", "Vay be, tribünler ayağa!"},
     {"Bizim zamanımızda böyle açık bırakılmazdı.", "Hıh, açık pul gördü mü vurur."},
 };
 const char* const kMarsLines[] = {"Mars! Çift yazın!", "Bu mars tarihe geçer!", "Mars oldun, çaylar senden!"};
-const char* const kMarsLost[] = {"Mars mı? Bu zarlarla kim olsa olurdu!", "Hakem, maç satılmış!", "Bir daha, bir daha!"};
 const char* const kWatchMars[] = {"Vay vay vay, mars! Ellerine sağlık.", "Mars yediyse çayları o ısmarlar, adet böyle."};
-const char* const kMahmutOffer[] = {"Katlıyorum! Yürek var mı?", "Hadi bakalım, iki katı!", "Katladım, korkan kaçsın!"};
-const char* const kMahmutTake[] = {"Alırım! Mahmut kaçmaz!", "Kabul, oyun daha bitmedi!", "Korkmam, at zarını!"};
-const char* const kMahmutDrop[] = {"Tamam tamam, bu el senin.", "Pes, ama rövanş var!", "Bu oyunu verdim, maçı vermem."};
-const char* const kMahmutSeesDrop[] = {"Kaçtın ha! Bilirdim.", "Pes etti! Tribünler ayakta!"};
-const char* const kMahmutSeesTake[] = {"Aldın ha? Pişman olacaksın!", "Cesaretine hayran kaldım abi."};
 
 // The buttons of the column, whatever order they are shown in this frame.
 enum Btn { B_DOUBLE, B_ROLL, B_UNDO, B_HINT, B_HISTORY };
@@ -43,6 +89,7 @@ public:
     bool init(const TableContext& ctx) override {
         ctx_ = ctx;
         built_ = ctx_.renderer && board_.init(*ctx_.renderer);
+        board_.setFrame(w3d::tavlaFrame()); // tavla has its own table
         return built_;
     }
     void shutdown() override {
@@ -56,8 +103,9 @@ public:
         r.katmerliMars = st.tavlaKatmerli;
         g_ = tavla::Game(r);
         names_ = names;
+        opp_ = std::clamp(st.tavlaRakip, 1, 3);
         g_.setPlayer(0, names[0], true);
-        g_.setPlayer(1, names[OPP_SEAT], false);
+        g_.setPlayer(1, names[opp_], false);
         bots_[0] = std::make_unique<tavla::Bot>(tavla::BotLevel::Hard, seed * 2 + 0x7A1ull);
         bots_[1] = std::make_unique<tavla::Bot>((tavla::BotLevel)std::clamp(level_, 0, 2), seed * 2 + 0x7A2ull);
         rng_.reseed(seed ^ 0x7A7Aull);
@@ -196,10 +244,10 @@ public:
         const int mt = marsThreat();
         if (mt >= 0 && !marsWarned_) {
             marsWarned_ = true;
-            hud_.toast(mt == 0 ? "Mars tehlikesi! Bir pul toplamadan bitirirse mars olursun" : names_[OPP_SEAT] + " mars tehlikesinde!",
+            hud_.toast(mt == 0 ? "Mars tehlikesi! Bir pul toplamadan bitirirse mars olursun" : names_[opp_] + " mars tehlikesinde!",
                        mt == 0 ? ui::pal::Bad : ui::pal::Highlight, 3.f);
-            if (mt == 1) say(OPP_SEAT, "Dur dur, bir pul toplayayım da mars olmayayım!");
-            else if (rng_.chance(0.5f)) say(rng_.chance(0.5f) ? 1 : 3, "Aman ha, mars kapıda!");
+            if (mt == 1) say(opp_, kOppMarsThreat[opp_]);
+            else if (rng_.chance(0.5f)) say(watcher(), "Aman ha, mars kapıda!");
         }
     }
 
@@ -217,9 +265,9 @@ public:
         std::array<Vector3, 4> heads{};
         std::array<r3d::GameHud::Plate, 4> plates{};
         for (int s = 1; s < 4; ++s) heads[(size_t)s] = ctx_.characters ? ctx_.characters->headPosition(s) : Vector3{};
-        r3d::GameHud::Plate& p = plates[OPP_SEAT];
+        r3d::GameHud::Plate& p = plates[opp_];
         p.show = true;
-        p.name = names_[OPP_SEAT];
+        p.name = names_[opp_];
         p.label = "Sayı";
         p.value = std::to_string(g_.score(1));
         p.turn = g_.current() == 1 && !over();
@@ -238,7 +286,7 @@ public:
             st = aiSeat ? "Başlangıç zarı atılıyor…" : "Kim başlayacak? Zarı at";
             sc = ui::pal::Highlight;
         } else if (g_.stage() == tavla::Stage::DoubleOffered) {
-            if (g_.responder() == 1) st = names_[OPP_SEAT] + " düşünüyor…";
+            if (g_.responder() == 1) st = names_[opp_] + " düşünüyor…";
             else if (aiSeat) st = sen ? std::string("Katlama sende") : me + " katlamayı düşünüyor…";
             else {
                 st = "Katlamayı kabul ediyor musun?";
@@ -255,7 +303,7 @@ public:
                 if (g_.barCount(0) > 0) st = "Kırık pulunu gir (" + left + ")";
             }
         } else {
-            st = names_[OPP_SEAT] + (g_.stage() == tavla::Stage::NeedRoll ? " zarını atıyor…" : " oynuyor…");
+            st = names_[opp_] + (g_.stage() == tavla::Stage::NeedRoll ? " zarını atıyor…" : " oynuyor…");
         }
         std::vector<std::pair<std::string, Color>> parts;
         const Color sep{226, 216, 196, 120};
@@ -272,7 +320,7 @@ public:
             std::string c = "Katlama " + std::to_string(g_.cubeValue());
             if (g_.crawfordGame()) c = "Crawford: katlama yok";
             else if (g_.cubeOwner() == 0) c += " (sende)";
-            else if (g_.cubeOwner() == 1) c += " (" + names_[OPP_SEAT] + ")";
+            else if (g_.cubeOwner() == 1) c += " (" + names_[opp_] + ")";
             else c += " (ortada)";
             parts.push_back({c, Color{206, 176, 232, 255}});
             parts.push_back({"  \xC2\xB7  ", sep});
@@ -309,8 +357,8 @@ public:
             b[0].label = "Kabul Et";
             b[0].hint = "oyun " + std::to_string(2 * v) + " katına";
             b[1].label = "Pes Et";
-            b[1].hint = names_[OPP_SEAT] + "'a " + std::to_string(v) + " sayı";
-            hud_.panel(mouse, names_[OPP_SEAT] + " katlamak istiyor (" + std::to_string(v) + " \xC2\xBB " + std::to_string(2 * v) + ")",
+            b[1].hint = names_[opp_] + "'a " + std::to_string(v) + " sayı";
+            hud_.panel(mouse, names_[opp_] + " katlamak istiyor (" + std::to_string(v) + " \xC2\xBB " + std::to_string(2 * v) + ")",
                        "Kabul edersen katlama zarı senin olur, pes edersen oyun biter", b, 2, 190.f, 150.f);
         }
         if (histOpen_) hud_.listPanel(mouse, "Hamleler \xC2\xB7 " + std::to_string(g_.gameIndex() + 1) + ". oyun", historyLines(aiTag));
@@ -349,10 +397,11 @@ public:
     bool animating() const override { return board_.animating(); }
     int activeSeat() const override {
         if (over() || g_.stage() == tavla::Stage::OpeningRoll) return -1;
-        return g_.current() == 0 ? 0 : OPP_SEAT;
+        return g_.current() == 0 ? 0 : opp_;
     }
     bool mouseBusy() const override { return hover_ >= 0 || hud_.mouseOverHud(); }
-    std::vector<int> seats() const override { return {0, OPP_SEAT}; }
+    std::vector<int> seats() const override { return {0, opp_}; }
+    int location() const override { return 1; }
     void setLevel(int level) override {
         level_ = std::clamp(level, 0, 2);
         if (bots_[1]) bots_[1]->setLevel((tavla::BotLevel)level_);
@@ -484,9 +533,9 @@ public:
         Vector3 w;
         if (target == r3d::Tavla3D::OFF) w = {0.38f, w3d::TABLE_Y + 0.0105f, 0.20f};
         else if (target == r3d::Tavla3D::BAR) w = {0.f, w3d::TABLE_Y + 0.0105f, 0.06f};
-        else w = board_.pointWorld(target, 0);
+        else w = board_.pointLocal(target, 0);
         w.y = w3d::TABLE_Y + 0.0105f;
-        return r.projectToVirtual(w, out);
+        return r.projectToVirtual(board_.toWorld(w), out);
     }
 
     std::string debugPhase() const override { return phase_; }
@@ -496,21 +545,21 @@ public:
         return "Tavla \xC2\xB7 " + std::to_string(g_.matchPoints()) + " sayı";
     }
     std::vector<std::string> scoreLines() const override {
-        return {names_[0] + " ....... " + std::to_string(g_.score(0)), names_[OPP_SEAT] + " ....... " + std::to_string(g_.score(1))};
+        return {names_[0] + " ....... " + std::to_string(g_.score(0)), names_[opp_] + " ....... " + std::to_string(g_.score(1))};
     }
 
     ui::SheetModel sheet(bool aiMode) const override {
         ui::SheetModel m;
-        m.columns = {aiMode ? std::string("Yapay Zeka (") + names_[0] + ")" : names_[0], names_[OPP_SEAT]};
+        m.columns = {aiMode ? std::string("Yapay Zeka (") + names_[0] + ")" : names_[0], names_[opp_]};
         m.humanCol = 0;
         const int games = (int)results_.size();
         m.title = std::to_string(games) + ". Oyun";
         m.corner = "tavla: " + std::to_string(g_.matchPoints()) + " sayı";
         if (!results_.empty()) {
             const tavla::GameResult& r = results_.back();
-            const std::string w = r.winner == 0 ? (aiMode ? std::string("Yapay zeka") : std::string("Sen")) : names_[OPP_SEAT];
+            const std::string w = r.winner == 0 ? (aiMode ? std::string("Yapay zeka") : std::string("Sen")) : names_[opp_];
             const bool sen = r.winner == 0 && !aiMode;
-            if (r.dropped) m.headline = r.winner == 0 ? names_[OPP_SEAT] + " pes etti, oyun " + (aiMode ? std::string("yapay zekanın!") : std::string("senin!"))
+            if (r.dropped) m.headline = r.winner == 0 ? names_[opp_] + " pes etti, oyun " + (aiMode ? std::string("yapay zekanın!") : std::string("senin!"))
                                                       : (aiMode ? std::string("Yapay zeka pes etti.") : std::string("Pes ettin, oyun Mahmut'un."));
             else if (r.mars) m.headline = sen ? std::string(r.katmerli ? "Katmerli mars yaptın!" : "Mars yaptın!")
                                               : w + (r.katmerli ? " katmerli mars yaptı!" : " mars yaptı!");
@@ -641,7 +690,7 @@ private:
     std::vector<std::pair<std::string, Color>> historyLines(bool aiSeat) const {
         std::vector<std::pair<std::string, Color>> out;
         const Color mine{255, 204, 92, 255}, his{206, 198, 182, 225}; // the player's lines tinted gold
-        auto who = [&](int p) { return p == 0 ? (aiSeat ? std::string("Yapay zeka") : names_[0]) : names_[OPP_SEAT]; };
+        auto who = [&](int p) { return p == 0 ? (aiSeat ? std::string("Yapay zeka") : names_[0]) : names_[opp_]; };
         int n = 0;
         auto line = [&](const tavla::TurnRecord& t) {
             out.push_back({std::to_string(++n) + ". " + who(t.player) + "  " + tavla::turnNotation(t), t.player == 0 ? mine : his});
@@ -705,7 +754,7 @@ private:
         auto screenX = [&](int p) {
             if (p == r3d::Tavla3D::BAR) return 0.f;
             if (p == r3d::Tavla3D::OFF) return 10.f;
-            return board_.pointWorld(p, 0).x;
+            return board_.pointLocal(p, 0).x;
         };
         std::vector<int> sources;
         for (const tavla::Step& st : steps)
@@ -821,22 +870,22 @@ private:
                 hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : Color{206, 176, 232, 255}, 2.6f);
                 sound(ui::Sfx::TileClick);
                 if (e.player == 1) {
-                    say(OPP_SEAT, kMahmutOffer[rng_.range(3)], true);
-                    if (ctx_.characters) ctx_.characters->reach(OPP_SEAT, {0.f, w3d::TABLE_Y, 0.f}, 0);
+                    say(opp_, kOppOffer[opp_][rng_.range(3)], true);
+                    if (ctx_.characters) ctx_.characters->reach(opp_, board_.toWorld({0.f, w3d::TABLE_Y, 0.f}), 0);
                 } else if (rng_.chance(0.5f)) {
-                    say(rng_.chance(0.5f) ? 1 : 3, "Oo, katladı! Masa ısınıyor.");
+                    say(watcher(), "Oo, katladı! Masa ısınıyor.");
                 }
                 break;
             case E::DoubleTake:
                 hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : ui::pal::TextLight, 2.4f);
                 sfxAt_.push_back({now_ + 0.6f / speed_, ui::Sfx::Checker});
-                if (e.player == 1) say(OPP_SEAT, kMahmutTake[rng_.range(3)], true);
-                else if (rng_.chance(0.6f)) say(OPP_SEAT, kMahmutSeesTake[rng_.range(2)]);
+                if (e.player == 1) say(opp_, kOppTake[opp_][rng_.range(3)], true);
+                else if (rng_.chance(0.6f)) say(opp_, kOppSeesTake[opp_][rng_.range(2)]);
                 break;
             case E::DoubleDrop:
                 hud_.toast(e.text, e.player == 0 ? ui::pal::Bad : ui::pal::Highlight, 3.f);
-                if (e.player == 1) say(OPP_SEAT, kMahmutDrop[rng_.range(3)], true);
-                else say(OPP_SEAT, kMahmutSeesDrop[rng_.range(2)], true);
+                if (e.player == 1) say(opp_, kOppDrop[opp_][rng_.range(3)], true);
+                else say(opp_, kOppSeesDrop[opp_][rng_.range(2)], true);
                 break;
             case E::OpeningRoll:
                 board_.throwDice(0, e.d1, e.d2, true, 0.f);
@@ -846,29 +895,29 @@ private:
             case E::Roll: {
                 const float delay = e.player == 1 ? w3d::BOT_GIVE_LEAD : 0.f;
                 board_.throwDice(e.player, e.d1, e.d2, false, delay);
-                if (e.player == 1 && ctx_.characters) ctx_.characters->reach(OPP_SEAT, {0.f, w3d::TABLE_Y, 0.f}, 1);
+                if (e.player == 1 && ctx_.characters) ctx_.characters->reach(opp_, board_.toWorld({0.f, w3d::TABLE_Y, 0.f}), 1);
                 sound(ui::Sfx::DiceThrow);
                 hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : ui::pal::TextLight, 2.0f);
                 if (e.player == 1 && e.d1 == e.d2 && e.d1 >= 4 && rng_.chance(0.6f))
-                    say(OPP_SEAT, kMahmutDouble[rng_.range(3)]);
+                    say(opp_, kOppDouble[opp_][rng_.range(3)]);
                 break;
             }
             case E::Step: {
                 const float delay = bot && e.player == 1 ? w3d::BOT_TAKE_LEAD : 0.f;
                 board_.moveChecker(e.player, e.from, e.to, delay);
-                if (e.player == 1 && ctx_.characters) ctx_.characters->reach(OPP_SEAT, board_.pointWorld(e.from, 1), 0);
+                if (e.player == 1 && ctx_.characters) ctx_.characters->reach(opp_, board_.pointWorld(e.from, 1), 0);
                 sfxAt_.push_back({now_ + (delay + 0.45f) / speed_, ui::Sfx::Checker});
                 break;
             }
             case E::Hit:
                 hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : ui::pal::Bad, 2.4f);
-                if (e.player == 1) say(OPP_SEAT, kMahmutHit[rng_.range(3)], true);
-                else if (rng_.chance(0.7f)) say(OPP_SEAT, kMahmutHitBy[rng_.range(3)], true);
+                if (e.player == 1) say(opp_, kOppHit[opp_][rng_.range(3)], true);
+                else if (rng_.chance(0.7f)) say(opp_, kOppHitBy[opp_][rng_.range(3)], true);
                 if (rng_.chance(0.35f)) {
-                    const int w = rng_.chance(0.5f) ? 1 : 3;
-                    say(w, kWatchHit[w == 1 ? 0 : 2][rng_.range(2)]);
+                    const int w = watcher();
+                    say(w, kWatchHit[w][rng_.range(2)]);
                 }
-                if (ctx_.characters) ctx_.characters->react(OPP_SEAT, e.player == 1 ? 1 : 2, {0.f, w3d::TABLE_Y, 0.f});
+                if (ctx_.characters) ctx_.characters->react(opp_, e.player == 1 ? 1 : 2, board_.toWorld({0.f, w3d::TABLE_Y, 0.f}));
                 break;
             case E::BearOff: sound(ui::Sfx::Checker); break;
             case E::NoMove: hud_.toast(e.text, ui::pal::TextLight, 2.6f); break;
@@ -880,12 +929,12 @@ private:
                 if (res.mars) {
                     // a mars is an event in the kahvehane: the big word, the line, everyone has something to say
                     hud_.banner(res.katmerli ? "KATMERLİ MARS!" : "MARS!", resultText(res), Color{255, 206, 84, 255}, 3.2f);
-                    say(e.player == 1 ? OPP_SEAT : (rng_.chance(0.5f) ? 1 : 3), kMarsLines[rng_.range(3)], true);
-                    if (e.player == 0) say(OPP_SEAT, kMarsLost[rng_.range(3)]);
-                    else say(rng_.chance(0.5f) ? 1 : 3, kWatchMars[rng_.range(2)]);
+                    say(e.player == 1 ? opp_ : watcher(), kMarsLines[rng_.range(3)], true);
+                    if (e.player == 0) say(opp_, kOppMarsLost[opp_][rng_.range(3)]);
+                    else say(watcher(), kWatchMars[rng_.range(2)]);
                     sound(ui::Sfx::TileSlam);
                 }
-                if (ctx_.characters) ctx_.characters->react(OPP_SEAT, e.player == 1 ? 1 : 2, {0.f, w3d::TABLE_Y, 0.f});
+                if (ctx_.characters) ctx_.characters->react(opp_, e.player == 1 ? 1 : 2, board_.toWorld({0.f, w3d::TABLE_Y, 0.f}));
                 sound(e.player == 0 ? ui::Sfx::Win : ui::Sfx::Lose);
                 break;
             }
@@ -897,6 +946,15 @@ private:
         syncBoard(false);
     }
 
+    // One of the two regulars still at the okey table (they watch and talk).
+    int watcher() {
+        int w[2], n = 0;
+        for (int s = 1; s <= 3; ++s)
+            if (s != opp_) w[n++] = s;
+        return w[rng_.range(2)];
+    }
+
+    int opp_ = 2;  // who plays player 1 at the tavla table (Settings::tavlaRakip)
     TableContext ctx_;
     tavla::Game g_;
     std::array<std::unique_ptr<tavla::Bot>, 2> bots_;

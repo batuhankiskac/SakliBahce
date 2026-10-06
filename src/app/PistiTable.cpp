@@ -312,6 +312,9 @@ protected:
             case E::Pisti:
                 hud_.toast(e.text, ui::pal::Highlight, 3.2f);
                 soundAt(ui::Sfx::CardSlap, 0.5f / speed_);
+                // the whole kahvehane hears it
+                if (ctx_.characters) ctx_.characters->crowdReact(e.seat == 0 || g_.sideOf(e.seat) == g_.sideOf(0) ? r3d::Characters::CrowdCheer : r3d::Characters::CrowdLaugh,
+                                                                  {0.f, w3d::TABLE_Y + 0.05f, 0.f}, 0.55f);
                 if (e.seat >= 0 && e.seat < 4) {
                     const int sd = g_.sideOf(e.seat);
                     if (sd >= 0) ++pistis_[(size_t)sd];
@@ -345,12 +348,10 @@ protected:
             }
         }
         if (dealt) {
-            if (g_.dealRound() == 0) {
-                // a new hand: the deck sits by the dealer, the table cards and the hands come out of it
-                dealFrom(dealer_);
-            } else {
-                dealNew(r3d::cardlayout::deck(dealer_, 0));
-            }
+            // a new hand: the dealer shuffles and cuts (the bottom card is shown), the hands and the table cards come
+            // off the deck; later deals come off what is left
+            if (g_.dealRound() == 0) dealFrom(dealer_);
+            else dealNew(dealer_);
         }
     }
     std::vector<int> handOf(int seat) const override { return g_.hand(seat); }
@@ -390,10 +391,23 @@ protected:
         return w;
     }
     bool extraBusy() const override { return captureAt_ >= 0.f; }
+    std::vector<std::pair<int, r3d::CardPose>> dealtExtras() const override {
+        std::vector<std::pair<int, r3d::CardPose>> v;
+        int level = 0;
+        for (int c : g_.closedCardsForDisplay()) v.push_back({c, r3d::cardlayout::middle(level++, false)});
+        for (int c : g_.tableCards()) v.push_back({c, r3d::cardlayout::middle(level++, true)});
+        return v;
+    }
+    int deckRemaining() const override { return (int)g_.deckCardsForDisplay().size(); }
+    bool showCutCard() const override { return true; }
+    int cutCard() const override {
+        const std::vector<int>& d = g_.deckCardsForDisplay();
+        return d.empty() ? -1 : d.front();
+    }
     void layoutExtra() override {
         // a capture waits a moment on the felt, then the cards go to the taker's pile
         if (captureAt_ >= 0.f && now_ >= captureAt_) {
-            collectTo(captureSeat_, captureCards_, 0.f);
+            sweepTo(captureSeat_, captureCards_, {0.f, w3d::TABLE_Y, 0.f});
             for (int c : captureCards_) pending_.erase(std::remove(pending_.begin(), pending_.end(), c), pending_.end());
             captureAt_ = -1.f;
             captureCards_.clear();
@@ -401,14 +415,15 @@ protected:
         // the middle: the closed cards (face down) under the open pile; the deck face down by the dealer
         int level = 0;
         for (int c : g_.closedCardsForDisplay()) placeExtra(c, r3d::cardlayout::middle(level++, false));
+        const size_t dealtOpen = dealing() ? g_.tableCards().size() : 0; // (the dealt ones lie straight)
         for (int c : g_.tableCards()) {
-            r3d::CardPose p = r3d::cardlayout::middle(level++, true);
+            const r3d::CardPose p = r3d::cardlayout::middle(level++, true, dealtOpen ? -1 : c);
             placeExtra(c, p);
         }
         // cards just captured stay in the middle until they are swept
         for (int c : captureCards_) placeExtra(c, cards_.target(c));
         const std::vector<int>& deck = g_.deckCardsForDisplay();
-        for (size_t i = 0; i < deck.size(); ++i) placeExtra(deck[i], r3d::cardlayout::deck(dealer_, (int)i), false);
+        for (size_t i = 0; i < deck.size(); ++i) placeExtra(deck[i], deckSlot(dealer_, (int)i), dealing());
     }
 
 private:
@@ -416,10 +431,14 @@ private:
         const std::vector<int>& open = g_.tableCards();
         const auto it = std::find(open.begin(), open.end(), card);
         const int level = (int)g_.closedCardsForDisplay().size() + (int)(it != open.end() ? it - open.begin() : (long)open.size());
-        r3d::CardPose p = r3d::cardlayout::middle(std::max(0, level), true);
+        const r3d::CardPose p = r3d::cardlayout::middle(std::max(0, level), true, card);
+        if (bot && seat != 0) {
+            // tossed onto the pile now and then, laid on it otherwise
+            playFromHand(seat, card, p, rng_.chance(0.35f));
+            return;
+        }
         const float delay = bot ? w3d::BOT_GIVE_LEAD : 0.f;
         cards_.place(card, p, true, delay, 0.07f);
-        if (bot && seat != 0 && ctx_.characters) ctx_.characters->reach(seat, p.pos, 1);
         soundAt(ui::Sfx::CardPlace, (delay + 0.42f) / speed_);
     }
 

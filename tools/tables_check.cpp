@@ -12,8 +12,9 @@
 //    modal at the okey istaka. (--out: kb_<game>_*.png.)
 //
 //   build: make tablescheck (see the Makefile)
-//   run:   tables_check [--hands N] [--out DIR] [--keys | --mouse] [--cb] [--big]
+//   run:   tables_check [--hands N] [--out DIR] [--keys | --mouse] [--cb] [--big] [--no-3d]
 //          --cb: colour-blind mode (tiles with shapes, four-colour cards); --big: HUD text x1.25 (Büyük yazı)
+//          --no-3d: skip the 3D pass (picking does not need it; a software GL renders a frame in ~0.1 s)
 #include "app/TableGame.h"
 #include "core/Bot.h"
 #include "core/Game.h"
@@ -88,10 +89,23 @@ const uint64_t kSeeds[] = {1234, 1238, 1235, 1236, 1237}; // (the seeds the four
 struct Ctx {
     r3d::Renderer* R = nullptr;
     RenderTexture2D* rt = nullptr;
-    Camera3D cam{};
+    Camera3D cam{};      // the seat at our okey table
+    Camera3D tavlaCam{}; // the seat at the tavla table (w3d::tavlaFrame)
     std::string out;
     int hands = 2;
+    bool no3d = false; // --no-3d: the 3D pass is skipped (a software GL in the cloud); the HUD is still drawn
 };
+
+void render3D(const Ctx& c) {
+    if (c.no3d) {
+        c.R->discardFrame(c.cam);
+        BeginTextureMode(*c.rt);
+        ClearBackground(Color{20, 14, 10, 255});
+        EndTextureMode();
+    } else {
+        c.R->render(c.cam, c.rt, Color{20, 14, 10, 255});
+    }
+}
 
 std::unique_ptr<app::TableGame> startGame(const Ctx& c, int k) {
     std::unique_ptr<app::TableGame> g = app::makeTableGame(kKinds[k]);
@@ -106,11 +120,18 @@ std::unique_ptr<app::TableGame> startGame(const Ctx& c, int k) {
     return g;
 }
 
+// The seat the game is played from: tavla has its own table.
+Ctx forGame(const Ctx& c, const app::TableGame* g) {
+    Ctx out = c;
+    if (g && g->location() == 1) out.cam = c.tavlaCam;
+    return out;
+}
+
 void frame(const Ctx& c, app::TableGame& g, Vector2 mouse) {
     g.update(1.f / 30.f, c.cam, mouse, true, false);
     BeginDrawing();
     g.submit(*c.R);
-    c.R->render(c.cam, c.rt, Color{20, 14, 10, 255});
+    render3D(c);
     BeginTextureMode(*c.rt);
     g.drawHUD(*c.R, mouse, false);
     EndTextureMode();
@@ -118,8 +139,9 @@ void frame(const Ctx& c, app::TableGame& g, Vector2 mouse) {
 }
 
 // ---------------------------------------------------------------- 1. the mouse
-int runMouse(const Ctx& c, int k) {
-    std::unique_ptr<app::TableGame> g = startGame(c, k);
+int runMouse(const Ctx& c0, int k) {
+    std::unique_ptr<app::TableGame> g = startGame(c0, k);
+    const Ctx c = forGame(c0, g.get());
     if (!g) {
         std::printf("%s: init failed\n", kNames[k]);
         return 1;
@@ -188,8 +210,9 @@ int runMouse(const Ctx& c, int k) {
 // Whenever the player has something to do (TableGame::debugHumanClick says so, but its point is never used) a key
 // is pressed from a per-game cycle; the mouse never moves and never clicks. The cycles always end on Enter, so every
 // decision is made by the keyboard's cursor / focus wherever the arrows left it.
-int runKeys(const Ctx& c, int k) {
-    std::unique_ptr<app::TableGame> g = startGame(c, k);
+int runKeys(const Ctx& c0, int k) {
+    std::unique_ptr<app::TableGame> g = startGame(c0, k);
+    const Ctx c = forGame(c0, g.get());
     if (!g) {
         std::printf("kb %s: init failed\n", kNames[k]);
         return 1;
@@ -298,7 +321,7 @@ int runOkeyKeys(const Ctx& c, bool classic) {
         table.update(1.f / 30.f, c.cam, mouse, true);
         BeginDrawing();
         table.submit(*c.R);
-        c.R->render(c.cam, c.rt, Color{20, 14, 10, 255});
+        render3D(c);
         BeginTextureMode(*c.rt);
         table.drawHUD(*c.R);
         EndTextureMode();
@@ -395,6 +418,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--mouse")) keys = false;
         else if (!std::strcmp(argv[i], "--cb")) cb = true;
         else if (!std::strcmp(argv[i], "--big")) big = true;
+        else if (!std::strcmp(argv[i], "--no-3d")) c.no3d = true;
     }
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     SetTraceLogLevel(LOG_ERROR);
@@ -411,6 +435,11 @@ int main(int argc, char** argv) {
     c.R = &R;
     c.rt = &rt;
     c.cam = seatCamera();
+    {
+        r3d::PlayerCamera pc;
+        pc.setTavlaSeat();
+        c.tavlaCam = pc.camera();
+    }
     int failures = 0;
     if (mouse)
         for (int k = 0; k < 5; ++k) failures += runMouse(c, k);

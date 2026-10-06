@@ -73,6 +73,40 @@ constexpr float GLASS_KEEPOUT = 0.05f;
 constexpr Vector3 ASHTRAY_POS{-0.40f, TABLE_Y, -0.49f};
 constexpr float ASHTRAY_KEEPOUT = 0.055f;
 
+// ---------------------------------------------------------------- the tavla table (2026-10)
+// Tavla is played at its own small two-seat table behind our seat, in front of the wall bench. Its frame maps the okey
+// table's layout onto it: origin at the table centre, turned by TAVLA_YAW_DEG (seatYawDeg's convention) so that local
+// -Z is the player's forward (here the player looks toward the street door, -X), the player (local seat 0) at +Z and
+// the opponent (local seat 2) at -Z, TAVLA_SEAT_DIST from the centre. The top is at TABLE_Y and the chairs stand as far
+// from its edge as ours do, so every seated pose of the people fits there too.
+constexpr Vector3 TAVLA_TABLE{0.f, 0.f, 2.25f};
+constexpr float TAVLA_YAW_DEG = 90.f;
+constexpr float TAVLA_HALF_W = 0.50f;   // across (local x)
+constexpr float TAVLA_HALF_D = 0.36f;   // toward the players (local z)
+constexpr float TAVLA_SEAT_DIST = TAVLA_HALF_D + (SEAT_DIST - FELT_HALF - RIM_W);
+inline Vector3 tavlaToWorld(Vector3 l) {
+    // yaw 90: local x -> world -z, local z -> world +x
+    return {TAVLA_TABLE.x + l.z, l.y, TAVLA_TABLE.z - l.x};
+}
+inline Vector3 tavlaDirToWorld(Vector3 d) { return {d.z, d.y, -d.x}; }
+inline Vector3 tavlaToLocal(Vector3 w) { return {TAVLA_TABLE.z - w.z, w.y, w.x - TAVLA_TABLE.x}; }
+inline Vector3 tavlaDirToLocal(Vector3 d) { return {-d.z, d.y, d.x}; }
+// The tavla table's frame as a matrix (local -> world, raymath "then" order: MatrixMultiply(local, tavlaFrame())).
+inline Matrix tavlaFrame() {
+    Matrix m{};
+    m.m0 = 0.f, m.m1 = 0.f, m.m2 = -1.f;  // local x
+    m.m4 = 0.f, m.m5 = 1.f, m.m6 = 0.f;   // local y
+    m.m8 = 1.f, m.m9 = 0.f, m.m10 = 0.f;  // local z
+    m.m12 = TAVLA_TABLE.x, m.m13 = TAVLA_TABLE.y, m.m14 = TAVLA_TABLE.z;
+    m.m15 = 1.f;
+    return m;
+}
+// Personal things on it (local): the player's tea on his right, the opponent's on his left, an ashtray at the
+// opponent's right hand (Kel Mahmut's cigarette hand).
+constexpr Vector3 TAVLA_GLASS_LOCAL[2] = {{0.43f, TABLE_Y, 0.12f}, {0.42f, TABLE_Y, -0.22f}};
+constexpr Vector3 TAVLA_ASHTRAY_LOCAL{-0.43f, TABLE_Y, -0.27f};
+constexpr float TAVLA_LAMP_Y = 1.86f;
+
 // ---------------------------------------------------------------- the human's camera
 constexpr Vector3 EYE{0.f, 1.20f, 0.80f};
 constexpr float EYE_PITCH_DEG = -27.f;      // default look: down toward the table

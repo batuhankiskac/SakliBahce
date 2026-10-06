@@ -1152,7 +1152,7 @@ enum ClickId {
     C_Back, C_Defaults, C_Hands, C_Level, C_Anim, C_Sfx, C_Ambient, C_Music, C_Hints, C_Katlamali, C_YandanCeza, C_Name,
     C_Resume, C_PauseAi, C_PauseRules, C_PauseSettings, C_PauseMenu, C_ConfirmYes, C_ConfirmNo,
     C_Next, C_NewGame, C_MatchMenu, C_RulesTab, C_GameCard, C_SelBack, C_OkeyStart, C_TavlaPoints,
-    C_BatakEsli, C_BatakTarget, C_PistiTarget, C_PistiMode, C_TitleStats, C_Continue, C_StatsBack, C_GuideOk, C_Guide, C_TavlaDoubling, C_TavlaKatmerli,
+    C_BatakEsli, C_BatakTarget, C_PistiTarget, C_PistiMode, C_TitleStats, C_Continue, C_StatsBack, C_GuideOk, C_Guide, C_TavlaDoubling, C_TavlaKatmerli, C_TavlaRakip,
     C_OkeyRenkli, C_BatakKoz, C_King12, C_SetPage, C_DayTime, C_Season, C_Voices, C_ColorBlind, C_BigText, C_StatsReplays, C_ReplayWatch,
     C_ReplaysBack, C_ReplayAnalyze, C_ShowAnalysis, C_AnalysisBack,
 };
@@ -1461,6 +1461,9 @@ struct Screens::Impl {
             return ScreenAction::SettingsChanged;
         case C_TavlaPoints:
             settings.tavlaPoints = kTavlaChoices[std::clamp(c.value, 0, 2)];
+            return ScreenAction::SettingsChanged;
+        case C_TavlaRakip:
+            settings.tavlaRakip = std::clamp(c.value, 0, 2) + 1;
             return ScreenAction::SettingsChanged;
         case C_BatakEsli:
             settings.batakEsli = !settings.batakEsli;
@@ -2620,6 +2623,10 @@ struct Screens::Impl {
             toggle(C_OkeyRenkli, 10, settings.okeyRenkli, cy, m);
             break;
         case GameKind::Tavla:
+            cy = row();
+            settingRow(cy, "Rakip", "Tavla masasında karşına kim otursun?");
+            chipRow(C_TavlaRakip, {"Hacı Rıza", "Kel Mahmut", "Emekli Nuri"}, std::clamp(settings.tavlaRakip, 1, 3) - 1, cy, 128.f,
+                    12.f, m, 21.f);
             cy = row();
             settingRow(cy, "Maç", "Kaç sayıya oynansın? (mars iki sayı)");
             chipRow(C_TavlaPoints, {"3", "5", "7"}, closest(kTavlaChoices, settings.tavlaPoints), cy, 66.f, 12.f, m, 25.f);

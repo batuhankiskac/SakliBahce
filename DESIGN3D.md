@@ -116,6 +116,19 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
   HandEnd → winner celebrates (arms up / fist on table), others grumble; idle → breathing, looking at
   their own rack while it's their turn (thinking pose: hand on chin), sipping tea (glass travels to the
   mouth and back, level drops), smoking (cigarette to the lips, exhale puff), tespih swinging.
+* Tavla at its own table (`CharactersTavla.cpp`): `setTavlaTable(on, seat)` re-roots that opponent at the tavla
+  table's far chair (`TAVLA_YAW_DEG + 180`) and puts their glass and the human's on it (`TAVLA_GLASS_LOCAL`); every
+  arm pose is character-local, so nothing else changes. `ashtrayFor`, `tableFocus` (the bystanders' gaze and facing),
+  `kTavlaWayIn` / `kTavlaSpot` (bystanders), the çaycı's node 16 follow it. Room builds the table, its two chairs
+  (occupied: the cat keeps off), its pendant and an ashtray; the cat's grid avoids it.
+* Card games (`CharactersCards.cpp`): `holdCards` puts the hand fanned into the left hand (an optional pick-up off
+  the felt first; `Opponent::cards`, `fanRel` = the fan's frame in the hand's space, so `cardFan` follows the real
+  hand; `updateCardHold` moves the hand half way along with the body's lean so a thinking head never comes down onto
+  the cards). While it holds them `startTrack` refuses every other track on that arm (no sips, gestures, tespih
+  flips; Rıza's tespih hangs from the card hand) and `reach` uses the right hand. `playCard` (the right hand pinches
+  a card's top edge from above, draws it up and lays or tosses it), `gatherCards` (palm down on a trick, pushed to
+  the pile), `shuffleDeck` / `dealCards` (the dealer's riffle; the left hand holds the deck while the right pushes
+  each card off) — all `TK_Reach` / `TK_CardHold` tracks at the table's animation speed.
 * Personal props on the table at `GLASS_POS[s]` (ince belli glass on a saucer with tea — translucent
   amber, spoon; seat 3 has an orange oralet), including the human's glass at `GLASS_POS[0]`.
 * Background patrons (8–12) at `BG_TABLES` seats doing their activity (tavla dice throws, card slaps,

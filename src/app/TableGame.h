@@ -47,7 +47,10 @@ public:
     virtual std::vector<std::string> scoreLines() const = 0;
     virtual int activeSeat() const = 0;   // whose turn (-1 none): the people look at them
     virtual bool mouseBusy() const = 0;   // the mouse is over a card / button (no mouse-look)
-    virtual std::vector<int> seats() const { return {0, 1, 2, 3}; } // who plays (tavla: 0 and 2)
+    virtual std::vector<int> seats() const { return {0, 1, 2, 3}; } // who plays (tavla: 0 and the opponent)
+    // Where it is played: 0 our okey table, 1 the tavla table (w3d::tavlaFrame; App moves the camera, the opponent,
+    // the glasses and the key light there).
+    virtual int location() const { return 0; }
 
     virtual void setLevel(int level) = 0;          // 0 Acemi, 1 Usta, 2 Kurt (the opponents)
     virtual void setAnimationSpeed(float s) = 0;

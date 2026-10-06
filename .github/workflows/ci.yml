@@ -1,0 +1,124 @@
+# Her push'ta: Linux'ta make test + ASan derlemesi + xvfb altında bir oyun karesi; macOS'ta make test.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  RAYLIB_TAG: "6.0"
+
+jobs:
+  linux:
+    name: Linux (make test)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Paketler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang xvfb libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libgl1-mesa-dri libasound2-dev fonts-dejavu-core fonts-liberation
+
+      - name: raylib önbelleği
+        id: raylib-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/raylib
+          key: raylib-${{ env.RAYLIB_TAG }}-${{ runner.os }}-ubuntu-24.04
+
+      - name: raylib (kaynaktan)
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_TAG" https://github.com/raysan5/raylib.git /tmp/raylib-src
+          make -C /tmp/raylib-src/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j"$(nproc)"
+          mkdir -p ~/raylib/lib ~/raylib/include
+          cp /tmp/raylib-src/src/libraylib.a ~/raylib/lib/
+          cp /tmp/raylib-src/src/raylib.h /tmp/raylib-src/src/raymath.h /tmp/raylib-src/src/rlgl.h ~/raylib/include/
+
+      - name: Derle
+        run: make -j"$(nproc)" RAYLIB=$HOME/raylib all tests
+
+      - name: make test
+        run: make RAYLIB=$HOME/raylib test
+
+      - name: make tablescheck (xvfb, 3B çizimsiz)
+        run: make RAYLIB=$HOME/raylib tablescheck TABLESCHECK_ARGS=--no-3d
+
+      - name: Görüntü (xvfb, sessiz)
+        run: |
+          mkdir -p ci-shots
+          xvfb-run -a -s "-screen 0 1920x1080x24" ./saklibahce --seed 42 --autoplay --speed 3 --frames 240 \
+            --render-last 20 --snapshot ci-shots/seat.png --state game --view seat
+          xvfb-run -a -s "-screen 0 1920x1080x24" ./saklibahce --seed 7 --game pisti --autoplay --speed 3 \
+            --frames 240 --render-last 20 --snapshot ci-shots/pisti.png --state game --view seat
+          xvfb-run -a -s "-screen 0 1920x1080x24" ./saklibahce --seed 3 --max-frames 30 --start
+          test -s ci-shots/seat.png && test -s ci-shots/pisti.png
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-goruntuler
+          path: ci-shots/
+          if-no-files-found: ignore
+
+  linux-asan:
+    name: Linux (make asan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Paketler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-18-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libasound2-dev
+
+      - name: raylib önbelleği
+        id: raylib-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/raylib
+          key: raylib-${{ env.RAYLIB_TAG }}-${{ runner.os }}-ubuntu-24.04
+
+      - name: raylib (kaynaktan)
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_TAG" https://github.com/raysan5/raylib.git /tmp/raylib-src
+          make -C /tmp/raylib-src/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j"$(nproc)"
+          mkdir -p ~/raylib/lib ~/raylib/include
+          cp /tmp/raylib-src/src/libraylib.a ~/raylib/lib/
+          cp /tmp/raylib-src/src/raylib.h /tmp/raylib-src/src/raymath.h /tmp/raylib-src/src/rlgl.h ~/raylib/include/
+
+      - name: make asan
+        run: make -j"$(nproc)" RAYLIB=$HOME/raylib asan
+
+  macos:
+    name: macOS (make test)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: raylib önbelleği
+        id: raylib-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/raylib
+          key: raylib-${{ env.RAYLIB_TAG }}-${{ runner.os }}-macos-14
+
+      - name: raylib (kaynaktan; Homebrew'ın sürümü kayabilir)
+        if: steps.raylib-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_TAG" https://github.com/raysan5/raylib.git /tmp/raylib-src
+          make -C /tmp/raylib-src/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j"$(sysctl -n hw.ncpu)"
+          mkdir -p ~/raylib/lib ~/raylib/include
+          cp /tmp/raylib-src/src/libraylib.a ~/raylib/lib/
+          cp /tmp/raylib-src/src/raylib.h /tmp/raylib-src/src/raymath.h /tmp/raylib-src/src/rlgl.h ~/raylib/include/
+
+      - name: Derle
+        run: make -j"$(sysctl -n hw.ncpu)" RAYLIB=$HOME/raylib all tests
+
+      - name: make test
+        run: make RAYLIB=$HOME/raylib test

@@ -1054,7 +1054,20 @@ void testBotMatches() {
         }
     }
     std::printf("  Kurt max decision time in the test matches: %.1f ms\n", kurtMax);
-    CHECK(kurtMax < 100.0); // generous: the budget targets ~15 ms; timing under a loaded machine varies
+    // generous: the budget targets ~15 ms; timing under a loaded machine varies (a sanitized build runs several times
+    // slower: `make asan` only reports it)
+#if defined(__SANITIZE_ADDRESS__)
+    constexpr bool kSanitized = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+    constexpr bool kSanitized = true;
+#else
+    constexpr bool kSanitized = false;
+#endif
+#else
+    constexpr bool kSanitized = false;
+#endif
+    if (!kSanitized) CHECK(kurtMax < 100.0);
 }
 
 } // namespace
