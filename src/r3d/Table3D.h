@@ -6,6 +6,7 @@
 // PUBLIC API FROZEN. Implementation: src/r3d/Table3D*.cpp — table owner (struct Table3D::Impl).
 #include "core/Game.h"
 #include "r3d/Gfx.h"
+#include "r3d/HandCue.h"
 #include "ui/Audio.h"
 #include "ui/Common.h"
 #include <array>
@@ -52,6 +53,10 @@ public:
     // no istakas, tiles or okey stand.
     void setFurnitureOnly(bool on);
     std::function<void(ui::Sfx)> playSfx;
+    // The player's own hands (r3d::PlayerHands, HandCue.h): a cue when the player's tile starts to move (drawn,
+    // discarded, laid, picked up with the mouse), and the lead it is held back by so the fingers are on it first.
+    HandCueFn handCue;
+    HandLeadFn handLead;
 
 private:
     struct Impl;

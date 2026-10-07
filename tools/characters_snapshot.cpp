@@ -387,6 +387,137 @@ int main(int argc, char** argv) {
     }
     h.runRendered(6.f);  // deal, settle, let smoke build up
 
+    // ---- Yüz: expressions and the talking mouth (characters_snapshot OUT yuz)
+    if (h.only == "yuz") {
+        const chr::Mood moods[9] = {chr::Mood::Neutral, chr::Mood::Happy,    chr::Mood::Laugh,
+                                    chr::Mood::Grumpy,  chr::Mood::Surprised, chr::Mood::Sad,
+                                    chr::Mood::Thinking, chr::Mood::Smug,    chr::Mood::Content};
+        const char* moodName[9] = {"notr", "mutlu", "kahkaha", "kizgin", "sasirmis", "uzgun", "dusunceli", "kendinden emin", "memnun"};
+        const char* who[4] = {"", "riza", "mahmut", "nuri"};
+        auto settle = [&](chr::Mood m, float t) {
+            for (int s = 1; s <= 3; ++s) {
+                C.opp[s].talkT = -1.f;
+                C.setMood(C.opp[s], m, 30.f);
+                C.opp[s].pendIn = -1.f;
+            }
+            h.run(t);
+        };
+        // 1. each man's nine faces, close up
+        for (int s = 1; s <= 3; ++s) {
+            BeginTextureMode(h.sheet);
+            ClearBackground(BLACK);
+            EndTextureMode();
+            for (int mi = 0; mi < 9; ++mi) {
+                Camera3D fc = faceCam(h, s, 0.5f);
+                C.opp[s].gazeGoal = fc.position;
+                C.opp[s].gazeHold = 5.f;
+                settle(moods[mi], 0.9f);
+                h.renderTo(fc, false);
+                BeginTextureMode(h.sheet);
+                Rectangle dst{(mi % 3) * 533.3f, (mi / 3) * 300.f, 531.f, 298.f};
+                DrawTexturePro(h.rt.texture, {0, 0, 1600.f, -900.f}, dst, {0, 0}, 0.f, WHITE);
+                ui::drawTextShadow(ui::FontId::UiBold, moodName[mi], {dst.x + 8, dst.y + 6}, 22.f, WHITE);
+                EndTextureMode();
+            }
+            h.save(h.sheet, std::string("yuz_moods_") + who[s]);
+        }
+        // 2. the seat view: all three with the same face, and the heads cropped x3
+        for (int s = 1; s <= 3; ++s) C.opp[s].gazeHold = 0.f;
+        auto cropSheet = [&](const std::string& name, const Camera3D& cam, const chr::Mood* ms, int n) {
+            BeginTextureMode(h.sheet);
+            ClearBackground(BLACK);
+            EndTextureMode();
+            for (int r = 0; r < n; ++r) {
+                for (int s = 1; s <= 3; ++s) {
+                    C.opp[s].gazeGoal = h.viewer.position;
+                    C.opp[s].gazeHold = 3.f;
+                }
+                settle(ms[r], 1.0f);
+                if (r == 0) h.shot(name + "_full", cam);
+                h.renderTo(cam, false);
+                for (int s = 1; s <= 3; ++s) {
+                    Vector2 p = GetWorldToScreenEx(Vector3Add(h.chars.headPosition(s), {0, -0.05f, 0}), cam, 1600, 900);
+                    const float cw = 150.f, ch = 100.f;
+                    Rectangle src{p.x - cw * 0.5f, 900.f - (p.y + ch * 0.5f), cw, -ch};
+                    Rectangle dst{(s - 1) * 533.3f, r * 300.f, 531.f, 298.f * 0.95f};
+                    BeginTextureMode(h.sheet);
+                    DrawTexturePro(h.rt.texture, src, dst, {0, 0}, 0.f, WHITE);
+                    ui::drawTextShadow(ui::FontId::UiBold, moodName[(int)ms[r]], {dst.x + 8, dst.y + 6}, 22.f, WHITE);
+                    EndTextureMode();
+                }
+            }
+            h.save(h.sheet, name);
+        };
+        const chr::Mood rowsA[3] = {chr::Mood::Neutral, chr::Mood::Happy, chr::Mood::Grumpy};
+        const chr::Mood rowsB[3] = {chr::Mood::Surprised, chr::Mood::Laugh, chr::Mood::Thinking};
+        cropSheet("yuz_seat_a", seatCam(), rowsA, 3);
+        cropSheet("yuz_seat_b", seatCam(), rowsB, 3);
+        cropSheet("yuz_left_a", seatCam(40.f, -10.f), rowsA, 3);
+        cropSheet("yuz_right_a", seatCam(-40.f, -10.f), rowsA, 3);
+        settle(chr::Mood::Neutral, 1.5f);
+        // 3. talking: the jaw over a line (the text schedule: no audio here), and a contact sheet of Mahmut's mouth
+        const char* line = "Hadi be Nuri, oyna şu taşı! Bu ne yavaşlık?";
+        h.chars.say(2, line, 4.f);
+        std::printf("talk jaw (Mahmut, 30 ms):");
+        for (int i = 0; i < 90; ++i) {
+            h.step(0.03f);
+            std::printf(" %.2f", C.opp[2].jaw);
+        }
+        std::printf("\nNuri after being named: mood %d\n", (int)C.opp[3].mood);
+        h.run(4.f);
+        h.chars.say(2, line, 4.f);
+        h.run(0.45f);
+        h.sheetShot("yuz_talk_mahmut", [&] { return faceCam(h, 2, 0.5f); }, 9, 0.06f);
+        h.run(4.f);
+        h.chars.say(2, line, 4.f);
+        h.run(0.45f);
+        // Mahmut's head from the seat, x3.5, every 50 ms
+        {
+            BeginTextureMode(h.sheet);
+            ClearBackground(BLACK);
+            EndTextureMode();
+            const Camera3D cam = seatCam();
+            for (int i = 0; i < 12; ++i) {
+                h.renderTo(cam, false);
+                Vector2 p = GetWorldToScreenEx(Vector3Add(h.chars.headPosition(2), {0, -0.05f, 0}), cam, 1600, 900);
+                Rectangle src{p.x - 60.f, 900.f - (p.y + 40.f), 120.f, -80.f};
+                Rectangle dst{(i % 4) * 400.f, (i / 4) * 300.f, 398.f, 266.f};
+                BeginTextureMode(h.sheet);
+                DrawTexturePro(h.rt.texture, src, dst, {0, 0}, 0.f, WHITE);
+                char lab[48];
+                std::snprintf(lab, sizeof lab, "+%.2fs jaw %.2f", i * 0.05f, C.opp[2].jaw);
+                ui::drawTextShadow(ui::FontId::UiBold, lab, {dst.x + 8, dst.y + 6}, 20.f, WHITE);
+                EndTextureMode();
+                h.runRendered(0.05f);
+            }
+            h.save(h.sheet, "yuz_talk_seatcrop");
+        }
+        // 4. cost: the face per frame (all three talking, expressions changing)
+        h.charMs = 0.0;
+        h.charFrames = 0;
+        for (int k = 0; k < 10; ++k) {
+            for (int s = 1; s <= 3; ++s) h.chars.react(s, 1 + (k + s) % 3, {0, 0.8f, 0});
+            h.chars.say(1 + k % 3, "Bak şimdi, ben bu oyunu kırk yıldır oynarım.", 3.f);
+            h.run(1.f);
+        }
+        std::printf("characters update: %.3f ms/frame over %d frames\n", h.charMs / std::max(1, h.charFrames), h.charFrames);
+        {
+            auto t0 = std::chrono::steady_clock::now();
+            for (int k = 0; k < 20000; ++k)
+                for (int s = 1; s <= 3; ++s) {
+                    C.faceBody(C.opp[s], 1.f / 60.f);
+                    C.updateFace(C.opp[s], 1.f / 60.f, 0.f);
+                }
+            auto t1 = std::chrono::steady_clock::now();
+            std::printf("faces (3 regulars): %.4f ms/frame\n", std::chrono::duration<double, std::milli>(t1 - t0).count() / 20000.0);
+            t0 = std::chrono::steady_clock::now();
+            for (int k = 0; k < 600; ++k) h.chars.update(1.f / 60.f, h.viewer);
+            t1 = std::chrono::steady_clock::now();
+            std::printf("Characters::update: %.4f ms/frame\n", std::chrono::duration<double, std::milli>(t1 - t0).count() / 600.0);
+        }
+        return 0;
+    }
+
     // ---- 1. the seat view, idle
     h.shot("01_seat", seatCam());
     h.shot("02_seat_level", seatCam(0.f, -8.f));

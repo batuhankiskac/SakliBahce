@@ -12,8 +12,8 @@ namespace {
 
 static_assert(sizeof(Position) == 28, "Position must be 28 packed bytes (hashing)");
 
-inline int relOf(int p, int i) { return p == 0 ? i : 23 - i; }
-inline int absOf(int p, int r) { return p == 0 ? r : 23 - r; }
+inline int relOf(Variant v, int p, int i) { return relPoint(v, p, i); }
+inline int absOf(Variant v, int p, int r) { return absPoint(v, p, r); }
 inline int ownAt(const Position& pos, int p, int i) {
     const int v = pos.pts[i];
     return p == 0 ? (v > 0 ? v : 0) : (v < 0 ? -v : 0);
@@ -21,31 +21,83 @@ inline int ownAt(const Position& pos, int p, int i) {
 inline int oppAt(const Position& pos, int p, int i) { return ownAt(pos, 1 - p, i); }
 
 // Highest relative point (0 = own 1-point .. 23) holding a checker of p, or -1. Bar is not included.
-inline int highestRel(const Position& pos, int p) {
+inline int highestRel(const Position& pos, int p, Variant v) {
     for (int r = 23; r >= 0; --r)
-        if (ownAt(pos, p, absOf(p, r))) return r;
+        if (ownAt(pos, p, absOf(v, p, r))) return r;
     return -1;
+}
+
+// ---- Gülbahar / Fevga (sameWay): no hits, one checker holds a point ----
+
+// Fevga: while p has 14 checkers on his start point and the 15th (the first one out) has not yet passed the
+// opponent's start point (p's rel 11), only that checker may move. Its rel, or -1 when the rule is over.
+inline int fevgaRunner(const Position& pos, int p, Variant v) {
+    if (v != Variant::Fevga || ownAt(pos, p, absOf(v, p, 23)) != kCheckers - 1) return -1;
+    for (int r = 22; r >= 0; --r)
+        if (ownAt(pos, p, absOf(v, p, r))) return r >= 11 ? r : -1;
+    return -1;
+}
+
+// Fevga: would p moving one checker from `from` to the empty point `to` close six points in a row (a 6-prime, seen
+// along the opponent's way) with every opposing checker behind it? (Allowed once one of his is past it.)
+bool fevgaBlocksAll(const Position& pos, int p, int from, int to, Variant v) {
+    const int o = 1 - p;
+    if (pos.off[o] > 0) return false;
+    auto mine = [&](int i) { return i == to || (i != from && ownAt(pos, p, i) > 0) || (i == from && ownAt(pos, p, i) > 1); };
+    const int t = relOf(v, o, to); // in the opponent's own numbering: he moves down towards 0
+    int lo = t, hi = t;
+    while (lo > 0 && mine(absOf(v, o, lo - 1))) --lo;
+    while (hi < 23 && mine(absOf(v, o, hi + 1))) ++hi;
+    if (hi - lo + 1 < 6) return false;
+    for (int r = 0; r < lo; ++r)
+        if (ownAt(pos, o, absOf(v, o, r))) return false; // one of his is already past it
+    return true;
+}
+
+template <class F>
+void forEachStepSameWay(const Position& pos, int p, int die, Variant v, F&& f) {
+    const int highest = highestRel(pos, p, v);
+    const bool home = highest < 6;
+    const int only = fevgaRunner(pos, p, v);
+    for (int r = highest; r >= 0; --r) {
+        if (only >= 0 && r != only) continue;
+        const int i = absOf(v, p, r);
+        if (!ownAt(pos, p, i)) continue;
+        const int nr = r - die;
+        if (nr >= 0) {
+            const int to = absOf(v, p, nr);
+            if (oppAt(pos, p, to) > 0) continue;
+            if (v == Variant::Fevga && ownAt(pos, p, to) == 0 && fevgaBlocksAll(pos, p, i, to, v)) continue;
+            f(Step{i, to, die, false});
+        } else if (home && (nr == -1 || r == highest)) {
+            f(Step{i, OFF, die, false});
+        }
+    }
 }
 
 // Calls f(Step) for every single step of player p with `die` that is legal on its own (bar first, closed
 // points, bearing off with the exact or - from the highest point - a larger die). Order: bar, then from
 // p's back checkers towards his home (deterministic).
 template <class F>
-void forEachStep(const Position& pos, int p, int die, F&& f) {
+void forEachStep(const Position& pos, int p, int die, Variant v, F&& f) {
+    if (v != Variant::Klasik) {
+        forEachStepSameWay(pos, p, die, v, f);
+        return;
+    }
     if (pos.bar[p] > 0) {
         const int to = entryPoint(p, die);
         const int o = oppAt(pos, p, to);
         if (o < 2) f(Step{BAR, to, die, o == 1});
         return;
     }
-    const int highest = highestRel(pos, p);
+    const int highest = highestRel(pos, p, Variant::Klasik);
     const bool home = highest < 6;
     for (int r = highest; r >= 0; --r) {
-        const int i = absOf(p, r);
+        const int i = absOf(Variant::Klasik, p, r);
         if (!ownAt(pos, p, i)) continue;
         const int nr = r - die;
         if (nr >= 0) {
-            const int to = absOf(p, nr);
+            const int to = absOf(Variant::Klasik, p, nr);
             const int o = oppAt(pos, p, to);
             if (o < 2) f(Step{i, to, die, o == 1});
         } else if (home && (nr == -1 || r == highest)) {
@@ -131,7 +183,7 @@ private:
 };
 
 // Max number of dice that can still be played (<= cap). `dice` sorted descending.
-int maxDice(const Position& pos, int p, const int* dice, int n, int cap) {
+int maxDice(const Position& pos, int p, const int* dice, int n, int cap, Variant v) {
     if (n == 0 || cap <= 0) return 0;
     int best = 0;
     for (int k = 0; k < n; ++k) {
@@ -141,13 +193,13 @@ int maxDice(const Position& pos, int p, const int* dice, int n, int cap) {
         for (int j = 0; j < n; ++j)
             if (j != k) rest[m++] = dice[j];
         bool stop = false;
-        forEachStep(pos, p, dice[k], [&](const Step& s) {
+        forEachStep(pos, p, dice[k], v, [&](const Step& s) {
             if (stop) return;
             Position q = pos;
             applyRaw(q, p, s);
             // bearing off the last checker ends the game: it counts as playing every die
-            const int v = q.off[p] == kCheckers ? n : 1 + maxDice(q, p, rest, m, std::min(cap, n) - 1);
-            if (v > best) best = v;
+            const int u = q.off[p] == kCheckers ? n : 1 + maxDice(q, p, rest, m, std::min(cap, n) - 1, v);
+            if (u > best) best = u;
             if (best >= n || best >= cap) stop = true;
         });
         if (best >= n || best >= cap) break;
@@ -166,6 +218,7 @@ struct Leaf {
 
 struct Generator {
     int p = 0;
+    Variant v = Variant::Klasik;
     bool wantSteps = true;
     std::vector<Leaf>* leaves = nullptr;
     SeenSet* seen = nullptr;
@@ -183,7 +236,7 @@ struct Generator {
             int m = 0;
             for (int j = 0; j < n; ++j)
                 if (j != k) rest[m++] = dice[j];
-            forEachStep(pos, p, dice[k], [&](const Step& s) {
+            forEachStep(pos, p, dice[k], v, [&](const Step& s) {
                 any = true;
                 Position q = pos;
                 applyRaw(q, p, s);
@@ -212,12 +265,13 @@ thread_local SeenSet tlDedup;
 thread_local std::vector<Leaf> tlLeaves;
 
 // Runs the generator and leaves the maximal, deduplicated leaves in `out` (in discovery order).
-void collect(const Position& pos, int p, int d1, int d2, bool wantSteps, std::vector<const Leaf*>& out) {
+void collect(const Position& pos, int p, int d1, int d2, bool wantSteps, std::vector<const Leaf*>& out, Variant v) {
     out.clear();
     tlLeaves.clear();
     tlSeen.reset();
     Generator g;
     g.p = p;
+    g.v = v;
     g.wantSteps = wantSteps;
     g.leaves = &tlLeaves;
     g.seen = &tlSeen;
@@ -333,6 +387,22 @@ std::string diceStr(int d1, int d2) {
 // ---------------------------------------------------------------------------------------------------------
 // free functions
 
+const char* variantName(Variant v) {
+    switch (v) {
+    case Variant::Gulbahar: return "Gülbahar";
+    case Variant::Fevga: return "Fevga";
+    default: return "Klasik";
+    }
+}
+
+Position Position::initial(Variant v) {
+    if (v == Variant::Klasik) return initial();
+    Position pos;
+    pos.pts[startPoint(v, 0)] = kCheckers;
+    pos.pts[startPoint(v, 1)] = -kCheckers;
+    return pos;
+}
+
 Position Position::initial() {
     Position pos;
     pos.pts[23] = 2;
@@ -352,15 +422,17 @@ int Position::onBoard(int p) const {
     return n;
 }
 
-int pipCount(const Position& pos, int p) {
+int pipCount(const Position& pos, int p) { return pipCount(pos, p, Variant::Klasik); }
+
+int pipCount(const Position& pos, int p, Variant v) {
     int s = pos.bar[p] * 25;
-    for (int i = 0; i < kPoints; ++i) s += ownAt(pos, p, i) * (relOf(p, i) + 1);
+    for (int i = 0; i < kPoints; ++i) s += ownAt(pos, p, i) * (relOf(v, p, i) + 1);
     return s;
 }
 
-std::vector<Play> generatePlays(const Position& pos, int p, int d1, int d2) {
+std::vector<Play> generatePlays(const Position& pos, int p, int d1, int d2, Variant v) {
     std::vector<const Leaf*> leaves;
-    collect(pos, p, d1, d2, true, leaves);
+    collect(pos, p, d1, d2, true, leaves, v);
     std::vector<Play> out;
     out.reserve(leaves.size());
     for (const Leaf* l : leaves) {
@@ -372,16 +444,16 @@ std::vector<Play> generatePlays(const Position& pos, int p, int d1, int d2) {
     return out;
 }
 
-void generateResults(const Position& pos, int p, int d1, int d2, std::vector<Position>& out) {
+void generateResults(const Position& pos, int p, int d1, int d2, std::vector<Position>& out, Variant v) {
     std::vector<const Leaf*> leaves;
-    collect(pos, p, d1, d2, false, leaves);
+    collect(pos, p, d1, d2, false, leaves, v);
     out.clear();
     for (const Leaf* l : leaves) out.push_back(l->pos);
 }
 
-bool applyStepTo(Position& pos, int p, const Step& s) {
+bool applyStepTo(Position& pos, int p, const Step& s, Variant v) {
     bool found = false;
-    forEachStep(pos, p, s.die, [&](const Step& t) {
+    forEachStep(pos, p, s.die, v, [&](const Step& t) {
         if (t.from == s.from && t.to == s.to) found = true;
     });
     if (!found) return false;
@@ -405,9 +477,11 @@ std::string diceName(int d1, int d2) {
     return kNames[a][b];
 }
 
-std::string stepNotation(int p, const Step& s) {
-    const std::string from = s.from == BAR ? std::string("bar") : std::to_string(pointNumber(p, s.from));
-    const std::string to = s.to == OFF ? std::string("çıktı") : std::to_string(pointNumber(p, s.to));
+std::string stepNotation(int p, const Step& s) { return stepNotation(p, s, Variant::Klasik); }
+
+std::string stepNotation(int p, const Step& s, Variant v) {
+    const std::string from = s.from == BAR ? std::string("bar") : std::to_string(pointNumber(v, p, s.from));
+    const std::string to = s.to == OFF ? std::string("çıktı") : std::to_string(pointNumber(v, p, s.to));
     return from + "/" + to + (s.hit ? "*" : "");
 }
 
@@ -415,7 +489,7 @@ std::string turnNotation(const TurnRecord& t) {
     if (t.d1 == 0) return t.note;
     std::string out = diceStr(t.d1, t.d2) + " " + diceName(t.d1, t.d2) + ":";
     if (t.steps.empty()) return out + " oynayamadı";
-    for (const Step& s : t.steps) out += " " + stepNotation(t.player, s);
+    for (const Step& s : t.steps) out += " " + stepNotation(t.player, s, t.variant);
     return out;
 }
 
@@ -439,7 +513,7 @@ Game::Game(const Rules& r) : rules_(r) {
     players_[0].name = "Sen";
     players_[0].human = true;
     players_[1].name = "Rakip";
-    pos_ = Position::initial();
+    pos_ = Position::initial(rules_.variant);
 }
 
 void Game::setRules(const Rules& r) { rules_ = r; }
@@ -477,7 +551,9 @@ void Game::startNextGame() {
 }
 
 void Game::beginGame() {
-    pos_ = Position::initial();
+    pos_ = Position::initial(rules_.variant);
+    rolls_ = {0, 0};
+    ladder_ = 0;
     dice_ = Dice();
     history_.clear();
     turnSteps_.clear();
@@ -537,6 +613,7 @@ void Game::startTurn(int p) {
     turnSteps_.clear();
     turnMax_ = 0;
     forcedDie_ = 0;
+    ladder_ = 0;
     ++turnNumber_;
     ++gameTurn_;
 }
@@ -606,6 +683,9 @@ ActionResult Game::rollImpl(int p) {
 }
 
 void Game::setDice(int d1, int d2) {
+    ++rolls_[current_];
+    // Gülbahar: from a player's 4th roll a double climbs the ladder (this rung, then every higher double to 6-6)
+    ladder_ = rules_.variant == Variant::Gulbahar && d1 == d2 && rolls_[current_] > 3 ? d1 : 0;
     dice_ = Dice();
     dice_.d1 = d1;
     dice_.d2 = d2;
@@ -636,24 +716,24 @@ void Game::setDice(int d1, int d2) {
 void Game::computeConstraints() {
     std::vector<int> left = dice_.left();
     std::sort(left.begin(), left.end(), std::greater<int>());
-    turnMax_ = maxDice(pos_, current_, left.data(), (int)left.size(), (int)left.size());
+    turnMax_ = maxDice(pos_, current_, left.data(), (int)left.size(), (int)left.size(), rules_.variant);
     forcedDie_ = 0;
     if (!dice_.isDouble() && turnMax_ == 1) {
         const int larger = std::max(dice_.d1, dice_.d2);
         bool any = false;
-        forEachStep(pos_, current_, larger, [&](const Step&) { any = true; });
+        forEachStep(pos_, current_, larger, rules_.variant, [&](const Step&) { any = true; });
         if (any) forcedDie_ = larger;
     }
 }
 
 int Game::maxDiceFrom(Position& pos, std::array<int, 4>& left, int nLeft, int cap) const {
     std::sort(left.begin(), left.begin() + nLeft, std::greater<int>());
-    return maxDice(pos, current_, left.data(), nLeft, cap);
+    return maxDice(pos, current_, left.data(), nLeft, cap, rules_.variant);
 }
 
 std::vector<Step> Game::rawSteps(const Position& pos, int die) const {
     std::vector<Step> v;
-    forEachStep(pos, current_, die, [&](const Step& s) { v.push_back(s); });
+    forEachStep(pos, current_, die, rules_.variant, [&](const Step& s) { v.push_back(s); });
     return v;
 }
 
@@ -701,7 +781,7 @@ std::vector<Play> Game::allTurnPlays() const {
     if (stage_ != Stage::Moving) return out;
     const std::vector<int> left = dice_.left();
     if (left.empty()) return out;
-    if (turnSteps_.empty()) return generatePlays(pos_, current_, dice_.d1, dice_.d2);
+    if (turnSteps_.empty()) return generatePlays(pos_, current_, dice_.d1, dice_.d2, rules_.variant);
     // Partial turn: enumerate by legal steps (keeps the max-dice / larger-die constraints exact).
     struct Rec {
         static void go(Game& tmp, std::vector<Step>& path, std::vector<Play>& out, SeenSet& seen) {
@@ -747,7 +827,8 @@ ActionResult Game::checkMoving(int p) const {
 
 std::string Game::stepError(int from, int to) const {
     const int p = current_;
-    if (from == BAR && pos_.bar[p] == 0) return "Kırık pulun yok";
+    const Variant var = rules_.variant;
+    if (from == BAR && pos_.bar[p] == 0) return sameWay(var) ? "Bu oyunda kırık pul yok" : "Kırık pulun yok";
     if (pos_.bar[p] > 0 && from != BAR) return "Önce kırık pulunu girmelisin";
     if (from != BAR && (from < 0 || from >= kPoints)) return "Geçersiz hane";
     if (to != OFF && (to < 0 || to >= kPoints)) return "Geçersiz hane";
@@ -755,16 +836,20 @@ std::string Game::stepError(int from, int to) const {
     if (turnMax_ - (int)turnSteps_.size() <= 0) return "Zarların hepsini oynadın";
     const std::vector<int> left = dice_.left();
     if (to == OFF) {
-        if (highestRel(pos_, p) >= 6) return "Pul toplamak için bütün pulların evde olmalı";
+        if (highestRel(pos_, p, var) >= 6) return "Pul toplamak için bütün pulların evde olmalı";
         bool fits = false;
         for (int v : left)
-            forEachStep(pos_, p, v, [&](const Step& s) { fits = fits || (s.from == from && s.to == OFF); });
+            forEachStep(pos_, p, v, var, [&](const Step& s) { fits = fits || (s.from == from && s.to == OFF); });
         if (!fits) return "Bu zarlarla o puldan toplanmaz; önce arkadaki pulları oyna";
     } else {
-        const int fromRel = from == BAR ? 24 : relOf(p, from);
-        const int dist = fromRel - relOf(p, to);
+        const int fromRel = from == BAR ? 24 : relOf(var, p, from);
+        const int dist = fromRel - relOf(var, p, to);
         if (dist <= 0) return "Pullar geri gitmez";
+        if (sameWay(var) && oppAt(pos_, p, to) >= 1) return "O hane rakibin: bu oyunda tek pul da haneyi tutar";
         if (oppAt(pos_, p, to) >= 2) return "O kapı kapalı";
+        const int runner = fevgaRunner(pos_, p, var);
+        if (runner >= 0 && from != absOf(var, p, runner))
+            return "Önce ilk çıkan pulun rakibin başlangıç hanesini geçmeli";
         if (std::find(left.begin(), left.end(), dist) == left.end()) {
             // a drag over two or more dice ("6-4 ile 10 hane"): the UI must move one die at a time
             bool combo = false;
@@ -773,6 +858,8 @@ std::string Game::stepError(int from, int to) const {
             if (combo) return "Her seferinde bir zar oyna: önce birini, sonra ötekini";
             return "Zarlarda " + std::to_string(dist) + " yok";
         }
+        if (var == Variant::Fevga && ownAt(pos_, p, to) == 0 && fevgaBlocksAll(pos_, p, from, to, var))
+            return "Altı hanelik kapı yapamazsın: rakibin bütün pulları arkasında kalır";
     }
     if (forcedDie_) return "Sadece bir zar oynanabiliyor; büyük zarı oynamak zorundasın";
     return "Bu hamleden sonra zarların hepsi oynanamıyor; oynanabilen bütün zarları oynamalısın";
@@ -822,13 +909,14 @@ ActionResult Game::applyStepImpl(int p, int from, int to, int die, int& used) {
     e.to = s.to;
     e.die = s.die;
     e.hit = s.hit;
+    const Variant var = rules_.variant;
     if (s.from == BAR) {
-        e.text = says(p, "kırık pulunu " + dative(pointNumber(p, s.to)) + " girdi",
-                      "kırık pulunu " + dative(pointNumber(p, s.to)) + " girdin");
+        e.text = says(p, "kırık pulunu " + dative(pointNumber(var, p, s.to)) + " girdi",
+                      "kırık pulunu " + dative(pointNumber(var, p, s.to)) + " girdin");
     } else if (s.to == OFF) {
-        e.text = says(p, ablative(pointNumber(p, s.from)) + " pul topladı", ablative(pointNumber(p, s.from)) + " pul topladın");
+        e.text = says(p, ablative(pointNumber(var, p, s.from)) + " pul topladı", ablative(pointNumber(var, p, s.from)) + " pul topladın");
     } else {
-        const std::string mv = ablative(pointNumber(p, s.from)) + " " + dative(pointNumber(p, s.to));
+        const std::string mv = ablative(pointNumber(var, p, s.from)) + " " + dative(pointNumber(var, p, s.to));
         e.text = says(p, mv + " oynadı", mv + " oynadın");
     }
     if (s.hit) e.text += players_[p].human ? ", pul kırdın!" : ", pul kırdı!";
@@ -878,7 +966,43 @@ ActionResult Game::applyStepImpl(int p, int from, int to, int die, int& used) {
 
 void Game::afterStep() {
     if (rules_.confirmTurn) return;
-    if (legalSteps().empty()) finishTurn();
+    if (legalSteps().empty()) endOfPlay();
+}
+
+void Game::endOfPlay() {
+    // Gülbahar: a rung played out in full climbs to the next double; a rung that could not be played in full ends
+    // the turn (the rest of the ladder is lost)
+    if (ladder_ > 0 && ladder_ < 6 && dice_.isDouble() && dice_.leftCount() == 0) nextRung();
+    else finishTurn();
+}
+
+void Game::nextRung() {
+    recordTurn(); // (each rung is its own line of the record)
+    const int v = ++ladder_;
+    dice_ = Dice();
+    dice_.d1 = dice_.d2 = v;
+    dice_.n = 4;
+    dice_.value = {v, v, v, v};
+    history_.clear();
+    turnSteps_.clear();
+    GameEvent e;
+    e.type = EvType::Roll;
+    e.player = current_;
+    e.d1 = e.d2 = v;
+    e.amount = 1;
+    e.text = "Gülbahar: sıra " + diceStr(v, v) + ", " + diceName(v, v);
+    push(e);
+    computeConstraints();
+    if (turnMax_ == 0) {
+        GameEvent n;
+        n.type = EvType::NoMove;
+        n.player = current_;
+        n.d1 = n.d2 = v;
+        n.text = players_[current_].human ? diceName(v, v) + " oynanmıyor, merdiven bitti; sıra geçti"
+                                          : nameOf(current_) + " " + diceName(v, v) + " oynayamadı, sıra geçti";
+        push(n);
+        finishTurn();
+    }
 }
 
 ActionResult Game::undoStepImpl(int p) {
@@ -906,7 +1030,7 @@ ActionResult Game::endTurnImpl(int p) {
     const ActionResult chk = checkMoving(p);
     if (!chk.ok) return chk;
     if (!legalSteps().empty()) return ActionResult::fail("Daha oynaman gereken zar var");
-    finishTurn();
+    endOfPlay();
     return ActionResult::success();
 }
 
@@ -929,6 +1053,7 @@ void Game::recordTurn() {
     t.d1 = dice_.d1;
     t.d2 = dice_.d2;
     t.steps = turnSteps_;
+    t.variant = rules_.variant;
     if (t.d1 > 0) log_.push_back(std::move(t));
 }
 
@@ -1004,7 +1129,8 @@ void Game::endGame(int winner, bool dropped) {
         r.mars = pos_.off[loser] == 0;
         bool inWinnerHome = false;
         for (int i = homeLo(winner); i < homeLo(winner) + 6; ++i) inWinnerHome = inWinnerHome || ownAt(pos_, loser, i) > 0;
-        r.katmerli = r.mars && (pos_.bar[loser] > 0 || inWinnerHome);
+        // (Gülbahar / Fevga: no katmerli mars)
+        r.katmerli = r.mars && rules_.variant == Variant::Klasik && (pos_.bar[loser] > 0 || inWinnerHome);
     }
     r.base = r.mars ? ((r.katmerli && rules_.katmerliMars) ? 3 : 2) : 1;
     r.points = r.base * r.cube;
@@ -1013,6 +1139,7 @@ void Game::endGame(int winner, bool dropped) {
     players_[winner].score += r.points;
     stage_ = Stage::GameOver;
     dice_ = Dice();
+    ladder_ = 0;
     history_.clear();
     turnSteps_.clear();
 
@@ -1150,11 +1277,13 @@ void Game::debugSetTurn(int p, Stage s) {
     turnSteps_.clear();
     turnMax_ = 0;
     forcedDie_ = 0;
+    ladder_ = 0;
     ++turnNumber_;
     gameTurn_ = std::max(gameTurn_ + 1, 2); // a later turn of the game: doubling is allowed
 }
 
 void Game::debugSetDice(int d1, int d2) {
+    ladder_ = 0;
     dice_ = Dice();
     dice_.d1 = d1;
     dice_.d2 = d2;

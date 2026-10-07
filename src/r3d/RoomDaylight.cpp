@@ -127,9 +127,15 @@ void Room::Impl::freeDaylight(Renderer& r) {
 // the back street (through the back window).
 void Room::Impl::placeFlake(Flake& f, okey::Rng& rng, bool anywhereY, bool leaf) {
     const bool back = rng.chance(0.24f);
-    if (back) f.p = {rng.uniform(-5.2f, -1.6f), 0.f, rng.uniform(-6.2f, -3.75f)};
+    if (garden) {  // in the garden: anywhere beyond the awning (the lane, over the parapet, over the front wall)
+        const float u = rng.uniform();
+        if (u < 0.4f) f.p = {rng.uniform(-7.5f, -4.55f), 0.f, rng.uniform(-6.f, 5.f)};
+        else if (u < 0.8f) f.p = {rng.uniform(-6.f, 4.f), 0.f, rng.uniform(-8.f, -3.75f)};
+        else f.p = {rng.uniform(-5.f, 4.f), 0.f, rng.uniform(3.95f, 6.f)};
+        f.p.y = anywhereY ? rng.uniform(-0.3f, 6.5f) : rng.uniform(5.5f, 6.8f);
+    } else if (back) f.p = {rng.uniform(-5.2f, -1.6f), 0.f, rng.uniform(-6.2f, -3.75f)};
     else f.p = {rng.uniform(-6.4f, -4.45f), 0.f, rng.uniform(-4.6f, 4.4f)};
-    f.p.y = anywhereY ? rng.uniform(-0.3f, 3.9f) : rng.uniform(3.6f, 4.2f);
+    if (!garden) f.p.y = anywhereY ? rng.uniform(-0.3f, 3.9f) : rng.uniform(3.6f, 4.2f);
     f.speed = leaf ? rng.uniform(0.45f, 0.85f) : rng.uniform(0.55f, 1.05f);
     f.sway = leaf ? rng.uniform(0.35f, 0.7f) : rng.uniform(0.1f, 0.3f);
     f.phase = rng.uniform(0.f, 6.28f);
@@ -148,6 +154,7 @@ void Room::Impl::evalLook(bool force) {
     static const float pHour[4] = {0.55f, 0.4f, 0.85f, 1.f};
     const bool wet = rainSeedU < pSeason[se] * pHour[ph];
     rainTarget = (wet && se != w3d::Kis) ? rainSeedI : 0.f;
+    phaseRain = rainTarget;  // (ozelgun) a passing shower adds to it (RoomSpecial.cpp updateShower)
     // winter: a few flakes always drift past, a real snowfall on a wet day
     snowTarget = se == w3d::Kis ? (wet ? rainSeedI : 0.25f) : 0.f;
     leafK = se == w3d::Sonbahar ? 1.f : 0.f;
@@ -267,15 +274,23 @@ void Room::Impl::updateDaylight(float dt) {
     snow += (snowTarget - snow) * (lookInit ? 1.f - std::exp(-dt * 0.35f) : 1.f);
     if (snow < 0.004f && snowTarget <= 0.f) snow = 0.f;
     // the lamps over tables nobody sits at are off by day
-    for (int t = 0; t < 4 && t + 1 < (int)lamps.size(); ++t) {
-        const float want = (phase >= w3d::Aksam || w3d::bgTableBusy(t, phase)) ? 1.f : 0.f;
-        Lamp& L = lamps[(size_t)t + 1];
-        L.power += (want - L.power) * (lookInit ? std::min(1.f, dt * 3.f) : 1.f);
-    }
-    if (tavlaLamp >= 0) { // over the tavla table: on while tavla is played there, and in the evening
-        const float want = (tavlaFocus || phase >= w3d::Aksam) ? 1.f : 0.f;
-        Lamp& L = lamps[(size_t)tavlaLamp];
-        L.power += (want - L.power) * (lookInit ? std::min(1.f, dt * 3.f) : 1.f);
+    const float lampK = lookInit ? std::min(1.f, dt * 3.f) : 1.f;
+    if (garden) {  // out in the garden every lamp is off by day (the sun), all on from the evening
+        const float want = phase >= w3d::Aksam ? 1.f : 0.f;
+        for (Lamp& L : lamps) L.power += (want - L.power) * lampK;
+    } else {
+        for (int t = 0; t < 4 && t + 1 < (int)lamps.size(); ++t) {
+            const float want = (phase >= w3d::Aksam || w3d::bgTableBusy(t, phase)) ? 1.f : 0.f;
+            Lamp& L = lamps[(size_t)t + 1];
+            L.power += (want - L.power) * lampK;
+        }
+        if (tavlaLamp >= 0) { // over the tavla table: on while tavla is played there, and in the evening
+            const float want = (tavlaFocus || phase >= w3d::Aksam) ? 1.f : 0.f;
+            Lamp& L = lamps[(size_t)tavlaLamp];
+            L.power += (want - L.power) * lampK;
+        }
+        for (size_t i : {(size_t)0, (size_t)5})  // our table's and the counter's lamps burn day and night inside
+            if (i < lamps.size()) lamps[i].power += (1.f - lamps[i].power) * lampK;
     }
     lookInit = true;
 
@@ -287,7 +302,7 @@ void Room::Impl::updateDaylight(float dt) {
     }
     mLace.emissive = 0.08f + 0.14f * dayK;
     // the stove: steam from the kettle on top, now and then a breath of warm air shimmering over it
-    if (stoveLit > 0.5f && dt > 0.f) {
+    if (!garden && stoveLit > 0.5f && dt > 0.f) {
         kettleAcc += dt * 2.2f * stoveLit;
         while (kettleAcc >= 1.f) {
             kettleAcc -= 1.f;
@@ -337,7 +352,7 @@ void Room::Impl::updateDaylight(float dt) {
 
 void Room::Impl::submitDaylight(Renderer& r) {
     // the soba's door slot: glowing embers while it burns, cold iron otherwise
-    {
+    if (!garden) {
         const float g = std::clamp(stoveLevel, 0.f, 1.2f);
         mStoveSlot.emissive = std::clamp(stoveLit * 1.2f, 0.f, 1.f);
         mStoveSlot.material.maps[MATERIAL_MAP_ALBEDO].color =
@@ -345,7 +360,7 @@ void Room::Impl::submitDaylight(Renderer& r) {
         r.submit(&stoveSlot, &mStoveSlot, MatrixIdentity(), 0);
     }
     // sun shafts and patches
-    if (sunK * dayK > 0.01f && sunShaft.vertexCount > 0) {
+    if (!garden && sunK * dayK > 0.01f && sunShaft.vertexCount > 0) {
         const float s = sunK * std::min(1.f, dayK * 1.3f);
         Color c = sunColor;
         c.a = (unsigned char)std::clamp(24.f * s, 0.f, 255.f);
@@ -376,7 +391,7 @@ void Room::Impl::submitDaylight(Renderer& r) {
             r.submitBillboard(texFlake, src, f.p, {f.size, f.size}, c, add);
         }
     }
-    if (leafK > 0.01f) {
+    if (!garden && leafK > 0.01f) {  // (the garden's leaves fall from the çınar, RoomGardenLife.cpp)
         static const Color kLeaf[4] = {{196, 110, 40, 255}, {170, 70, 34, 255}, {206, 156, 60, 255}, {130, 88, 44, 255}};
         const Rectangle src{0.f, 0.f, (float)texLeaf.width, (float)texLeaf.height};
         for (const Flake& f : leaves) {

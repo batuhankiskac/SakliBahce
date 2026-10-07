@@ -21,7 +21,7 @@ constexpr Rank kRanks[] = {
 constexpr int kRankCount = (int)(sizeof kRanks / sizeof kRanks[0]);
 
 // File keys: "<game>.<field>"
-const char* kGameKey[STATS_GAMES] = {"101", "esli101", "okey", "tavla", "pisti", "batak", "king"};
+const char* kGameKey[STATS_GAMES] = {"101", "esli101", "okey", "tavla", "pisti", "batak", "king", "dama", "altmisalti", "bezik", "konken"};
 
 } // namespace
 
@@ -93,6 +93,10 @@ const char* StatsBook::bestLabel(int game) {
     case 4: return "En çok puan";     // one hand's points
     case 5: return "En iyi el";       // one hand's score
     case 6: return "En iyi el";       // one deal's score
+    case 7: return "En temiz oyun";   // Dama: the most pieces left standing in a won game
+    case 8: return "En çok puan";     // Altmışaltı: one hand's card points (marriages in)
+    case 9: return "En iyi el";       // Bezik: one deal's points (combinations, brisks, the last trick)
+    case 10: return "En büyük bitiş"; // Konken: what the others wrote in a hand the player finished (a konken doubles it)
     default: return nullptr;
     }
 }

@@ -9,6 +9,8 @@
 //   build:  clang++ -std=c++17 -O2 -Wall -Wextra -Isrc -I/opt/homebrew/include src/core/Meld.cpp
 //           src/core/Game.cpp src/ui/Common.cpp src/ui/Screens.cpp tools/screens_snapshot.cpp
 //           /opt/homebrew/lib/libraylib.a -framework ... -o build/screens/screens_snapshot
+//   (the screens now need the rest of src/ui too: after `make`, link this file's object with $(BUILD)/src/core/*.o and
+//   $(BUILD)/src/ui/*.o, raylib and the system frameworks)
 #include "core/Game.h"
 #include "ui/Common.h"
 #include "ui/Screens.h"
@@ -398,9 +400,13 @@ constexpr Rectangle kTitleSettings{660, 696, 280, 56};
 constexpr Rectangle kSetName{720, 183, 340, 46};
 constexpr Vector2 kSetHands7{720.f + 3 * 78.f + 33.f, 496.f};
 constexpr Vector2 kSetLevelKurt{720.f + 2 * 158.f + 73.f, 256.f};
-constexpr Vector2 kSetMusicToggle{720.f + 2 * 120.f + 54.f, 446.f}; // the "Radyo" chip (page 2)
-constexpr Vector2 kSetPageLooks{937.f + 108.f + 85.f, 92.f};          // the "Görünüm · Ses" tab
-constexpr Vector2 kSetPageGame{937.f + 50.f, 92.f};                   // the "Oyun" tab
+constexpr Vector2 kSetMusicToggle{720.f + 2 * 120.f + 54.f, 546.f}; // the "Radyo" chip (page Görünüm · Ses, under Mekân and Özel günler)
+// the page tabs, right-aligned: Oyun (84) | Sen (66) | Görünüm · Ses (160), 6 apart, ending at x 1215
+constexpr Vector2 kSetPageLooks{893.f + 84.f + 6.f + 66.f + 6.f + 80.f, 92.f}; // the "Görünüm · Ses" tab
+constexpr Vector2 kSetPageGame{893.f + 42.f, 92.f};                            // the "Oyun" tab
+constexpr Vector2 kSetPageSen{893.f + 84.f + 6.f + 33.f, 92.f};                // the "Sen" tab (the player's hands)
+constexpr Vector2 kSetSenHands{720.f + 39.f, 150.f + 40.f + 16.f};             // its "Ellerimi göster" switch
+constexpr Vector2 kSetSenKazak{720.f + 2 * 130.f + 60.f, 150.f + 40.f + 50.f + 16.f}; // "Kıyafet": Kazak
 constexpr Rectangle kSetBack{985, 776, 230, 58};
 // Devam, Yapay Zeka Oynasın / Kontrolü Geri Al, Kurallar, Ayarlar, Ana Menü
 constexpr Rectangle kPauseBtn[5] = {{650, 328, 300, 58}, {650, 400, 300, 58}, {650, 472, 300, 58}, {650, 544, 300, 58},
@@ -415,7 +421,7 @@ void finishHand(Sim& s) { s.play(); }
 
 // Mirror of Screens.cpp's rules tab layout (font Chalk 19, padding 28, gap 8, centred at x = 800, y = 106).
 Vector2 ruleTabCenter(int idx) {
-    const char* labels[8] = {"Taşlar", "Okey", "Tur", "Perler", "El açmak", "Cezalar", "Puanlama", "Kontroller"};
+    const char* labels[8] = {"Okey", "Tur", "Perler", "El açmak", "Cezalar", "Puanlama", "Usuller", "Kontroller"}; // (101 kuralları: Usuller)
     float w[8], total = 0.f;
     for (int t = 0; t < 8; ++t) {
         w[t] = ui::measureText(ui::FontId::Chalk, labels[t], 19.f).x + 28.f;
@@ -447,8 +453,11 @@ int main() {
     H.rt = LoadRenderTexture(1600, 900);
     SetTextureFilter(H.rt.texture, TEXTURE_FILTER_BILINEAR);
     H.screens.init();
-    int sfxCount = 0;
-    H.screens.playSfx = [&](ui::Sfx) { ++sfxCount; };
+    int sfxCount = 0, chimeCount = 0;
+    H.screens.playSfx = [&](ui::Sfx s) {
+        ++sfxCount;
+        if (s == ui::Sfx::Chime) ++chimeCount; // Başarımlar: the banner's chime
+    };
     const std::string sfx;
 
     // ---------------------------------------------------------------- pick interesting matches
@@ -503,8 +512,47 @@ int main() {
     H.clickAt(kSetMusicToggle);
     acts = H.take();
     check(!H.screens.settings().music && has(acts, ui::ScreenAction::SettingsChanged), "Radyo toggled off");
+    // Sen: the player's own hands
+    H.clickAt(kSetPageSen);
+    H.take();
+    H.run(0.2);
+    H.shot("settings_sen" + sfx);
+    H.clickAt(kSetSenKazak);
+    acts = H.take();
+    check(H.screens.settings().kol == 2 && has(acts, ui::ScreenAction::SettingsChanged), "Sen: Kıyafet = Kazak");
+    H.clickAt(kSetSenHands);
+    acts = H.take();
+    check(!H.screens.settings().hands && has(acts, ui::ScreenAction::SettingsChanged), "Sen: Ellerimi göster off");
+    H.screens.settings().hands = true;
+    H.screens.settings().kol = 0;
     H.clickAt(kSetPageGame);
     H.take();
+    {   // 101 kuralları: "Diğer 101 kuralları · Değiştir" opens its page; a chip each for açma, katlar, açmayan
+        H.run(0.2);
+        H.clickAt(Vector2{1120.f, 646.f}); // "Değiştir"
+        H.take();
+        H.run(0.3);
+        H.shot("settings_101" + sfx);
+        H.clickAt(Vector2{1002.f, 206.f}); // açma 121
+        H.clickAt(Vector2{907.f, 306.f});  // tek kat
+        H.clickAt(Vector2{849.f, 356.f});  // açmayan 404
+        H.clickAt(Vector2{760.f, 556.f});  // geri verme cezası on
+        acts = H.take();
+        const ui::Settings& st = H.screens.settings();
+        check(st.y101Acma == 121 && st.y101Kat == 1 && st.y101Acmayan == 404 && st.y101GeriVer &&
+                  has(acts, ui::ScreenAction::SettingsChanged),
+              "101 kuralları: açma 121, tek kat, 404, geri verme (" + std::to_string(st.y101Acma) + "," +
+                  std::to_string(st.y101Kat) + "," + std::to_string(st.y101Acmayan) + ")");
+        H.run(0.3);
+        H.shot("settings_101_changed" + sfx);
+        H.clickAt(kSetPageGame);
+        H.run(0.3);
+        H.shot("settings_101_summary" + sfx);
+        const ui::Settings d;
+        ui::Settings& w = H.screens.settings();
+        w.y101Acma = d.y101Acma, w.y101Kat = d.y101Kat, w.y101Acmayan = d.y101Acmayan, w.y101GeriVer = d.y101GeriVer;
+        H.take();
+    }
     H.click(kSetName);
     H.run(0.3);
     H.shot("settings_edit" + sfx);
@@ -555,9 +603,12 @@ int main() {
     H.key(KEY_HOME);
     H.run(0.8);
     H.shot("rules_home" + sfx);
-    H.clickAt(ruleTabCenter(5)); // "Cezalar" tab
+    H.clickAt(ruleTabCenter(4)); // "Cezalar" tab
     H.run(0.9);
     H.shot("rules_tab_cezalar" + sfx);
+    H.clickAt(ruleTabCenter(6)); // "Usuller" tab (101 kuralları)
+    H.run(0.9);
+    H.shot("rules_tab_usuller" + sfx);
     check(H.screens.current() == ui::ScreenId::Rules, "tab click stays in Rules");
     H.key(KEY_HOME);
     H.run(0.8);
@@ -705,6 +756,43 @@ int main() {
         H.screens.show(ui::ScreenId::None);
         H.run(0.4);
         H.game = nullptr;
+    }
+    {   // 101 kuralları: the same finish under "tek kat" (×2 at most) and a katlamalı x4 hand in the history
+        static Sim s5;
+        s5.setup(11, 5, "Şükrü Öğütçü");
+        okey::RulesConfig rc = s5.game.rules();
+        rc.finishMult = okey::FinishMult::Single;
+        rc.katlamali = true;
+        s5.game.setRules(rc);
+        s5.game.startMatch(11);
+        s5.game.drainEvents();
+        s5.play(); // hand 1 played out, the crafted finish is hand 2
+        if (s5.game.handState() == okey::HandState::HandOver) {
+            s5.game.startNextHand();
+            s5.game.drainEvents();
+        }
+        s5.play(9);
+        Game& g = s5.game;
+        const okey::OkeyInfo ok = g.okey();
+        const int okeyId = okey::makeTileId(ok.color, ok.number, 0);
+        g.debugSetTurn(0, okey::TurnStage::Play);
+        okey::PlayerInfo& me = g.debugPlayer(0);
+        me.hand = {okeyId};
+        me.opened = true;
+        me.openedWithPairs = true;
+        me.openValue = 6;
+        me.openedTurn = g.turnNumber();
+        const okey::ActionResult ar = g.discard(0, okeyId);
+        g.drainEvents();
+        check(ar.ok && g.lastHandResult().multiplier == 2 && g.handMultipliers().back() == 2,
+              "crafted finish under tek kat = x2 (" + ar.error + ")");
+        H.game = &g;
+        H.screens.show(ui::ScreenId::HandSummary);
+        H.run(3.0);
+        H.shot("hand_tekkat" + sfx);
+        H.screens.show(ui::ScreenId::None);
+        H.run(0.4);
+        H.game = nullptr;
         H.screens.show(ui::ScreenId::Title);
         H.run(0.4);
     }
@@ -805,6 +893,73 @@ int main() {
     check(has(acts, ui::ScreenAction::ToTitle) && H.screens.current() == ui::ScreenId::Title,
           "Ana Menü confirm -> ToTitle (" + list(acts) + ")");
     check(sfxCount > 10, "button clicks request Sfx::Button");
+
+    // ---------------------------------------------------------------- başarımlar: the İstatistik page and the banner
+    std::printf("başarımlar\n");
+    {
+        constexpr Rectangle kStatsAchievements{430, 776, 220, 58}; // İstatistik: "Başarımlar" (left of "Tekrarlar")
+        constexpr Rectangle kAchievementsBack{690, 786, 220, 52};
+        ui::Achievements ach;
+        ach.setLive(true, true);
+        const int day = 20732; // 06.10.2026
+        for (const char* ev : {"okey_bitis", "mars", "katmerli", "pisti", "pisti_ustune", "batak13"}) ach.event(ev, 1, day);
+        for (int i = 0; i < 6; ++i) ach.event("king_cezasiz", 1, day);
+        for (int d = 0; d < 3; ++d) ach.handPlayed(day - 2 + d);
+        ui::MatchEndInfo me;
+        me.won = true;
+        me.beaten = 1u << 2;
+        me.phase = 3;
+        me.season = 2;
+        ach.matchEnd(me, day);
+        check(ach.unlockedCount() == 7, "a made-up book has open badges");
+        H.screens.setAchievements(&ach);
+        H.game = nullptr;
+        H.titleMode = true;
+        H.screens.show(ui::ScreenId::Stats);
+        H.run(0.5);
+        H.take();
+        H.click(kStatsAchievements);
+        check(H.screens.current() == ui::ScreenId::Achievements, "İstatistik > Başarımlar opens the badges");
+        H.run(0.6);
+        H.shot("achievements" + sfx);
+        H.key(KEY_RIGHT);
+        H.run(0.3);
+        check(H.screens.current() == ui::ScreenId::Achievements, "the right arrow turns the page");
+        H.shot("achievements_cards" + sfx);
+        H.key(KEY_RIGHT);
+        H.run(0.3);
+        H.shot("achievements_kahvehane" + sfx);
+        H.key(KEY_ESCAPE);
+        check(H.screens.current() == ui::ScreenId::Stats, "ESC on Başarımlar returns to İstatistik");
+        H.run(0.5);
+        H.click(kStatsAchievements);
+        H.run(0.5);
+        H.click(kAchievementsBack);
+        check(H.screens.current() == ui::ScreenId::Stats, "Başarımlar Geri returns to İstatistik");
+        H.run(0.4);
+        H.screens.setAchievements(nullptr); // an empty book draws too
+        H.click(kStatsAchievements);
+        H.run(0.6);
+        H.shot("achievements_empty" + sfx);
+        H.key(KEY_ESCAPE);
+        // the banner over the game: queued, one after the other, each with its chime
+        H.screens.show(ui::ScreenId::None);
+        H.run(0.3);
+        H.titleMode = false;
+        const int chimes = chimeCount;
+        check(!H.screens.achievementBannerUp(), "no banner before a badge opens");
+        H.screens.showAchievementBanner(ui::Achievements::find("pisti_ustune"));
+        H.screens.showAchievementBanner(ui::Achievements::find("kurt_mars"));
+        check(H.screens.achievementBannerUp(), "the banner is up when a badge opens");
+        H.run(0.8);
+        check(chimeCount == chimes + 1, "the banner requests Sfx::Chime");
+        H.shot("achievement_banner" + sfx);
+        H.run(4.0);
+        check(chimeCount == chimes + 2 && H.screens.achievementBannerUp(), "the second banner follows the first");
+        H.run(4.5);
+        check(!H.screens.achievementBannerUp(), "the banners go away");
+        H.screens.setAchievements(nullptr);
+    }
 
     H.screens.shutdown();
     UnloadRenderTexture(H.rt);

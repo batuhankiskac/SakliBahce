@@ -26,6 +26,12 @@ struct Options {
     bool resume = false;        // --resume: continue the saved match at once ("Devam Et")
     bool guideDemo = false;     // --guide-demo (snapshots): the guide card shows even in an unattended run
     bool hintDemo = false;      // --hint-demo (snapshots): ask for an İpucu once the player's turn comes
+    bool achievementDemo = false; // --achievement-demo (snapshots): a badge opens at frame 120 (banner, a regular, the crowd)
+    // --achievement-test (developer check, not in --help; implies --autoplay): the bot's match counts as the player's own
+    // for the badges (and the record) in this run only, the book is read and written under $HOME as in play; the run
+    // ends once a badge has opened and its banner, a regular's congratulation and the applause were all seen (exit 0),
+    // or fails (exit 4) when the match ends first.
+    bool achievementTest = false;
     bool katlamali = false;     // --katlamali: this run's matches are katlamalı (else from the settings)
     int game = -1;              // --game 101|esli|okey|...: this run's game (ui::GameKind), -1 = from the settings
     std::vector<std::string> sets; // --set key=value: settings-file keys for this run

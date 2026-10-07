@@ -582,6 +582,7 @@ void TableState::startFlight(int id, int fromCont, int toCont, const Pose& to, f
 void TableState::advanceVisuals(float dt) {
     const float sdt = dt * speed;
     const int dragged = draggedTileId();
+    if (dragged < 0) handDragged = -1;
     for (int id = 0; id < NUM_TILES; ++id) {
         TileVis& v = vis[id];
         const Target& t = tgt[id];
@@ -592,6 +593,11 @@ void TableState::advanceVisuals(float dt) {
         }
         if (id == dragged) {
             v.atSlot = false;
+            draggedAt[id] = now; // (the player's hand follows it: PlayerHands)
+            if (handDragged != id) {
+                handDragged = id;
+                handCueFor(id, -1, -1, 0.f);
+            }
             continue; // follows the mouse (updateDragPose)
         }
         if (t.cont != v.cont) {
@@ -599,12 +605,15 @@ void TableState::advanceVisuals(float dt) {
             if (phase == Phase::Gather) delay = hashF((uint32_t)id * 331u) * 0.22f;
             else if (dealPending && v.cont == C_HEAP) delay = dealDelay[id];
             else if (delay == 0.f) delay = botLead(v.cont, t.cont);
+            if (delay == 0.f) delay = handLeadFor(id, v.cont, t.cont); // the player's own hand reaches it first
             startFlight(id, v.cont, t.cont, t.pose, delay, false);
+            handCueFor(id, v.cont, t.cont, delay);
             v.clickOnLand = t.cont == C_HAND + human && !dealPending;
             v.cont = t.cont;
         } else if (v.forceHop) {
             const float delay = v.ft < 0 ? -v.ft : 0.f;
             startFlight(id, v.cont, t.cont, t.pose, delay, true);
+            handCueFor(id, v.cont, t.cont, delay);
             v.clickOnLand = false;
         }
         v.forceHop = false;
@@ -639,6 +648,62 @@ void TableState::advanceVisuals(float dt) {
         const bool hot = id == selected || (id == hoverTile && press.kind == Press::None) || id == kbTile();
         v.glow = lerpf(v.glow, hot ? 1.f : 0.f, 1.f - std::exp(-16.f * dt));
     }
+}
+
+// ---- the player's own hands (PlayerHands via Table3D::handCue / handLead) ----
+namespace {
+// The top of a tile (world) as it lies or stands: where the fingers pinch it.
+Vector3 tileGrip(const Pose& p) {
+    const float hy = (std::fabs(poseAxis(p, 0).y) * TW + std::fabs(poseAxis(p, 1).y) * TH + std::fabs(poseAxis(p, 2).y) * TT) *
+                     0.5f * p.scale;
+    return {p.pos.x, p.pos.y + hy, p.pos.z};
+}
+} // namespace
+
+// How long a flight of the player's tile waits for the player's hand: a tile taken from the table (the pile, the left
+// discard) or given from the istaka (a discard, a meld, the tile given back), unless the mouse just let it go there.
+float TableState::handLeadFor(int id, int fromCont, int toCont) const {
+    if (!handLead || !*handLead || phase != Phase::Idle || dealPending || dealing()) return 0.f;
+    const bool toMe = isRack(toCont) && toCont - C_HAND == human, fromMe = isRack(fromCont) && fromCont - C_HAND == human;
+    if (toMe == fromMe || now - draggedAt[id] < 0.25f) return 0.f;
+    if (toMe) return fromCont == C_PILE || fromCont >= C_DISC ? (*handLead)(HandCueKind::Take) : 0.f;
+    return (*handLead)(HandCueKind::Give);
+}
+
+// Tells the player's hand that the player's tile `id` moves (fromCont = -1: it is being dragged by the mouse). Rack
+// rearrangements (Seri Diz, the AI's tidying) and the deal are left alone; a tile just let go by the mouse is followed
+// into its place.
+void TableState::handCueFor(int id, int fromCont, int toCont, float delay) {
+    if (!handCue || !*handCue) return;
+    HandCue c;
+    c.style = 0;
+    c.lead = delay;
+    TableState* self = this;
+    if (fromCont < 0) {
+        c.kind = HandCueKind::Carry;
+        c.where = [self, id](Vector3& out) {
+            if (self->draggedTileId() != id) return false;
+            out = tileGrip(self->vis[id].pose);
+            return true;
+        };
+    } else {
+        if (phase != Phase::Idle || dealPending || dealing()) return;
+        const bool toMe = isRack(toCont) && toCont - C_HAND == human, fromMe = isRack(fromCont) && fromCont - C_HAND == human;
+        const bool justDragged = now - draggedAt[id] < 0.25f;
+        if (!toMe && !fromMe) return;
+        if (!fromMe && fromCont != C_PILE && fromCont < C_DISC) return; // (only off the pile, a discard or a meld)
+        if (toMe && fromMe && !justDragged) return;
+        c.kind = toMe && !fromMe ? HandCueKind::Take : HandCueKind::Give;
+        const int serial = vis[id].serial;
+        c.where = [self, id, serial](Vector3& out) {
+            const TileVis& v = self->vis[id];
+            if (v.serial != serial || !v.flying) return false;
+            out = tileGrip(v.pose);
+            return true;
+        };
+    }
+    c.from = tileGrip(vis[id].pose);
+    (*handCue)(c);
 }
 
 // Tiles an opponent moves wait for its hand (w3d::BOT_*_LEAD): taken ones lift off when the fingers reach them,
@@ -1679,6 +1744,8 @@ std::vector<std::pair<const Table3D*, TableState*>>& registry() {
 
 Table3D::Table3D() : impl_(new Impl) {
     impl_->sfx = &playSfx;
+    impl_->handCue = &handCue;
+    impl_->handLead = &handLead;
     registry().push_back({this, impl_});
 }
 
@@ -1864,7 +1931,9 @@ void settle(Table3D& t, const Camera3D& cam, bool humanInput) {
     s->cam = cam;
     s->camValid = true;
     const Vector2 m = s->in.mouse;
-    for (int i = 0; i < 900 && t.isAnimating(); ++i) {
+    // (always one step first: a change made straight to the game, without an event — the harnesses' debug setups such
+    // as table3d_snapshot's crowded table — is only seen by the next step's targets; before it isAnimating() is false)
+    for (int i = 0; i < 900 && (i == 0 || t.isAnimating()); ++i) {
         s->in = Input{};
         s->in.mouse = m;
         s->step(1.f / 60.f, humanInput);

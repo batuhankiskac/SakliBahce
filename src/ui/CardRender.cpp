@@ -288,7 +288,55 @@ struct Painter {
         suit(0, {W * 0.5f, H * 0.5f + 10.f}, 3.6f, kGold);
     }
 
+    // Konken: the joker — a jester's head under a three-pointed cap with bells, "JOKER" down the corners.
+    void joker() const {
+        stock();
+        const float cx = W * 0.5f;
+        DrawRectangleRoundedLinesEx({4.f, 4.f, W - 8.f, H - 8.f}, 0.06f, 8, 0.45f, kGold);
+        // the cap: three points (red, black, red) with gold bells
+        const Color capC[3] = {kRed, kBlack, kRed};
+        const Vector2 tip[3] = {{cx - 15.f, 27.f}, {cx, 15.5f}, {cx + 15.f, 27.f}};
+        for (int i = 0; i < 3; ++i) {
+            const float bx = cx - 9.f + 9.f * (float)i;
+            tri({bx - 5.5f, 42.f}, {bx + 5.5f, 42.f}, tip[i], capC[i]);
+            fillCircle(tip[i], 1.9f, kGold);
+            fillCircle(tip[i], 0.8f, kGoldDark);
+        }
+        DrawRectangleRounded({cx - 14.f, 40.5f, 28.f, 3.6f}, 0.8f, 6, kGold);
+        // the face
+        fillEllipse({cx, 50.5f}, 8.6f, 9.2f, kSkin);
+        fillCircle({cx - 3.2f, 48.6f}, 0.9f, kBlack);
+        fillCircle({cx + 3.2f, 48.6f}, 0.9f, kBlack);
+        fillCircle({cx - 5.4f, 52.4f}, 1.4f, Color{236, 150, 140, 255});
+        fillCircle({cx + 5.4f, 52.4f}, 1.4f, Color{236, 150, 140, 255});
+        for (int i = 0; i < 8; ++i) { // a wide grin
+            const float a0 = (20.f + 17.5f * (float)i) * DEG2RAD, a1 = (20.f + 17.5f * (float)(i + 1)) * DEG2RAD;
+            DrawLineEx({cx + std::cos(a0) * 4.2f, 52.2f + std::sin(a0) * 2.8f}, {cx + std::cos(a1) * 4.2f, 52.2f + std::sin(a1) * 2.8f},
+                       0.7f, Color{150, 30, 40, 255});
+        }
+        // a zigzag collar
+        for (int i = 0; i < 6; ++i) {
+            const float x = cx - 15.f + 5.f * (float)i;
+            tri({x, 59.f}, {x + 5.f, 59.f}, {x + 2.5f, 68.f}, i % 2 ? kGold : kBlue);
+        }
+        // "JOKER" down the top-left corner and (turned) the bottom-right one
+        static const char* const letters[5] = {"J", "O", "K", "E", "R"};
+        for (int k = 0; k < 2; ++k) {
+            rlPushMatrix();
+            if (k == 1) {
+                rlTranslatef(W, H, 0.f);
+                rlRotatef(180.f, 0.f, 0.f, 1.f);
+            }
+            for (int i = 0; i < 5; ++i) text(letters[i], {6.4f, 7.f + 6.2f * (float)i}, 6.6f, k ? kBlack : kRed);
+            rlPopMatrix();
+        }
+    }
+
     void paint(int key) const {
+        if (key == KEY_JOKER) {
+            joker();
+            return;
+        }
         if (key == KEY_BODY) {
             DrawRectangleRec({0.f, 0.f, W, H}, kStock);
             return;
@@ -311,12 +359,12 @@ Font loadCardFont() {
                            "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf",
                            "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
                            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"};
-    const char* glyphs = "0123456789VKPASB";
-    int cps[16];
-    for (int i = 0; i < 16; ++i) cps[i] = glyphs[i];
+    const char* glyphs = "0123456789VKPASBJOER"; // (J O E R: the joker's "JOKER")
+    int cps[20];
+    for (int i = 0; i < 20; ++i) cps[i] = glyphs[i];
     for (const char* f : files) {
         if (!FileExists(f)) continue;
-        Font font = LoadFontEx(f, 160, cps, 16);
+        Font font = LoadFontEx(f, 160, cps, 20);
         if (font.texture.id != 0 && font.glyphCount > 0) {
             SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
             return font;

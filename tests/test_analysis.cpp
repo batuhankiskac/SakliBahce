@@ -2,9 +2,14 @@
 // cost and a good one is not; for every game a whole simulated match (bots on all seats, seat 0 a Kurt forced to make a
 // few silly moves) whose analysis names those moves among the top mistakes; determinism; timing per game.
 #include "app/Analysis.h"
+#include "app/Rules101.h" // 101 kuralları
 #include "core/BatakBot.h"
 #include "core/Bot.h"
 #include "core/KingBot.h"
+#include "core/AltmisaltiBot.h" // Altmışaltı
+#include "core/BezikBot.h" // Bezik
+#include "core/DamaBot.h" // Dama
+#include "core/KonkenBot.h" // Konken
 #include "core/PistiBot.h"
 #include "core/TavlaBot.h"
 #include "ui/Screens.h"
@@ -13,6 +18,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <memory>
 #include <set>
 #include <thread>
 #include <string>
@@ -54,7 +60,7 @@ SimMatch simOkey(ui::GameKind kind, const ui::Settings& st, uint64_t seed, const
     cfg.teams = kind == ui::GameKind::YuzbirEsli;
     cfg.okeyStartPoints = st.okeyStart;
     cfg.numHands = st.numHands;
-    cfg.leftOpenPenalty = st.yandanCeza;
+    app::apply101Rules(st, cfg); // 101 kuralları (the same mapping as the game and the analysis)
     okey::Game g(cfg);
     for (int s = 0; s < 4; ++s) g.setPlayer(s, analysis::defaultNames()[(size_t)s], s == 0);
     std::vector<okey::Bot> bots;
@@ -143,6 +149,7 @@ SimMatch simOkey(ui::GameKind kind, const ui::Settings& st, uint64_t seed, const
 SimMatch simTavla(const ui::Settings& st, uint64_t seed, const std::vector<int>& sillyMoves) {
     tavla::Rules r;
     r.matchPoints = st.tavlaPoints;
+    r.variant = (tavla::Variant)st.tavlaCesit; // Tavla çeşidi (a Gülbahar ladder's every rung is a move of its own)
     tavla::Game g(r);
     g.setPlayer(0, "Sen", true);
     g.setPlayer(1, "Kel Mahmut", false);
@@ -174,7 +181,7 @@ SimMatch simTavla(const ui::Settings& st, uint64_t seed, const std::vector<int>&
                     size_t worst = 0;
                     double wv = 1e18;
                     for (size_t i = 0; i < plays.size(); ++i) {
-                        const double v = tavla::botEquityAfterMove(plays[i].result, 0, 1);
+                        const double v = tavla::botEquityAfterMove(plays[i].result, 0, 1, nullptr, r.variant);
                         if (v < wv) {
                             wv = v;
                             worst = i;
@@ -370,6 +377,158 @@ SimMatch simKing(const ui::Settings& st, uint64_t seed, int sillyMax) {
     return out;
 }
 
+// Altmışaltı: while the stock is open, Kel Mahmut leads a side card and seat 0, holding a cheap card to throw, throws
+// its own As / 10 of another suit under it instead (10 or 11 points given away)
+SimMatch simAltmisalti(uint64_t seed, int sillyMax) {
+    altmisalti::Game g;
+    g.setPlayer(0, analysis::defaultNames()[0], true);
+    g.setPlayer(1, analysis::defaultNames()[2], false);
+    altmisalti::Bot b0((altmisalti::BotLevel)seat0Level, seed * 3 + 1), b1(altmisalti::BotLevel::Usta, seed * 3 + 2);
+    g.startMatch(seed);
+    SimMatch out;
+    for (int steps = 0; steps < 20000 && g.stage() != altmisalti::Stage::MatchOver; ++steps) {
+        if (g.stage() == altmisalti::Stage::HandOver) {
+            g.startNextHand();
+            continue;
+        }
+        const int p = g.current();
+        altmisalti::BotAction a = (p == 0 ? b0 : b1).next(g, p);
+        const int led = g.ledCard();
+        if (p == 0 && led >= 0 && !g.strict() && kart::suitOf(led) != g.trumpSuit() && (int)out.silly.size() < sillyMax) {
+            bool cheap = false;
+            int gift = -1;
+            for (int c : g.legalCards(0)) {
+                cheap = cheap || (altmisalti::cardPoints(c) <= 2 && kart::suitOf(c) != g.trumpSuit());
+                if (kart::suitOf(c) != kart::suitOf(led) && kart::suitOf(c) != g.trumpSuit() && altmisalti::cardPoints(c) >= 10) gift = c;
+            }
+            if (cheap && gift >= 0) {
+                a = altmisalti::BotAction{altmisalti::BotAction::Kind::Play, gift};
+                out.silly.push_back({g.handIndex() + 1, g.tricks(0) + g.tricks(1) + 1});
+            }
+        }
+        if (!altmisalti::applyBotAction(g, p, a).ok) altmisalti::applyBotAction(g, p, altmisalti::fallbackAction(g, p));
+    }
+    for (const altmisalti::LoggedAction& la : g.actionLog()) out.lines.push_back(la.encode());
+    return out;
+}
+
+// Altmışaltı: the stock is used up (everything is known); leading the koz As makes 66 now, the side 10 hands the
+// last 21 points and the hand to Kel Mahmut.
+void testAltmisaltiConstructed() {
+    using kart::makeCard;
+    altmisalti::Game g;
+    g.setPlayer(0, "Sen", true);
+    g.setPlayer(1, "Kel Mahmut", false);
+    g.startMatch(3);
+    g.debugSetDeal({makeCard(kart::Kupa, kart::As), makeCard(kart::Maca, 10)},
+                   {makeCard(kart::Kupa, 10), makeCard(kart::Maca, kart::As)}, {}, 0);
+    g.debugSetPoints(0, 50, 2);
+    g.debugSetPoints(1, 55, 2);
+    analysis::Mistake bad, good;
+    CHECK(analysis::judgeAltmisalti(g, 0, {altmisalti::BotAction::Kind::Play, makeCard(kart::Maca, 10)}, bad));
+    CHECK(analysis::judgeAltmisalti(g, 0, {altmisalti::BotAction::Kind::Play, makeCard(kart::Kupa, kart::As)}, good));
+    std::printf("[altmışaltı constructed] %s\n", analysis::describeMistake(bad).c_str());
+    CHECK(bad.notable);
+    CHECK(bad.cost > 1.9 && bad.cost < 2.1); // +1 against -1
+    CHECK(!good.notable);
+    CHECK(bad.played == "Maça 10'u açtın");
+    CHECK(bad.better == "Kurt Kupa Ası açardı");
+}
+
+// Bezik: seat 0 (a Kurt) now and then passes when it could declare a combination of 40 or more, and throws a
+// plain-suit As / 10 under Kel Mahmut's led card it does not beat while it holds a 7 or 8 to throw (a brisk given away).
+SimMatch simBezik(uint64_t seed, int sillyMax) {
+    bezik::Rules r;
+    r.target = 1000;
+    bezik::Game g(r);
+    g.setPlayer(0, analysis::defaultNames()[0], true);
+    g.setPlayer(1, analysis::defaultNames()[2], false);
+    bezik::Bot b0((bezik::BotLevel)seat0Level, seed * 3 + 1), b1(bezik::BotLevel::Usta, seed * 3 + 2);
+    g.startMatch(seed);
+    SimMatch out;
+    int passes = 0;
+    for (int steps = 0; steps < 20000 && g.stage() != bezik::Stage::MatchOver; ++steps) {
+        if (g.stage() == bezik::Stage::HandOver) {
+            g.startNextHand();
+            continue;
+        }
+        const int p = g.current();
+        bezik::BotAction a = (p == 0 ? b0 : b1).next(g, p);
+        if (p == 0 && (int)out.silly.size() < sillyMax) {
+            if (g.stage() == bezik::Stage::Declare && a.kind == bezik::BotAction::Kind::Declare && a.meld.points >= 40 && passes < 2) {
+                a = bezik::BotAction{};
+                a.kind = bezik::BotAction::Kind::Pass;
+                out.silly.push_back({g.handIndex() + 1, g.trickNumber()});
+                ++passes;
+            } else if (g.stage() == bezik::Stage::Playing && !g.secondStage() && !g.currentTrick().cards.empty()) {
+                const int led = g.currentTrick().cards[0].card;
+                int junk = -1, gift = -1;
+                for (int c : g.legalCards(0)) {
+                    if (bezik::beats(c, led, g.trump())) continue;
+                    if (bezik::rankOf(c) <= 8 && bezik::suitOf(c) != g.trump()) junk = c;
+                    if (bezik::isBrisque(c) && bezik::suitOf(c) != g.trump()) gift = c;
+                }
+                if (junk >= 0 && gift >= 0) {
+                    a = bezik::BotAction{};
+                    a.card = gift;
+                    out.silly.push_back({g.handIndex() + 1, g.trickNumber() + 1});
+                }
+            }
+        }
+        if (!bezik::applyBotAction(g, p, a).ok) bezik::applyBotAction(g, p, bezik::fallbackAction(g, p));
+    }
+    for (const bezik::LoggedAction& la : g.actionLog()) out.lines.push_back(la.encode());
+    return out;
+}
+
+// Bezik: the second stage is solved exactly; the best card costs nothing, the worst costs the difference.
+void testBezikConstructed() {
+    using kart::makeCard;
+    using namespace kart;
+    bezik::Game g;
+    g.setPlayer(0, "Sen", true);
+    g.setPlayer(1, "Kel Mahmut", false);
+    g.startMatch(3);
+    g.drainEvents();
+    const std::vector<int> h0 = {makeCard(Kupa, As), makeCard(Kupa, 10), makeCard(Sinek, 7), makeCard(Sinek, 8),
+                                 makeCard(Karo, 7), makeCard(Karo, 8), makeCard(Maca, 7), makeCard(Kupa, 7)};
+    const std::vector<int> h1 = {makeCard(Kupa, Papaz), makeCard(Kupa, 8), makeCard(Sinek, As), makeCard(Sinek, 9),
+                                 makeCard(Karo, As), makeCard(Karo, 9), makeCard(Maca, 8), makeCard(Maca, 9)};
+    const int up = makeCard(Maca, 10);
+    std::vector<int> rest;
+    for (int c : bezik::fullDeck())
+        if (std::find(h0.begin(), h0.end(), c) == h0.end() && std::find(h1.begin(), h1.end(), c) == h1.end() && c != up)
+            rest.push_back(c);
+    const std::vector<int> stock(rest.begin(), rest.begin() + 1);
+    g.debugSetDeal({h0, h1}, stock, up);
+    g.debugSetWon(1, std::vector<int>(rest.begin() + 1, rest.end()));
+    g.debugSetCurrent(0);
+    CHECK(g.playCard(0, makeCard(Sinek, 7)).ok);
+    CHECK(g.playCard(1, makeCard(Kupa, 8)).ok);
+    if (g.stage() == bezik::Stage::Declare) CHECK(g.pass(0).ok);
+    CHECK(g.secondStage() && g.current() == 0);
+    // every card judged: the best costs 0 and is not notable; the worst is the spread
+    double worst = -1.0;
+    int bestCount = 0;
+    std::string worstText;
+    for (int c : g.legalCards(0)) {
+        analysis::Mistake m;
+        CHECK(analysis::judgeBezikCard(g, 0, c, m));
+        CHECK(m.noise == 0.0);
+        if (m.cost == 0.0) {
+            ++bestCount;
+            CHECK(!m.notable);
+        }
+        if (m.cost > worst) {
+            worst = m.cost;
+            worstText = analysis::describeMistake(m);
+        }
+    }
+    std::printf("[bezik constructed] %s\n", worstText.c_str());
+    CHECK(bestCount >= 1);
+    CHECK(worst >= 10.0);
+}
+
 // ---------------------------------------------------------------------------------------------------------
 
 void printMistakes(const char* title, const std::vector<analysis::Mistake>& ms, double secs, size_t lines) {
@@ -417,6 +576,14 @@ void checkMatch(const char* title, ui::GameKind kind, const ui::Settings& st, ui
 
 // ---------------------------------------------------------------------------------------------------------
 // constructed positions
+
+konken::Rules rulesFromSettingsKonken(const ui::Settings& st) { // Konken: as AnalysisKonken reads the settings
+    konken::Rules r;
+    r.openMin = st.konkenOpen;
+    r.limit = st.konkenLimit;
+    r.lastStanding = st.konkenLastStanding; // (Konken bitiş: son kalan)
+    return r;
+}
 
 void testOkeyConstructed() {
     using namespace okey;
@@ -657,14 +824,159 @@ void testTexts() {
 
 } // namespace
 
+// ---------------------------------------------------------------------------------------------------------
+// Dama: a constructed shot, and a match with forced blunders
+void testDama() {
+    using namespace dama;
+    // d4-d5 gives a man and takes two back (see test_dama): Kurt's move is no mistake, a quiet move instead is
+    Board b;
+    auto put = [&](const char* n, int v) { b.c[(size_t)sq(n[1] - '1', n[0] - 'a')] = (int8_t)v; };
+    put("d1", 2), put("d4", 1), put("d6", -1), put("f6", -1), put("h7", -1);
+    Move shot;
+    shot.from = sq(3, 3);
+    shot.path = {sq(4, 3)};
+    analysis::Mistake good, bad;
+    CHECK(analysis::judgeDamaMove(b, 0, shot, good));
+    CHECK(!good.notable && good.cost < 0.01);
+    Move quiet;
+    quiet.from = sq(0, 3);
+    quiet.path = {sq(0, 0)}; // the dama wanders off to a1
+    CHECK(analysis::judgeDamaMove(b, 0, quiet, bad));
+    std::printf("[dama constructed] %s\n", analysis::describeMistake(bad).c_str());
+    CHECK(bad.notable && bad.cost >= 0.8 && bad.unit == "taş");
+    // a forced move is not judged
+    Board f;
+    f.c[(size_t)sq(3, 3)] = 1;
+    f.c[(size_t)sq(4, 3)] = -1;
+    f.c[(size_t)sq(7, 7)] = -1;
+    Move take;
+    take.from = sq(3, 3);
+    take.path = {sq(5, 3)};
+    analysis::Mistake fm;
+    CHECK(!analysis::judgeDamaMove(f, 0, take, fm));
+    // a match to one game: Usta against Usta; at the player's 6th and 14th moves the worst move by a short search
+    ui::Settings st;
+    st.damaWins = 1;
+    Rules r;
+    r.winsNeeded = 1;
+    Game g(r);
+    g.startMatch(71);
+    Bot u0(BotLevel::Normal, 1), u1(BotLevel::Normal, 2);
+    SimMatch sm;
+    int mine = 0;
+    for (int i = 0; i < 400 && g.stage() == Stage::Playing; ++i) {
+        const int p = g.current();
+        Move m = (p == 0 ? u0 : u1).choose(g, p);
+        if (p == 0) {
+            ++mine;
+            const std::vector<Move>& l = g.legalMoves();
+            if ((mine == 6 || mine == 14) && l.size() > 1) {
+                const std::vector<int> sc = botScoreMoves(g.board(), 0, l, 3);
+                size_t w = 0, bst = 0;
+                for (size_t k = 1; k < sc.size(); ++k) {
+                    if (sc[k] < sc[w]) w = k;
+                    if (sc[k] > sc[bst]) bst = k;
+                }
+                if (sc[bst] - sc[w] >= 150) {
+                    m = l[w];
+                    sm.silly.push_back({1, mine});
+                }
+            }
+        }
+        CHECK(g.applyMove(p, m).ok);
+    }
+    for (const LoggedAction& a : g.actionLog()) sm.lines.push_back(a.encode());
+    checkMatch("dama", ui::GameKind::Dama, st, 71, sm, 1, 10.0);
+}
+
+// Konken: a constructed discard (feeding an opened neighbour a card that fits the table costs), and a match in which the
+// player twice keeps an opening in hand and throws a card instead (an "açış" mistake each time).
+void testKonken() {
+    using namespace konken;
+    auto C = [](int suit, int rank, int deck = 0) { return deck * NUM_FACES + kart::makeCard(suit, rank); };
+    Rules R;
+    R.limit = 100000;
+    Game g(R);
+    g.startMatch(5);
+    g.drainEvents();
+    g.debugSetCurrent(0);
+    std::array<std::vector<int>, 4> hands;
+    hands[0] = {C(kart::Karo, 8), C(kart::Maca, 2), C(kart::Kupa, 3), C(kart::Sinek, 6), C(kart::Maca, 9)};
+    hands[1] = {C(kart::Sinek, 3), C(kart::Sinek, 4)};
+    hands[2] = {C(kart::Sinek, 8), C(kart::Sinek, 9)};
+    hands[3] = {C(kart::Maca, 11), C(kart::Maca, 12)};
+    Meld run;
+    makeMeld({C(kart::Karo, 9, 1), C(kart::Karo, 10, 1), C(kart::Karo, 11, 1)}, run);
+    run.owner = 1;
+    std::vector<int> stock;
+    for (int c = 0; c < NUM_CARDS; ++c) {
+        bool used = c == C(kart::Kupa, 2) || std::find(run.cards.begin(), run.cards.end(), c) != run.cards.end();
+        for (const auto& h : hands) used = used || std::find(h.begin(), h.end(), c) != h.end();
+        if (!used) stock.push_back(c);
+    }
+    g.debugSetOpened(1, true);
+    g.debugSetup(hands, stock, {C(kart::Kupa, 2)}, {run});
+    CHECK(g.drawStock(0).ok);
+    analysis::Mistake feed, safe;
+    CHECK(analysis::judgeKonkenDiscard(g, 0, C(kart::Karo, 8), feed));
+    CHECK(analysis::judgeKonkenDiscard(g, 0, C(kart::Maca, 2), safe));
+    std::printf("  konken: feeding the Karo 8 costs %.1f (± %.1f), the Maça 2 %.1f\n", feed.cost, feed.noise, safe.cost);
+    CHECK(feed.cost > safe.cost);
+    CHECK(feed.topic == "atış" && feed.unit == "puan");
+    CHECK(!feed.played.empty() && !feed.better.empty());
+
+    // the match
+    ui::Settings st;
+    SimMatch sm;
+    {
+        Game m(rulesFromSettingsKonken(st));
+        for (int s = 0; s < 4; ++s) m.setPlayer(s, analysis::defaultNames()[(size_t)s], s == 0);
+        std::array<std::unique_ptr<Bot>, 4> bots;
+        for (int s = 0; s < 4; ++s) bots[(size_t)s] = std::make_unique<Bot>(BotLevel::Kurt, 900 + (uint64_t)s);
+        m.startMatch(83);
+        int silly = 0, lastHand = -1;
+        int guard = 0;
+        while (m.stage() != Stage::MatchOver && ++guard < 100000) {
+            if (m.stage() == Stage::HandOver) {
+                m.startNextHand();
+                continue;
+            }
+            const int s = m.current();
+            BotAction a = bots[(size_t)s]->next(m, s);
+            if (s == 0 && a.kind == BotAction::Kind::Lay && !m.opened(0) && m.takenCard() < 0 && silly < 2 &&
+                m.handIndex() != lastHand) {
+                // keep the opening, throw the dearest card instead
+                BotAction d;
+                d.kind = BotAction::Kind::Discard;
+                for (int c : m.hand(0))
+                    if (!isJoker(c) && (d.card < 0 || handPoints(c) > handPoints(d.card))) d.card = c;
+                if (d.card >= 0) {
+                    sm.silly.push_back({m.handIndex() + 1, m.turn() / std::max(1, m.activeCount()) + 1}); // (the table shrinks)
+                    ++silly;
+                    lastHand = m.handIndex();
+                    a = d;
+                }
+            }
+            if (!applyBotAction(m, s, a).ok) applyBotAction(m, s, fallbackAction(m, s));
+            m.drainEvents();
+        }
+        for (const LoggedAction& la : m.actionLog()) sm.lines.push_back(la.encode());
+    }
+    checkMatch("konken", ui::GameKind::Konken, st, 83, sm, 1, 30.0);
+}
+
 int main() {
     testTexts();
+    testKonken(); // Konken
+    testDama(); // Dama
     testOkeyConstructed();
     testClassicConstructed();
     testTavlaConstructed();
     testPistiConstructed();
     testBatakConstructed();
     testKingConstructed();
+    testAltmisaltiConstructed(); // Altmışaltı
+    testBezikConstructed();      // Bezik
 
     ui::Settings st;
     st.numHands = 3;
@@ -678,6 +990,33 @@ int main() {
         const SimMatch sm = simOkey(ui::GameKind::YuzbirEsli, se, 43, {2});
         checkMatch("eşli 101", ui::GameKind::YuzbirEsli, se, 43, sm, 2, 8.0);
     }
+    {   // 101 kuralları: a variant match replays and is analysed under its own rules
+        ui::Settings sv = st;
+        sv.y101Kat = 1;
+        sv.y101Acma = 81;
+        sv.y101Acmayan = 404;
+        sv.y101GeriVer = true;
+        sv.katlamali = true;
+        okey::RulesConfig rc;
+        app::apply101Rules(sv, rc);
+        CHECK(rc.finishMult == okey::FinishMult::Single && rc.openThreshold == 81 && rc.unopenedScore == 404 &&
+              rc.penaltyReturnLeft && rc.katlamali && rc.penaltyJokerDiscard && rc.waitTurnAfterOpening);
+        CHECK(app::summary101(rc) == "Katlamalı \xC2\xB7 açma 81 \xC2\xB7 tek kat \xC2\xB7 açmayan 404 \xC2\xB7 geri verme cezalı");
+        okey::RulesConfig def;
+        app::apply101Rules(ui::Settings{}, def);
+        CHECK(app::summary101(def).empty() && def.finishMult == okey::FinishMult::Stack && def.openThreshold == 101 &&
+              def.unopenedScore == 202 && !def.penaltyReturnLeft);
+        sv.y101Acma = 77; // (a hand-edited value snaps to the nearest choice)
+        app::apply101Rules(sv, rc);
+        CHECK(rc.openThreshold == 81);
+        sv.y101Acma = 81;
+        const SimMatch sm = simOkey(ui::GameKind::Yuzbir, sv, 45, {3});
+        checkMatch("101 tek kat", ui::GameKind::Yuzbir, sv, 45, sm, 2, 8.0);
+        sv.y101Kat = 2;
+        sv.y101Bekle = false;
+        const SimMatch se = simOkey(ui::GameKind::YuzbirEsli, sv, 49, {2});
+        checkMatch("eşli 101 katsız", ui::GameKind::YuzbirEsli, sv, 49, se, 2, 8.0);
+    }
     {
         ui::Settings so = st;
         so.okeyStart = 10;
@@ -689,6 +1028,13 @@ int main() {
         stv.tavlaPoints = 3;
         const SimMatch sm = simTavla(stv, 51, {4, 9, 15});
         checkMatch("tavla", ui::GameKind::Tavla, stv, 51, sm, 2, 8.0);
+    }
+    for (int cesit = 1; cesit <= 2; ++cesit) { // Tavla çeşitleri: Gülbahar, Fevga
+        ui::Settings stv = st;
+        stv.tavlaPoints = 3;
+        stv.tavlaCesit = cesit;
+        const SimMatch sm = simTavla(stv, 61 + (uint64_t)cesit, {4, 9, 15});
+        checkMatch(cesit == 1 ? "gülbahar" : "fevga", ui::GameKind::Tavla, stv, 61 + (uint64_t)cesit, sm, 2, 8.0);
     }
     {
         ui::Settings sp = st;
@@ -707,6 +1053,16 @@ int main() {
         sk.king12 = true;
         const SimMatch sm = simKing(sk, 59, 3);
         checkMatch("king", ui::GameKind::King, sk, 59, sm, 2, 8.0);
+    }
+    { // Altmışaltı (a whole match to 7)
+        const SimMatch sm = simAltmisalti(63, 3);
+        checkMatch("altmışaltı", ui::GameKind::Altmisalti, st, 63, sm, 2, 8.0);
+    }
+    { // Bezik (a whole match to 1000)
+        ui::Settings sz = st;
+        sz.bezikTarget = 1000;
+        const SimMatch sm = simBezik(67, 3);
+        checkMatch("bezik", ui::GameKind::Bezik, sz, 67, sm, 2, 25.0);
     }
     // on a worker thread, as App runs it; a cancelled analysis stops at once
     {

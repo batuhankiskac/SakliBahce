@@ -12,7 +12,8 @@ constexpr float W = 63.f;  // card size in millimetres (poker size); every cell 
 constexpr float H = 88.f;
 constexpr int KEY_BACK = 52;  // the back
 constexpr int KEY_BODY = 53;  // plain card stock (the edges)
-constexpr int NUM_KEYS = 54;  // 0..51 = kart::Cards ids (suit * 13 + rank - 2)
+constexpr int KEY_JOKER = 54; // Konken: the joker (a jester)
+constexpr int NUM_KEYS = 55;  // 0..51 = kart::Cards ids (suit * 13 + rank - 2)
 
 void init();
 void shutdown();

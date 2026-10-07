@@ -1414,6 +1414,533 @@ void testBots() {
     }
 }
 
+
+// ---------------------------------------------------------------------------------------------------------
+// Çeşitler: Gülbahar and Fevga (Rules::variant)
+
+// Game at Moving for p in a çeşit (as moving()).
+Game movingV(Variant v, const Position& pos, int p, int d1, int d2, Rules r = Rules()) {
+    r.variant = v;
+    return moving(pos, p, d1, d2, r);
+}
+
+namespace refsw {
+// An independent model of the same-way rules: each side walks its own path of 24 places, k = 0 its start point,
+// k = 23 its last home point; k + d >= 24 bears off. Player 0's path is index 23 - k, player 1's (11 - k) mod 24.
+int idx(int p, int k) { return p == 0 ? 23 - k : (11 - k + 24) % 24; }
+int own(const Position& pos, int p, int i) { return ref::own(pos, p, i); }
+
+bool trapsAll(const Position& q, int p) { // p holds 6 in a row on the opponent's path with all of his behind
+    const int o = 1 - p;
+    if (q.off[o] > 0) return false;
+    int minK = 99;
+    for (int k = 0; k < 24; ++k)
+        if (own(q, o, idx(o, k))) minK = std::min(minK, k);
+    (void)minK;
+    for (int a = 0; a + 6 <= 24; ++a) {
+        bool run = true;
+        for (int k = a; k < a + 6; ++k) run = run && own(q, p, idx(o, k)) > 0;
+        if (!run) continue;
+        bool ahead = false;
+        for (int k = a + 6; k < 24; ++k) ahead = ahead || own(q, o, idx(o, k)) > 0;
+        if (!ahead) return true;
+    }
+    return false;
+}
+
+std::vector<Step> singles(const Position& pos, int p, int d, Variant v) {
+    std::vector<Step> out;
+    std::vector<int> mine; // path places of p's checkers
+    for (int k = 0; k < 24; ++k)
+        if (own(pos, p, idx(p, k))) mine.push_back(k);
+    bool allHome = true;
+    for (int k : mine) allHome = allHome && k >= 18;
+    int onlyK = -1;
+    if (v == Variant::Fevga && own(pos, p, idx(p, 0)) == 14) {
+        for (int k : mine)
+            if (k > 0 && k <= 12) onlyK = k; // not yet past the opponent's start (path place 12)
+    }
+    for (int k : mine) {
+        if (onlyK >= 0 && k != onlyK) continue;
+        const int i = idx(p, k);
+        if (k + d < 24) {
+            const int t = idx(p, k + d);
+            if (own(pos, 1 - p, t)) continue;
+            if (v == Variant::Fevga && own(pos, p, t) == 0) {
+                Position q = pos;
+                q.pts[i] = (int8_t)(q.pts[i] - (p == 0 ? 1 : -1));
+                q.pts[t] = (int8_t)(q.pts[t] + (p == 0 ? 1 : -1));
+                if (trapsAll(q, p) && !trapsAll(pos, p)) continue;
+            }
+            out.push_back(Step{i, t, d, false});
+            continue;
+        }
+        if (!allHome) continue;
+        bool farther = false;
+        for (int j : mine) farther = farther || j < k;
+        if (k + d == 24 || !farther) out.push_back(Step{i, OFF, d, false});
+    }
+    return out;
+}
+
+void rec(const Position& pos, int p, std::vector<int> dice, std::vector<Step>& path, std::vector<ref::Seq>& out, Variant v) {
+    bool any = false;
+    std::set<int> tried;
+    for (size_t k = 0; k < dice.size(); ++k) {
+        if (!tried.insert(dice[k]).second) continue;
+        std::vector<int> rest = dice;
+        rest.erase(rest.begin() + (long)k);
+        for (const Step& s : singles(pos, p, dice[k], v)) {
+            any = true;
+            Position q = pos;
+            ref::apply(q, p, s);
+            path.push_back(s);
+            if (q.off[p] == 15) out.push_back(ref::Seq{path, q, true});
+            else rec(q, p, rest, path, out, v);
+            path.pop_back();
+        }
+    }
+    if (!any) out.push_back(ref::Seq{path, pos, false});
+}
+
+std::set<std::string> maximalEnds(const Position& pos, int p, int d1, int d2, Variant v, std::set<StepKey>& first) {
+    std::vector<int> dice = d1 == d2 ? std::vector<int>{d1, d1, d1, d1} : std::vector<int>{d1, d2};
+    std::vector<ref::Seq> all;
+    std::vector<Step> path;
+    rec(pos, p, dice, path, all, v);
+    size_t mx = 0;
+    for (const ref::Seq& s : all) mx = std::max(mx, s.won ? dice.size() : s.steps.size());
+    std::set<std::string> ends;
+    first.clear();
+    if (mx == 0) return ends;
+    const int big = std::max(d1, d2);
+    bool bigOk = false;
+    if (mx == 1 && d1 != d2)
+        for (const ref::Seq& s : all) bigOk = bigOk || (s.steps.size() == 1 && s.steps[0].die == big);
+    for (const ref::Seq& s : all) {
+        if (!s.won && s.steps.size() != mx) continue;
+        if (bigOk && s.steps[0].die != big) continue;
+        ends.insert(posKey(s.end));
+        first.insert({s.steps[0].from, s.steps[0].to, s.steps[0].die});
+    }
+    return ends;
+}
+} // namespace refsw
+
+// Random same-way position: no shared points, no bar; some with 14 still on the start (Fevga's first checker), some
+// races at home, some crowded (near primes).
+Position randomSameWay(okey::Rng& rng, Variant v) {
+    Position pos;
+    const int mode = rng.range(4);
+    for (int p = 0; p < 2; ++p) {
+        int left = kCheckers;
+        if (mode == 1) {
+            const int off = rng.range(0, 10);
+            pos.off[p] = (int8_t)off;
+            left -= off;
+        }
+        if (mode == 2 && rng.chance(0.7f)) { // the start pile and one checker out
+            pos.pts[startPoint(v, p)] = (int8_t)(p == 0 ? 14 : -14);
+            left = 1;
+        }
+        int guard = 0;
+        while (left > 0 && guard++ < 1000) {
+            const int r = mode == 1 ? rng.range(0, 5) : rng.range(0, 23);
+            const int i = absPoint(v, p, r);
+            if (pos.owner(i) == 1 - p) continue;
+            const int n = std::min(left, mode == 3 ? 1 : rng.range(1, 3));
+            pos.pts[i] = (int8_t)(pos.pts[i] + (p == 0 ? n : -n));
+            left -= n;
+        }
+        if (left > 0) pos.off[p] = (int8_t)(pos.off[p] + left);
+        if (pos.off[p] == kCheckers) { // not a finished game
+            for (int r = 0; r < 24; ++r) {
+                const int i = absPoint(v, p, r);
+                if (pos.owner(i) == 1 - p) continue;
+                pos.pts[i] = (int8_t)(pos.pts[i] + (p == 0 ? 1 : -1));
+                pos.off[p] = 14;
+                break;
+            }
+        }
+    }
+    return pos;
+}
+
+void testVariantStart() {
+    for (Variant v : {Variant::Gulbahar, Variant::Fevga}) {
+        const Position pos = Position::initial(v);
+        CHECK_EQ((int)pos.pts[23], 15);
+        CHECK_EQ((int)pos.pts[11], -15);
+        CHECK_EQ(pipCount(pos, 0, v), 360);
+        CHECK_EQ(pipCount(pos, 1, v), 360);
+        CHECK_EQ(startPoint(v, 0), 23);
+        CHECK_EQ(startPoint(v, 1), 11);
+        CHECK_EQ(pointNumber(v, 1, 11), 24);
+        CHECK_EQ(pointNumber(v, 1, 12), 1);
+        CHECK_EQ(pointNumber(v, 1, 0), 13);
+        CHECK_EQ(pointNumber(v, 1, 23), 12);
+        CHECK_EQ(pointNumber(v, 0, 5), 6);
+        CHECK(inHome(v, 1, 12) && inHome(v, 1, 17) && !inHome(v, 1, 18) && !inHome(v, 1, 11));
+        Rules r;
+        r.variant = v;
+        Game g(r);
+        g.startMatch(3);
+        CHECK(g.position() == pos);
+        CHECK(g.variant() == v);
+        CHECK_EQ(g.pipCount(1), 360);
+    }
+    // klasik is untouched
+    CHECK(Position::initial(Variant::Klasik) == Position::initial());
+    CHECK_EQ(pointNumber(Variant::Klasik, 1, 18), pointNumber(1, 18));
+    CHECK_EQ(std::string(variantName(Variant::Gulbahar)), std::string("Gülbahar"));
+    // notation in the mover's numbering: Fevga, player 1 from his start (index 11) to index 5
+    CHECK_EQ(stepNotation(1, Step{11, 5, 6, false}, Variant::Fevga), std::string("24/18"));
+    CHECK_EQ(stepNotation(1, Step{13, OFF, 2, false}, Variant::Fevga), std::string("2/çıktı"));
+}
+
+void testVariantRules() {
+    // no hitting: a single opposing checker holds its point (both çeşitler)
+    for (Variant v : {Variant::Gulbahar, Variant::Fevga}) {
+        const Position pos = PB().at(0, 23, 10).at(0, 20, 5).at(1, 17, 1).at(1, 11, 14).fill();
+        Game g = movingV(v, pos, 0, 6, 3);
+        for (const Step& s : g.legalSteps()) {
+            CHECK(s.to != 17);
+            CHECK(!s.hit);
+        }
+        const ActionResult r = g.applyStep(0, 23, 17, 6);
+        CHECK(!r.ok);
+        CHECK(r.error.find("tek pul") != std::string::npos);
+        // ... and it is no stop on the way either: 20 -> 17 -> 14 with 3-3 is closed at 17
+        Game d = movingV(v, pos, 0, 3, 3);
+        for (const Step& s : d.legalSteps()) CHECK(!(s.from == 20 && s.to == 17));
+    }
+    // Fevga: the first checker out must pass the opponent's start point before a second leaves the corner
+    {
+        Game g = movingV(Variant::Fevga, Position::initial(Variant::Fevga), 0, 6, 5);
+        const std::vector<Play> plays = g.allTurnPlays();
+        CHECK_EQ(plays.size(), (size_t)1); // one checker 11 pips: 24/13
+        CHECK_EQ((int)plays[0].result.pts[23], 14);
+        CHECK_EQ((int)plays[0].result.pts[12], 1);
+        CHECK(g.applyStep(0, 23, 17, 6).ok);
+        CHECK(!g.applyStep(0, 23, 18, 5).ok); // a second checker may not leave yet
+        Game h = movingV(Variant::Fevga, Position::initial(Variant::Fevga), 0, 6, 5);
+        CHECK(h.applyStep(0, 23, 17, 6).ok);
+        const ActionResult r = h.applyStep(0, 23, 18, 5);
+        CHECK(!r.ok && r.error.find("başlangıç") != std::string::npos);
+        // Gülbahar has no such rule: two checkers may leave
+        Game b = movingV(Variant::Gulbahar, Position::initial(Variant::Gulbahar), 0, 6, 5);
+        CHECK_EQ(b.allTurnPlays().size(), (size_t)2); // 24/13 (24/18/13 = 24/19/13), 24/18 24/19
+    }
+    {
+        // runner on 14 (index 13), past nothing yet; 3-1: the 3 takes it past the opponent's start (index 11) to
+        // index 10; then the 1 is free for any checker
+        const Position pos = PB().at(0, 23, 14).at(0, 13, 1).at(1, 11, 15).fill();
+        Game g = movingV(Variant::Fevga, pos, 0, 3, 1);
+        std::set<int> from;
+        for (const Step& s : g.legalSteps()) from.insert(s.from);
+        CHECK(from == std::set<int>{13});
+        CHECK(g.applyStep(0, 13, 10, 3).ok);
+        std::set<int> from2;
+        for (const Step& s : g.legalSteps()) from2.insert(s.from);
+        CHECK(from2.count(23) == 1 && from2.count(10) == 1);
+        // the runner blocked: nothing at all can be played
+        const Position stuck = PB().at(0, 23, 14).at(0, 13, 1).at(1, 11, 9).at(1, 12, 1).at(1, 10, 1).at(1, 9, 1).at(1, 8, 1).at(1, 7, 1).at(1, 2, 1).fill();
+        Game s = movingV(Variant::Fevga, stuck, 0, 2, 1);
+        CHECK(s.allTurnPlays().empty());
+    }
+    // Fevga: no 6-prime with all opposing checkers behind it (in front of his start pile: indices 10..5)
+    {
+        const Position pos = PB().at(0, 23, 9).at(0, 10, 1).at(0, 9, 1).at(0, 8, 1).at(0, 7, 2).at(0, 6, 1).at(1, 11, 15).fill();
+        Game g = movingV(Variant::Fevga, pos, 0, 2, 1);
+        for (const Step& s : g.legalSteps()) CHECK(!(s.from == 7 && s.to == 5)); // 10..5 all held: illegal
+        const ActionResult r = g.applyStep(0, 7, 5, 2);
+        CHECK(!r.ok && r.error.find("Altı") != std::string::npos);
+        CHECK(g.applyStep(0, 6, 4, 2).ok); // (moving the 6-point's single checker keeps the run short)
+        // the same in Gülbahar is allowed
+        Game b = movingV(Variant::Gulbahar, pos, 0, 2, 1);
+        CHECK(b.applyStep(0, 7, 5, 2).ok);
+        // and in Fevga once one of his checkers is past the run
+        const Position past = PB().at(0, 23, 9).at(0, 10, 1).at(0, 9, 1).at(0, 8, 1).at(0, 7, 2).at(0, 6, 1).at(1, 11, 14).at(1, 3, 1).fill();
+        Game f = movingV(Variant::Fevga, past, 0, 2, 1);
+        CHECK(f.applyStep(0, 7, 5, 2).ok);
+    }
+    // bearing off and mars: no katmerli in the çeşitler (even with the rule on and his checker in my home)
+    for (Variant v : {Variant::Gulbahar, Variant::Fevga}) {
+        Rules r;
+        r.katmerliMars = true;
+        const Position pos = PB().at(0, 0, 1).at(1, 3, 5).at(1, 11, 10).fill();
+        Game g = movingV(v, pos, 0, 2, 1, r);
+        CHECK(g.applyStep(0, 0, OFF).ok);
+        CHECK(g.stage() == Stage::GameOver || g.stage() == Stage::MatchOver);
+        CHECK(g.lastResult().mars);
+        CHECK(!g.lastResult().katmerli);
+        CHECK_EQ(g.lastResult().points, 2);
+        // player 1 bears off past index 12, from his home 12..17
+        const Position p1 = PB().at(1, 13, 1).at(1, 15, 1).at(0, 20, 3).fill();
+        Game h = movingV(v, p1, 1, 4, 2);
+        CHECK(h.applyStep(1, 15, OFF, 4).ok);
+        CHECK(h.applyStep(1, 13, OFF, 2).ok);
+        CHECK(h.lastResult().winner == 1);
+    }
+}
+
+// Plays the current player's moves by the first legal step until the turn passes (or the game ends).
+void playOut(Game& g) {
+    const int p = g.current();
+    int guard = 0;
+    while (g.stage() == Stage::Moving && g.current() == p && guard++ < 64) {
+        const std::vector<Step> st = g.legalSteps();
+        if (st.empty()) {
+            CHECK(g.endTurn(p).ok);
+            break;
+        }
+        CHECK(g.applyStep(p, st[0].from, st[0].to, st[0].die).ok);
+    }
+}
+
+void testGulbaharLadder() {
+    Rules r;
+    r.variant = Variant::Gulbahar;
+    Game g(r);
+    g.setPlayer(0, "Sen", true);
+    g.setPlayer(1, "Kel Mahmut", false);
+    g.startMatch(9);
+    g.debugQueueDice(5, 2); // opening: player 0 starts
+    CHECK(g.rollOpening().ok);
+    const int seq[][2] = {{2, 1}, {2, 2}, {4, 1}, {4, 1}, {3, 3}, {5, 1}};
+    for (const auto& d : seq) { // p0: 2-1, 4-1, 3-3 (his 3rd roll: a plain double); p1: 2-2, 4-1, 5-1
+        g.debugQueueDice(d[0], d[1]);
+        CHECK(g.roll(g.current()).ok);
+        CHECK_EQ(g.ladder(), 0);
+        playOut(g);
+    }
+    CHECK_EQ(g.rollsInGame(0), 3);
+    CHECK_EQ(g.rollsInGame(1), 3);
+    CHECK_EQ(g.current(), 0);
+    // an open board for the 4th roll: 3-3 climbs 3, 4, 5, 6
+    g.debugSetPosition(PB().at(0, 23, 15).at(1, 13, 1).fill());
+    g.drainEvents();
+    g.debugQueueDice(3, 3);
+    CHECK(g.roll(0).ok);
+    CHECK_EQ(g.ladder(), 3);
+    const size_t logBefore = g.gameLog().size();
+    int rungs = 0;
+    for (int rung = 3; rung <= 6; ++rung) {
+        CHECK_EQ(g.current(), 0);
+        CHECK_EQ(g.dice().d1, rung);
+        CHECK_EQ(g.dice().leftCount(), 4);
+        for (int k = 0; k < 4; ++k) {
+            const std::vector<Step> st = g.legalSteps();
+            CHECK(!st.empty());
+            if (st.empty()) break;
+            CHECK(g.applyStep(0, st[0].from, st[0].to, st[0].die).ok);
+        }
+        ++rungs;
+        if (rung < 6) {
+            bool turned = false;
+            for (const GameEvent& e : g.drainEvents())
+                if (e.type == EvType::Roll && e.amount == 1 && e.d1 == rung + 1 && e.d2 == rung + 1) turned = true;
+            CHECK(turned);
+            CHECK(!g.canUndo()); // a rung played is final
+        }
+    }
+    CHECK_EQ(rungs, 4);
+    CHECK_EQ(g.current(), 1); // after 6-6 the turn passes
+    CHECK_EQ(g.ladder(), 0);
+    CHECK_EQ(g.gameLog().size() - logBefore, (size_t)4); // one record line per rung
+    CHECK_EQ(pipCount(g.position(), 0, Variant::Gulbahar), 15 * 24 - 4 * (3 + 4 + 5 + 6));
+    CHECK(turnNotation(g.gameLog().back()).rfind("6-6 düşeş:", 0) == 0);
+
+    // a rung that cannot be played in full ends the ladder (his single checker on index 15 holds that point)
+    g.debugSetPosition(PB().at(0, 23, 1).at(1, 15, 1).fill());
+    g.debugSetTurn(0, Stage::NeedRoll);
+    g.debugQueueDice(1, 1);
+    CHECK(g.roll(0).ok);
+    CHECK_EQ(g.ladder(), 1);
+    playOut(g);
+    CHECK_EQ(g.current(), 1);
+    CHECK_EQ((int)g.position().pts[17], 1); // the 1s: 24/20; the 2s: 20/18, then 18/16 is his point: the ladder ends
+}
+
+void testVariantAgainstReference() {
+    for (Variant v : {Variant::Gulbahar, Variant::Fevga}) {
+        okey::Rng rng(v == Variant::Fevga ? 99 : 98);
+        int compared = 0;
+        for (int n = 0; n < 4000; ++n) {
+            const Position pos = randomSameWay(rng, v);
+            if (total(pos, 0) != 15 || total(pos, 1) != 15) continue;
+            const int p = rng.range(2);
+            const int d1 = rng.range(1, 6), d2 = rng.range(1, 6);
+            // (a 6-run already trapping all of his checkers never arises in play: no step may make one)
+            if (v == Variant::Fevga && (refsw::trapsAll(pos, 0) || refsw::trapsAll(pos, 1))) continue;
+            std::set<StepKey> refFirst;
+            const std::set<std::string> refEnds = refsw::maximalEnds(pos, p, d1, d2, v, refFirst);
+            const std::vector<Play> plays = generatePlays(pos, p, d1, d2, v);
+            std::set<std::string> ends;
+            for (const Play& pl : plays) ends.insert(posKey(pl.result));
+            CHECK_EQ(ends.size(), plays.size());
+            if (ends != refEnds) {
+                reportFailure(__FILE__, __LINE__, std::string(variantName(v)) + ": generatePlays != reference (case " + std::to_string(n) + ")");
+                continue;
+            }
+            Game g = movingV(v, pos, p, d1, d2);
+            if (keys(g.legalSteps()) != refFirst) {
+                reportFailure(__FILE__, __LINE__, std::string(variantName(v)) + ": legalSteps != reference (case " + std::to_string(n) + ")");
+                continue;
+            }
+            for (const Play& pl : plays) {
+                Game t = g;
+                bool ok = true;
+                for (const Step& s : pl.steps) ok = ok && t.applyStep(p, s.from, s.to, s.die).ok;
+                CHECK(ok);
+                CHECK(t.position() == pl.result);
+            }
+            ++compared;
+        }
+        CHECK(compared > 3500);
+        std::printf("  %s reference cross-check: %d random positions\n", variantName(v), compared);
+    }
+}
+
+void testVariantFuzzAndReplay() {
+    okey::Rng rng(4242);
+    int games = 0, ladders = 0;
+    for (int n = 0; n < 600; ++n) {
+        Rules r;
+        r.variant = n % 2 ? Variant::Fevga : Variant::Gulbahar;
+        r.matchPoints = 1 + rng.range(3);
+        r.confirmTurn = rng.chance(0.3f);
+        r.doubling = rng.chance(0.4f);
+        r.openingReroll = rng.chance(0.7f);
+        Game g(r);
+        g.startMatch(7000 + (uint64_t)n);
+        int guard = 0;
+        while (g.stage() != Stage::MatchOver && guard++ < 30000) {
+            const Position& pos = g.position();
+            for (int p = 0; p < 2; ++p) {
+                CHECK_EQ(total(pos, p), 15);
+                CHECK_EQ((int)pos.bar[p], 0);
+            }
+            for (const GameEvent& e : g.drainEvents()) {
+                CHECK(e.type != EvType::Hit);
+                ladders += e.type == EvType::Roll && e.amount == 1;
+            }
+            if (g.ladder() > 0) CHECK(r.variant == Variant::Gulbahar && g.dice().d1 == g.ladder() && g.dice().d2 == g.ladder());
+            switch (g.stage()) {
+            case Stage::OpeningRoll: CHECK(g.rollOpening().ok); break;
+            case Stage::NeedRoll:
+                if (g.canDouble(g.current()) && rng.chance(0.05f)) CHECK(g.offerDouble(g.current()).ok);
+                else CHECK(g.roll(g.current()).ok);
+                break;
+            case Stage::DoubleOffered: CHECK(g.acceptDouble(g.responder()).ok); break;
+            case Stage::Moving: {
+                const int p = g.current();
+                const std::vector<Step> st = g.legalSteps();
+                if (st.empty()) {
+                    CHECK(g.endTurn(p).ok);
+                    break;
+                }
+                if (g.canUndo() && rng.chance(0.05f)) {
+                    CHECK(g.undoStep(p).ok);
+                    break;
+                }
+                const Step s = st[(size_t)rng.range((int)st.size())];
+                CHECK(g.applyStep(p, s.from, s.to, s.die).ok);
+                break;
+            }
+            case Stage::GameOver:
+                ++games;
+                CHECK(!g.lastResult().katmerli);
+                g.startNextGame();
+                break;
+            default: break;
+            }
+        }
+        CHECK_EQ(g.stage(), Stage::MatchOver);
+        ++games;
+        // the action log rebuilds the match exactly
+        if (n % 5 == 0) {
+            Game h(r);
+            h.startMatch(7000 + (uint64_t)n);
+            bool ok = true;
+            for (const LoggedAction& a : g.actionLog()) {
+                LoggedAction x;
+                ok = ok && LoggedAction::decode(a.encode(), x) && h.replay(x);
+            }
+            CHECK(ok);
+            CHECK(h.position() == g.position());
+            CHECK_EQ(h.score(0), g.score(0));
+            CHECK_EQ(h.score(1), g.score(1));
+        }
+    }
+    CHECK(ladders > 50);
+    std::printf("  çeşitler fuzz: %d games, %d ladder rungs\n", games, ladders);
+
+    // bots in every çeşit and level: complete matches, nothing rejected; replays from the log mid-match
+    for (Variant v : {Variant::Gulbahar, Variant::Fevga})
+        for (int la = 0; la < 3; ++la) {
+            Rules r;
+            r.variant = v;
+            r.matchPoints = 3;
+            r.doubling = la != 1;
+            r.confirmTurn = la == 2;
+            Game g(r);
+            g.setPlayer(0, "Sen", true);
+            g.setPlayer(1, "Kel Mahmut", false);
+            g.startMatch(300 + (uint64_t)la);
+            Bot a((BotLevel)la, 1), b(BotLevel::Hard, 2);
+            int rejected = 0, guard = 0, compared = 0;
+            while (g.stage() != Stage::MatchOver && guard++ < 50000) {
+                g.drainEvents();
+                if (g.stage() == Stage::GameOver) {
+                    g.startNextGame();
+                    continue;
+                }
+                if (guard % 97 == 0) {
+                    Game h(r);
+                    h.setPlayer(0, "Sen", true);
+                    h.setPlayer(1, "Kel Mahmut", false);
+                    h.startMatch(300 + (uint64_t)la);
+                    bool ok = true;
+                    for (const LoggedAction& x : g.actionLog()) ok = ok && h.replay(x);
+                    CHECK(ok);
+                    CHECK(h.position() == g.position());
+                    CHECK_EQ(h.ladder(), g.ladder());
+                    CHECK_EQ(h.dice().leftCount(), g.dice().leftCount());
+                    CHECK_EQ(h.gameLog().size(), g.gameLog().size());
+                    ++compared;
+                }
+                const int p = g.stage() == Stage::OpeningRoll ? 0 : (g.responder() >= 0 ? g.responder() : g.current());
+                const BotAction act = (p == 0 ? a : b).next(g, p);
+                if (!applyBotAction(g, p, act).ok) {
+                    ++rejected;
+                    applyBotAction(g, p, fallbackAction(g, p));
+                }
+            }
+            CHECK_EQ(rejected, 0);
+            CHECK_EQ(g.stage(), Stage::MatchOver);
+            CHECK(compared > 0);
+        }
+
+    // Kurt's decision time on crowded same-way positions with doubles
+    for (Variant v : {Variant::Gulbahar, Variant::Fevga}) {
+        okey::Rng r2(6);
+        double worst = 0;
+        for (int n = 0; n < 60; ++n) {
+            const Position pos = randomSameWay(r2, v);
+            if (total(pos, 0) != 15 || total(pos, 1) != 15) continue;
+            const int d = 1 + n % 6;
+            Game g = movingV(v, pos, 0, d, d);
+            if (g.legalSteps().empty()) continue;
+            Bot bot(BotLevel::Hard, 1);
+            const auto t0 = std::chrono::steady_clock::now();
+            bot.next(g, 0);
+            worst = std::max(worst, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        CHECK(worst < 300.0);
+        std::printf("  Kurt worst decision, %s doubles: %.1f ms\n", variantName(v), worst);
+    }
+}
 } // namespace
 
 int main() {
@@ -1437,6 +1964,12 @@ int main() {
     testBotCube();
     testReplay();
     testBots();
+    // çeşitler
+    testVariantStart();
+    testVariantRules();
+    testGulbaharLadder();
+    testVariantAgainstReference();
+    testVariantFuzzAndReplay();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

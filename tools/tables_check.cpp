@@ -38,6 +38,13 @@
 #include <string>
 #include <vector>
 
+namespace app { // Konken (KonkenTable.cpp): the drop point of the drag the player's next move needs; the draw stage
+bool konkenDebugDragTarget(const TableGame* t, const r3d::Renderer& r, Vector2& out);
+bool konkenDebugNeedsDraw(const TableGame* t);
+void konkenDebugBurn(TableGame* t, int seat, bool watch); // (son kalan) the seat burns when this hand ends
+int konkenDebugPlace(const TableGame* t, int seat);
+} // namespace app
+
 namespace {
 
 constexpr unsigned EV_KEY_UP = 1, EV_KEY_DOWN = 2, EV_MOUSE_UP = 5, EV_MOUSE_DOWN = 6;
@@ -82,9 +89,14 @@ struct KeyPress {
     }
 };
 
-const ui::GameKind kKinds[] = {ui::GameKind::Tavla, ui::GameKind::Tavla, ui::GameKind::Pisti, ui::GameKind::Batak, ui::GameKind::King};
-const char* const kNames[] = {"tavla", "tavla_katlama", "pisti", "batak", "king"};
-const uint64_t kSeeds[] = {1234, 1238, 1235, 1236, 1237}; // (the seeds the four games always had, then the cube's)
+const ui::GameKind kKinds[] = {ui::GameKind::Tavla, ui::GameKind::Tavla, ui::GameKind::Pisti, ui::GameKind::Batak, ui::GameKind::King,
+                               ui::GameKind::Dama, // Dama: index 5, run on its own below
+                               ui::GameKind::Bezik, // Bezik: index 6, run on its own below
+                               ui::GameKind::Altmisalti}; // Altmışaltı: index 7, run on its own below
+const char* kNames[] = {"tavla", "tavla_katlama", "pisti", "batak", "king", "dama", "bezik", "altmisalti"}; // (not const: the tavla çeşitleri rename 0 / 1)
+const uint64_t kSeeds[] = {1234, 1238, 1235, 1236, 1237, 1239, 1240, 1241}; // (Bezik: 1240, Altmışaltı: 1241) // (the seeds the four games always had, then the cube's)
+int gTavlaCesit = 0; // Tavla çeşidi of the tavla runs (main runs them again as Gülbahar and Fevga)
+int gPistiMode = 0;  // Pişti: main runs pişti again as iki kişilik (2: at the two-seat tavla table)
 
 struct Ctx {
     r3d::Renderer* R = nullptr;
@@ -115,6 +127,8 @@ std::unique_ptr<app::TableGame> startGame(const Ctx& c, int k) {
     ui::Settings st;
     st.tavlaPoints = 3;
     st.tavlaDoubling = k == 1;
+    st.tavlaCesit = kKinds[k] == ui::GameKind::Tavla ? gTavlaCesit : 0;
+    st.pistiMode = kKinds[k] == ui::GameKind::Pisti ? gPistiMode : 0;
     g->setAnimationSpeed(3.f);
     g->startMatch(st, {"Sen", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"}, kSeeds[k]);
     return g;
@@ -138,8 +152,11 @@ void frame(const Ctx& c, app::TableGame& g, Vector2 mouse) {
     EndDrawing();
 }
 
+std::string gOnly; // --only NAME: run just that game (e.g. "dama", "tavla", "101")
+
 // ---------------------------------------------------------------- 1. the mouse
 int runMouse(const Ctx& c0, int k) {
+    if (!gOnly.empty() && gOnly != kNames[k]) return 0;
     std::unique_ptr<app::TableGame> g = startGame(c0, k);
     const Ctx c = forGame(c0, g.get());
     if (!g) {
@@ -211,6 +228,7 @@ int runMouse(const Ctx& c0, int k) {
 // is pressed from a per-game cycle; the mouse never moves and never clicks. The cycles always end on Enter, so every
 // decision is made by the keyboard's cursor / focus wherever the arrows left it.
 int runKeys(const Ctx& c0, int k) {
+    if (!gOnly.empty() && gOnly != kNames[k]) return 0;
     std::unique_ptr<app::TableGame> g = startGame(c0, k);
     const Ctx c = forGame(c0, g.get());
     if (!g) {
@@ -274,10 +292,18 @@ int runKeys(const Ctx& c0, int k) {
 }
 
 // ---------------------------------------------------------------- 2b. the keyboard: the okey istaka (Table3D)
-int runOkeyKeys(const Ctx& c, bool classic) {
-    const char* name = classic ? "okey" : "101";
+// kat: 101 kuralları — katlamalı, tek kat, açma 81, geri verme cezalı ("101kat")
+int runOkeyKeys(const Ctx& c, bool classic, bool kat = false) {
+    const char* name = classic ? "okey" : kat ? "101kat" : "101";
+    if (!gOnly.empty() && gOnly != name) return 0;
     okey::RulesConfig rc;
     if (classic) rc.variant = okey::Variant::Okey;
+    if (kat) { // (101 kuralları)
+        rc.katlamali = true;
+        rc.finishMult = okey::FinishMult::Single;
+        rc.openThreshold = 81;
+        rc.penaltyReturnLeft = true;
+    }
     rc.numHands = 1;
     okey::Game game(rc);
     const char* names[4] = {"Sen", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"};
@@ -302,7 +328,7 @@ int runOkeyKeys(const Ctx& c, bool classic) {
             }
         }
     };
-    game.startMatch(classic ? 4242u : 4141u);
+    game.startMatch(classic ? 4242u : kat ? 4343u : 4141u);
     pump();
     const Vector2 mouse{-1000, -1000};
     KeyPress key;
@@ -396,7 +422,12 @@ int runOkeyKeys(const Ctx& c, bool classic) {
         ++discards;
         key.press(KEY_ENTER); // (an işle took the first Enter, or a confirm said no: Enter again)
     }
-    const std::string v = r3d::table3dtest::validate(table, true);
+    std::string v = r3d::table3dtest::validate(table, true);
+    if (kat && done) { // (101 kuralları) the rules reached the engine: the kat of the hand follows the tek kat rule
+        const okey::HandResult& r = game.lastHandResult();
+        const int want = r.winner < 0 ? 1 : game.finishMultiplier(r.finishedWithJoker, r.finishedWithPairs, r.finishedInOneGo);
+        if (r.multiplier != want || r.multiplier > 2 || game.seriesOpenNeed() < 81) v += " kat/açma rules not applied";
+    }
     if (!c.out.empty()) save(*c.rt, c.out + "/kb_" + name + "_end.png");
     const bool ok = done && failures == 0 && turns >= 3 && v.empty();
     std::printf("kb %s: hand %s, %d turns of the player, %d keys (no mouse; %d Enter, %d O, %d I, %d confirms), %d frames%s — %s\n",
@@ -404,6 +435,126 @@ int runOkeyKeys(const Ctx& c, bool classic) {
                 v.empty() ? "" : (" validate: " + v).c_str(), ok ? "ok" : "FAILED");
     table.shutdown(*c.R);
     return ok ? 0 : 1;
+}
+
+// ---------------------------------------------------------------- 3. Konken (its own runner: drags and D / A)
+// By the mouse, Kurt's plan for the player is played with the mouse: a click on the stock or the discard pile, clicks
+// on the cards to mark an opening and the "Aç" / "Geri Ver" button, and a real drag (press on the card, move, let go)
+// onto a meld (işle / take its joker) or onto the discard pile. By the keyboard: D / A draw, then arrows, Space, O, I,
+// G and Enter until the turn passes.
+// `burn` (son kalan): the player burns at the end of the first hand; the next deal brings up the panel, the mouse takes
+// "Sonuca geç" (burn 1: the bots play the rest at once) or "Hızlı izle" (burn 2: the table plays on at speed, to a
+// limit of 101); the match must be over with the player last.
+int runKonken(const Ctx& c, bool byMouse, int burn = 0) {
+    const char* name = burn == 2 ? "konken_izle" : burn ? "konken_yandi" : byMouse ? "konken" : "kb_konken";
+    if (!gOnly.empty() && gOnly != "konken") return 0;
+    std::unique_ptr<app::TableGame> g = app::makeTableGame(ui::GameKind::Konken);
+    app::TableContext ctx;
+    ctx.renderer = c.R;
+    if (!g || !g->init(ctx)) {
+        std::printf("%s: init failed\n", name);
+        return 1;
+    }
+    ui::Settings st;
+    if (burn == 2) st.konkenLimit = 101;
+    g->setAnimationSpeed(3.f);
+    g->startMatch(st, {"Sen", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"}, 1242);
+    if (burn) app::konkenDebugBurn(g.get(), 0, burn == 2);
+    Vector2 mouse{-1000, -1000};
+    KeyPress key;
+    int actions = 0, drags = 0, handsDone = 0, idle = 0, frames = 0, failures = 0, wait = 0, step = 0;
+    int dragFrame = -1; // a drag in progress: frames since the press
+    Vector2 dragFrom{}, dragTo{};
+    bool down = false;
+    std::vector<std::string> phases;
+    const std::vector<int> cyc = {KEY_RIGHT, KEY_SPACE, KEY_RIGHT, KEY_SPACE, KEY_O, KEY_I, KEY_LEFT, KEY_G, KEY_ENTER, KEY_ENTER};
+    while ((burn || handsDone < c.hands) && frames < (burn == 2 ? 400000 : 80000)) {
+        ++frames;
+        frame(c, *g, mouse);
+        const std::string ph = g->debugPhase();
+        if (!c.out.empty() && !ph.empty() && std::find(phases.begin(), phases.end(), ph) == phases.end()) {
+            phases.push_back(ph);
+            save(*c.rt, c.out + "/" + name + "_" + ph + ".png");
+        }
+        if (byMouse) {
+            if (dragFrame >= 0) { // move in six steps, then let go
+                ++dragFrame;
+                const float t = std::min(1.f, (float)dragFrame / 6.f);
+                mouse = Vector2Lerp(dragFrom, dragTo, t);
+                if (dragFrame == 8) {
+                    inject(EV_MOUSE_UP, MOUSE_BUTTON_LEFT);
+                    dragFrame = -1;
+                    ++drags;
+                    if (drags == 2 && !c.out.empty()) save(*c.rt, c.out + "/" + name + "_drag.png");
+                }
+                continue;
+            }
+            if (down) {
+                inject(EV_MOUSE_UP, MOUSE_BUTTON_LEFT);
+                down = false;
+                continue;
+            }
+            if (wait > 0) {
+                --wait;
+                continue;
+            }
+            Vector2 p, q;
+            if (g->debugHumanClick(*c.R, p)) {
+                mouse = p;
+                inject(EV_MOUSE_DOWN, MOUSE_BUTTON_LEFT);
+                if (app::konkenDebugDragTarget(g.get(), *c.R, q)) {
+                    dragFrom = p;
+                    dragTo = q;
+                    dragFrame = 0;
+                } else {
+                    down = true;
+                }
+                ++actions;
+                wait = 4;
+                idle = 0;
+            } else {
+                ++idle;
+            }
+        } else {
+            if (key.busy()) {
+                key.release();
+            } else if (wait > 0) {
+                --wait;
+            } else {
+                Vector2 p;
+                if (g->debugHumanClick(*c.R, p)) {
+                    if (app::konkenDebugNeedsDraw(g.get())) key.press(step++ % 3 == 2 ? KEY_A : KEY_D);
+                    else key.press(cyc[(size_t)(step++ % (int)cyc.size())]);
+                    ++actions;
+                    wait = 3;
+                    idle = 0;
+                } else {
+                    ++idle;
+                }
+            }
+        }
+        if (g->handOver() && !g->animating()) {
+            ++handsDone;
+            if (g->matchOver()) break;
+            g->startNextHand();
+        }
+        if (idle > 3000) {
+            std::printf("%s: STUCK (frame %d, %d actions)\n", name, frames, actions);
+            ++failures;
+            break;
+        }
+    }
+    if (!c.out.empty()) save(*c.rt, c.out + "/" + name + "_end.png");
+    bool ok = handsDone >= std::min(c.hands, 1) && actions > 5 && (!byMouse || drags > 0) && (byMouse || ui::keyboardNav());
+    if (burn) { // (son kalan) over, the player burned first: last place
+        const int place = app::konkenDebugPlace(g.get(), 0);
+        ok = ok && g->matchOver() && place == 4;
+        std::printf("%s: the player burned, finished %d.%s\n", name, place, g->matchOver() ? "" : " (match NOT over)");
+    }
+    std::printf("%s: %d hands, %d %s, %d drags, %d frames — %s\n", name, handsDone, actions, byMouse ? "mouse actions" : "keys (no mouse)",
+                drags, frames, ok ? "ok" : "FAILED");
+    g->shutdown();
+    return failures + (ok ? 0 : 1);
 }
 
 } // namespace
@@ -419,6 +570,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--cb")) cb = true;
         else if (!std::strcmp(argv[i], "--big")) big = true;
         else if (!std::strcmp(argv[i], "--no-3d")) c.no3d = true;
+        else if (!std::strcmp(argv[i], "--only") && i + 1 < argc) gOnly = argv[++i];
     }
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     SetTraceLogLevel(LOG_ERROR);
@@ -446,8 +598,45 @@ int main(int argc, char** argv) {
     if (keys) {
         for (int k = 0; k < 5; ++k) failures += runKeys(c, k);
         failures += runOkeyKeys(c, false);
+        failures += runOkeyKeys(c, false, true); // 101 kuralları: katlamalı + tek kat
         failures += runOkeyKeys(c, true);
     }
+    // Tavla çeşitleri: the tavla runs again as Gülbahar (with the cube) and Fevga, by the mouse and by the keyboard
+    for (int cesit = 1; cesit <= 2; ++cesit) {
+        gTavlaCesit = cesit;
+        const int k = cesit == 1 ? 1 : 0;
+        const char* const saved = kNames[k];
+        kNames[k] = cesit == 1 ? "tavla_gulbahar" : "tavla_fevga";
+        if (mouse) failures += runMouse(c, k);
+        if (keys) failures += runKeys(c, k);
+        kNames[k] = saved;
+    }
+    gTavlaCesit = 0;
+    // İki kişilik pişti (index 2 again): you and Kel Mahmut at the two-seat tavla table (location 1, the tavla seat's
+    // camera), by the mouse and by the keyboard
+    {
+        gPistiMode = 2;
+        const char* const saved = kNames[2];
+        kNames[2] = "pisti_ikili";
+        if (mouse) failures += runMouse(c, 2);
+        if (keys) failures += runKeys(c, 2);
+        kNames[2] = saved;
+        gPistiMode = 0;
+    }
+    // Dama (index 5): the mouse clicks a disc, then its square; the keyboard walks the discs / moves with the arrows
+    if (mouse) failures += runMouse(c, 5);
+    if (keys) failures += runKeys(c, 5);
+    // Bezik (index 6): you and Kel Mahmut at the two-seat table; the declaration panel by the mouse and the keyboard
+    if (mouse) failures += runMouse(c, 6);
+    if (keys) failures += runKeys(c, 6);
+    // Altmışaltı (index 7): you and Kel Mahmut at the two-seat table, by the mouse and by the keyboard
+    if (mouse) failures += runMouse(c, 7);
+    if (keys) failures += runKeys(c, 7);
+    // Konken: its own runner (drags onto the melds and the discard pile; D / A to draw)
+    if (mouse) failures += runKonken(c, true);
+    if (keys) failures += runKonken(c, false);
+    if (mouse) failures += runKonken(c, true, 1); // (son kalan) the player burns, then "Sonuca geç"
+    if (mouse) failures += runKonken(c, true, 2); // ... then "Hızlı izle" to the end
     UnloadRenderTexture(rt);
     R.shutdown();
     ui::unloadFonts();

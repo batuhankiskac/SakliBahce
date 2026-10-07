@@ -1,6 +1,6 @@
 # Tavla Nasıl Oynanır?
 
-Tavla iki kişiyle oynanır. Tahtada 24 hane var, her oyuncunun 15 pulu var. Pullar karşılıklı, ters yönde yürür. Amaç pullarının hepsini evine getirip rakipten önce toplamak. Biz kahvede "klasik" tavla oynarız: zar ne gösterirse o. İsteyen ayarlardan **katlama zarını** açabilir (aşağıda).
+Tavla iki kişiyle oynanır. Tahtada 24 hane var, her oyuncunun 15 pulu var. Pullar karşılıklı, ters yönde yürür. Amaç pullarının hepsini evine getirip rakipten önce toplamak. Biz kahvede "klasik" tavla oynarız: zar ne gösterirse o. İsteyen ayarlardan **katlama zarını** açabilir (aşağıda). Ayarlar'daki **Çeşit** seçeneğiyle aynı tahtada iki eski oyun da oynanır: **Gülbahar** ve **Fevga** (Moultezim). Onların farkları kendi bölümlerinde; yazılmayan her şey klasikteki gibidir.
 
 ## Diziliş ve yön
 
@@ -43,6 +43,33 @@ Ayarlardan açılırsa masada üstünde 2, 4, 8, 16, 32, 64 yazan büyük bir za
 - Oyunun ilk hamlesinden önce katlanmaz.
 - **Crawford kuralı**: bir oyuncu maçı bitirmeye bir sayı kalınca, ondan sonraki ilk oyun katlamasız oynanır. Sonraki oyunlarda katlama yine serbesttir.
 
+## Gülbahar
+
+Gülbahar, pulların tek köşeden çıkıp aynı yöne koştuğu, kırmanın olmadığı bir tavladır. Çiftler çok değerlidir: merdiven çıkar.
+
+- **Diziliş:** 15 pulunun hepsi 24. hanende (sağ üstteki köşe) başlar; rakibin 15 pulu çaprazdaki köşede, senin 12. hanende durur. İkiniz de **aynı yöne**, saat yönünün tersine yürürsünüz. Senin evin sağ alt, rakibin evi sol üst.
+- **Kırma yok:** tek pul da haneyi **tutar**. Rakibin bir pulu bile olan haneye konamazsın, ara durak olarak da kullanamazsın. Bu yüzden barda bekleyen kırık pul da olmaz.
+- **Çift merdiveni:** her oyuncunun oyundaki **ilk üç zarında** çift gelirse klasikteki gibi dört kere oynanır. **Dördüncü zarından** itibaren çift gelirse o çifti dört kere oynarsın, sonra sıradaki büyük çifti dört kere, düşeşe kadar: 3-3 attıysan dört 3, dört 4, dört 5, dört 6. Düşeş attıysan yalnızca dört 6 oynarsın.
+- Merdivenin bir basamağını **tam** oynayamazsan (dört hamlenin hepsi oynanmıyorsa) oynayabildiğin kadarını oynarsın ve merdiven orada biter; kalan basamaklar yanar, sıra rakibe geçer.
+- Pul toplamak klasikteki gibidir: 15 pulun hepsi evine girince toplarsın.
+- **Mars:** rakip hiç pul toplamadan bitirirsen 2 sayı. Gülbahar'da katmerli mars yoktur (kırık pul olmaz); ayarlardaki katmerli mars seçeneği bu çeşitte geçmez.
+- Katlama zarı açıksa Gülbahar'da da aynı kurallarla oynanır.
+
+**Seçtiklerimiz:** Kaynaklar merdivenin ne zaman başladığında birleşir ("ilk üç zardan sonra"); biz bunu her oyuncunun kendi zarlarıyla sayıyoruz (açılıştaki zar da sayılır). Basamak tam oynanmazsa bazı masalarda kalan basamakları rakip oynar; bizde kalan basamaklar yanar (Backgammon Galore'daki kural). Gülbahar'da altılı kapı yasağı ya da ilk pul kuralı yoktur.
+
+## Fevga (Moultezim)
+
+Fevga (Türkçe adıyla Moultezim, Rusların nardı da buna benzer) Gülbahar'la aynı dizilişle oynanır, ama çiftler normaldir; bunun yerine iki kuralı vardır.
+
+- **Diziliş ve yön** Gülbahar'daki gibi: 15'er pul çapraz köşelerde, ikiniz de aynı yöne (saat yönünün tersine) yürürsünüz. Senin evin sağ alt, rakibin evi sol üst.
+- **Kırma yok:** tek pul da haneyi tutar; rakibin pulu olan haneye konamaz, ara durak olarak da kullanamazsın.
+- **İlk pul kuralı:** oyunun başında ilk çıkardığın pul, **rakibin başlangıç hanesini** (senin 12. hanen) **geçmeden** köşeden ikinci bir pul çıkaramazsın. O pul yolda tıkanırsa başka pul oynayamazsın, sıran yanar.
+- **Altılı kapı yasağı:** rakibin **bütün pulları** arkasında kalacak şekilde **art arda altı hane** tutamazsın. Rakibin en az bir pulu bu altı hanenin önüne geçmişse (ya da pul toplamaya başlamışsa) altılı kapı serbesttir. Bu yasak her hamle için geçerlidir: altıncı haneyi kapatan hamle oynanmaz.
+- Çiftler klasikteki gibi dört kere oynanır. Oynayabildiğin kadar zarı, tek zar oynanıyorsa büyüğü oynamak zorunluluğu da aynıdır.
+- **Mars:** rakip hiç pul toplamadan bitirirsen 2 sayı; katmerli mars yoktur. Katlama zarı açıksa Fevga'da da oynanır.
+
+**Seçtiklerimiz:** İlk pul kuralını kaynaklardaki gibi "rakibin başlangıç hanesini geçmek" diye uyguluyoruz (yalnızca kendi çeyreğinden çıkmak yetmez). Altılı kapı yasağı yöreden yöreye değişir: kimi masada yalnızca kendi başlangıç çeyreğinde ya da rakibin başlangıç çeyreğinde yasaktır, Moultezim'in bir türünde rakibin başlangıç çeyreğinde en çok dört hane tutulur. Biz en yaygın biçimi seçtik: rakibin bütün pullarını kapatan altılı kapı, tahtanın neresinde olursa olsun yasak.
+
 ## Hamleler ve ipucu
 
 "Hamleler" düğmesi oyunun hamlelerini sol tarafta listeler: zarlar ve her pulun gittiği yer, kendi hane numaralarınla ("24/18 18/13*": yıldız pul kırdığın yerdir, "bar/22" kırık pulun girdiği, "6/çıktı" toplanan pul). "İpucu" (ya da H tuşu) ustanın yerinde ne oynayacağını gösterir.
@@ -72,3 +99,5 @@ Kahvede zarlar Farsça sayılarla söylenir: yek (1), dü (2), se (3), cihar (4)
 - https://www.kahvehaneciler.com/blog/icerik/tavla-nasil-oynanir
 - https://tavla24.de/tr/kurallar/
 - https://www.gazetevatan.com/gundem/tavla-nasil-oynanir-dizilisi-nasil-yapilir-tavla-oyun-kurallari-nelerdir-1418642
+- Gülbahar: https://www.bkgm.com/variants/GulBara.html , https://en.wikipedia.org/wiki/Gul_bara , https://eksisozluk.com/entry/73853118 (tavla türleri)
+- Fevga / Moultezim: https://www.bkgm.com/variants/Fevga.html , https://www.bkgm.com/variants/Moultezim.html , https://en.wikipedia.org/wiki/Fevga

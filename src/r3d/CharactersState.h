@@ -59,6 +59,22 @@ struct Chain {
     bool init = false;
 };
 
+// ============================================================================ Yüz: faces (CharactersFace.cpp)
+// One syllable of a line's mouth schedule (timed from the text at the speaker's own pace, like ui::Audio's murmur).
+struct MouthSyl {
+    float t0 = 0.f, dur = 0.f;  // seconds from the line's start
+    float open = 0.f;           // how far the jaw drops on its vowel (0..1)
+    float closeTo = 0.3f;       // how far it closes at its end (0 a full closure: m/b/p next, a word's end)
+    float round = 0.f;          // rounded vowel (o ö u ü): the lips narrow
+};
+// Talking: where the mouth's timing comes from.
+struct TalkMouth {
+    std::vector<MouthSyl> syl;
+    int src = 0;                // 0 not decided yet, 1 the voice (Audio::mouthOpen), 2 the text schedule
+    float open = 0.f, round = 0.f;
+    char punct = 0;             // the line's last mark ('!' '?' or 0)
+};
+
 // ============================================================================ opponents (seats 1..3)
 struct Opponent : Seated {
     int seat = 1;
@@ -74,7 +90,6 @@ struct Opponent : Seated {
     float lidClose = 0.f;     // 0..1 current blink closure
     // speech
     std::string talk;
-    std::vector<float> jawKeys;
     float talkT = -1.f, talkDur = 0.f;
     float jaw = 0.f, jawV = 0.f;
     bool talkToHuman = false;
@@ -97,6 +112,16 @@ struct Opponent : Seated {
     // computed face-part transforms
     Matrix eyeW[2]{}, lidW[2]{}, browW[2]{}, mouthW{}, lipW{};
     int lipVariant = 2;
+    // Yüz (CharactersFace.cpp): talking mouth, the expression's age, a delayed reaction (teased), mustache halves
+    TalkMouth tm;
+    Mood faceMood = Mood::Neutral;
+    float moodAge = 0.f;
+    float emph = 0.f;                  // brows flick up on loud syllables
+    Mood pendMood = Mood::Neutral;
+    float pendIn = -1.f, pendFor = 0.f;
+    int pendGest = 0;
+    float stacheAng = 0.f, stacheLift = 0.f;
+    Matrix stacheW[2]{};
     // card games (CharactersCards.cpp): the hand held fanned in the left hand
     bool cards = false;
     Matrix fanRel = MatrixIdentity();  // the fan's frame in the left hand's space (world: fanRel then arm[1].hand)
@@ -190,6 +215,7 @@ struct Cayci {
     float smile = 0.3f;
     float talkT = -1.f, talkDur = 0.f, jaw = 0.f;
     std::string talk;
+    TalkMouth tm;             // (Yüz) his lips follow his voice too
     // tray pendulum (world)
     Vector3 trayP{}, trayPrev{};
     Vector3 trayPivotF{};     // the grip, low-passed: the swing only answers to his smoothed motion
@@ -231,6 +257,17 @@ struct Watcher {
     Vector3 wristL[2]{};      // smoothed wrist targets (character-local)
     bool wristInit = false;
 };
+
+// (Konken son kalan, CharactersKonken.cpp) a regular who burned: up from his chair, he watches the rest standing a step
+// behind it (a Watcher body in his own clothes; his face parts ride on the standing head as they sat on the seated one)
+struct SeatOut {
+    bool on = false;
+    Watcher w;
+    Matrix rel[10]{};         // eyes, lids, brows, mouth, lip, mustache halves: relative to the head when he got up
+};
+
+struct Special;  // (ozelgun) özel günler: bayram clothes, team scarves, the men standing by the TV (CharactersSpecial.cpp)
+struct Ocakci;   // (Ocakçı) the tea maker at the counter (r3d/CharactersOcakci.h)
 
 struct CrowdLine {
     std::string text;
@@ -287,8 +324,38 @@ struct Cast {
     float humanWait = 0.f;               // seconds the human has been on turn
     float lastHumanEventT = -100.f;
     int submitCount = 0;                 // debug: submissions last frame
+    // --- özel günler (CharactersSpecial.cpp, ozelgun): w3d::SpecialDay, where we are (the derby's TV)
+    Special* sp = nullptr;
+    int specialDay = 0;
+    bool specialGarden = false;
+    void initSpecial(Renderer& r);
+    void freeSpecial(Renderer& r);
+    void updateSpecial(float dt);
+    void submitSpecial(Renderer& r);
+    void specialCrowdReact(int kind, Vector3 where);
+    void specialFloorPeople(std::vector<Vector3>& out) const;  // (duzelt: the standing men for the cat, x / r / z)
     long rackPokes = 0;                  // debug: fingertip-frames inside an opponent's own istaka (harness check;
                                          // only brief grazes of a few mm are expected)
+    // --- Konken son kalan (CharactersKonken.cpp): seats 1..3 that burned and left the table
+    std::array<SeatOut, 4> seatOut{};
+    void updateSeatOut(Opponent& o, float dt);
+    void submitSeatOut(Renderer& r, const Opponent& o);
+    // --- the player's own hands (CharactersPlayer.cpp): glass[0] held by PlayerHands is TeaGlass::holder 0
+    Matrix playerGlassW = MatrixIdentity();
+    int playerGlassStyle = 0;            // 0 klasik, 1 yeşil, 2 mavi, 3 mor (playerGlassMat[style])
+    Mat playerGlassMat[4]{};
+    void freePlayerGlass(Renderer& r);
+    // --- Ocakçı: the tea maker at the counter (CharactersOcakci.cpp, r3d/CharactersOcakci.h)
+    Ocakci* ocak = nullptr;
+    void initOcakci(Renderer& r);
+    void freeOcakci(Renderer& r);
+    void updateOcakci(float dt);
+    void submitOcakci(Renderer& r);
+    bool ocakTrayGate();                                          // false: the çaycı waits, the ocakçı fills his tray
+    void ocakBoyAtCounter(float dt);                              // the çaycı steps over for the handover (state 0)
+    void ocakBoyTrayHand(Key& lk, const Matrix& rootInv, float hs);  // his tray hand while the tray changes hands
+    void ocakTrayServed();                                        // a glass left the tray
+    void submitTray(Renderer& r, const Matrix& boyTrayW);         // the tray, its glasses as he filled them
 
     // --- CharactersAnim.cpp
     void setupOpponents();
@@ -309,6 +376,15 @@ struct Cast {
     void reachTo(Opponent& o, int arm, Vector3 world, int mode);
     void slamMelds(Opponent& o, int zoneSeat, bool proud);
     void restPose(Opponent& o, int arm, int variant, Key& k);
+    // --- CharactersFace.cpp (Yüz): expressions, blinking, the talking mouth, the mustache
+    void faceBody(Opponent& o, float dt);             // before poseSeated: the head goes with the expression
+    void updateFace(Opponent& o, float dt, float jawGest);
+    void startTalk(TalkMouth& tm, const std::string& text, int kind);
+    float talkOpen(TalkMouth& tm, int who, float t, float dt);  // < 0: not talking (the line is over)
+    void onLineFace(int who, const std::string& text);         // a bubble started: who was named in it?
+    void faceReact(int seat, int mood, Vector3 lookAt);        // Characters::react, each in his own way
+    void faceCrowd(int kind);                                   // the regulars at a big moment (crowdReact)
+    void moodNudge(Opponent& o, Mood m, float seconds);        // only over a calm face
     void updateGlasses(float dt);
     void updateTespih(Opponent& o, float dt);
     void emitSteam(float dt);
@@ -323,6 +399,9 @@ struct Cast {
     void gatherCards(Opponent& o, Vector3 from, Vector3 to);
     void shuffleDeck(Opponent& o, Vector3 at, float seconds);
     void dealFromDeck(Opponent& o, Vector3 at, const std::vector<Vector3>& to, float interval);
+    // --- CharactersBoard.cpp (Rakip / round 5): a dama disc or a loose card carried by hand, a card drawn into the fan
+    void carryPiece(Opponent& o, const PieceCarry& c);
+    void drawIntoFan(Opponent& o, Vector3 from, float seconds);
     // --- CharactersCrowd.cpp
     void setupCrowd();
     void updateCrowd(float dt);

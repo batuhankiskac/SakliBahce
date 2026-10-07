@@ -6,16 +6,19 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio> // DBGREPLAY
+#include <cstdio>
 
 namespace app {
 
 namespace {
 
-// Display order of a hand: black and red suits alternate (Maça, Kupa, Sinek, Karo), low to high.
+// Display order of a hand: black and red suits alternate (Maça, Kupa, Sinek, Karo), low to high. (Bezik: a card of
+// the second deck, id 52.., sorts by its face, right after its twin.)
 int displayKey(int card) {
     static const int suitOrder[4] = {0, 1, 3, 2}; // kart::Maca, Kupa, Karo, Sinek -> position
-    return suitOrder[kart::suitOf(card)] * 16 + kart::rankOf(card);
+    const int f = r3d::cardFace(card);
+    if (f >= r3d::CARD_FACES) return 4 * 16 * 2 + card; // (Konken's jokers: last)
+    return (suitOrder[kart::suitOf(f)] * 16 + kart::rankOf(f)) * 2 + card / r3d::CARD_FACES;
 }
 
 // The open dummy (eşli batak): face up on the felt in front of its owner, one short column per suit.
@@ -47,7 +50,7 @@ bool CardTableBase::init(const TableContext& ctx) {
 
 void CardTableBase::shutdown() {
     for (int s = 1; s < 4; ++s)
-        if (holding_[(size_t)s] && ctx_.characters) ctx_.characters->holdCards(s, false);
+        if (holding_[(size_t)s] && ctx_.characters) ctx_.characters->holdCards(chr(s), false);
     holding_.fill(false);
     if (built_ && ctx_.renderer) cards_.shutdown(*ctx_.renderer);
     built_ = false;
@@ -176,7 +179,7 @@ void CardTableBase::startDeal(int dealer, bool shuffle) {
 r3d::CardPose CardTableBase::deckSlot(int dealer, int i) const {
     r3d::CardPose p = r3d::cardlayout::deck(dealer, i);
     const DealAnim& d = deal_;
-    if (!d.on || !d.shuffle || now_ >= d.shuffleEnd || now_ < d.start) return p;
+    if (!d.on || !d.shuffle || now_ >= d.shuffleEnd || now_ < d.start) return layPose(p);
     const float u = (now_ - d.start) / std::max(1e-4f, d.shuffleEnd - d.start);
     const int n = std::max(1, d.base + d.total);
     const float sd = (i % 2) ? 1.f : -1.f;
@@ -188,16 +191,16 @@ r3d::CardPose CardTableBase::deckSlot(int dealer, int i) const {
         h.rot = QuaternionMultiply(QuaternionFromAxisAngle({0, 1, 0}, sd * 12.f * DEG2RAD), h.rot);
         return h;
     };
-    if (u < 0.18f) return half();
+    if (u < 0.18f) return layPose(half());
     if (u < 0.68f) { // card i falls back at its turn (bottom first)
         const float fall = 0.20f + 0.44f * (float)i / (float)n;
-        return u < fall ? half() : p;
+        return layPose(u < fall ? half() : p);
     }
     if (u > 0.74f && u < 0.90f && i >= n / 2) { // the cut: the top half lifted off to the side, then back on
         p.pos = Vector3Add(p.pos, Vector3Scale(right, 0.085f));
         p.pos.y -= r3d::CARD_T * (float)(n / 2);
     }
-    return p;
+    return layPose(p);
 }
 
 bool CardTableBase::dealPose(int c, r3d::CardPose& p) const {
@@ -209,7 +212,7 @@ bool CardTableBase::dealPose(int c, r3d::CardPose& p) const {
         p = deckSlot(d.dealer, d.base + d.total - 1 - d.order[(size_t)c]);
         return true;
     }
-    p = s >= 0 ? r3d::cardlayout::dealtPile(s, d.pile[(size_t)c]) : d.extra[(size_t)c];
+    p = s >= 0 ? layPose(r3d::cardlayout::dealtPile(s, d.pile[(size_t)c])) : d.extra[(size_t)c];
     return true;
 }
 
@@ -220,7 +223,7 @@ void CardTableBase::updateDeal() {
         d.shuffled = true;
         sound(ui::Sfx::CardShuffle);
         if (d.dealer != 0 && ctx_.characters)
-            ctx_.characters->shuffleDeck(d.dealer, r3d::cardlayout::deck(d.dealer, 20).pos, 1.45f);
+            ctx_.characters->shuffleDeck(chr(d.dealer), layPoint(r3d::cardlayout::deck(d.dealer, 20).pos), 1.45f);
     }
     if (!d.handsStarted && now_ >= d.dealStart - 0.25f / speed_) {
         d.handsStarted = true;
@@ -229,10 +232,10 @@ void CardTableBase::updateDeal() {
             for (int c = 0; c < r3d::CARD_COUNT; ++c)
                 if (d.leave[(size_t)c] >= 0.f) {
                     const int s = d.seat[(size_t)c];
-                    to[(size_t)d.order[(size_t)c]] = s >= 0 ? r3d::cardlayout::dealtPile(s, 0).pos : d.extra[(size_t)c].pos;
+                    to[(size_t)d.order[(size_t)c]] = s >= 0 ? layPoint(r3d::cardlayout::dealtPile(s, 0).pos) : d.extra[(size_t)c].pos;
                 }
             // (Characters runs at the animation speed: its interval is the one at speed 1)
-            ctx_.characters->dealCards(d.dealer, r3d::cardlayout::deck(d.dealer, d.base + d.total).pos, to, d.interval * speed_);
+            ctx_.characters->dealCards(chr(d.dealer), layPoint(r3d::cardlayout::deck(d.dealer, d.base + d.total).pos), to, d.interval * speed_);
         }
     }
     // the cards leaving the deck: a soft slide for every other one
@@ -250,6 +253,30 @@ void CardTableBase::updateDeal() {
 // The regulars hold their hand fanned in the left hand (picked up off the felt after a deal) and put it down when it
 // is empty or laid open (eşli batak's dummy).
 void CardTableBase::updateHolding() {
+    // the player's own fan: the left hand holds it (r3d::PlayerHands, through ctx_.handCue)
+    {
+        const bool picked = !deal_.on || deal_.picked[0];
+        const bool want = !handOf(0).empty() && picked;
+        if (want != holding_[0]) {
+            holding_[0] = want;
+            if (ctx_.handCue) {
+                const Matrix F = r3d::cardlayout::humanFanFrame();
+                r3d::CardPose fp;
+                fp.pos = {F.m12, F.m13, F.m14};
+                fp.rot = QuaternionFromMatrix(F);
+                fp = tableFrame().eyePose(fp);
+                Matrix W = QuaternionToMatrix(fp.rot);
+                W.m12 = fp.pos.x;
+                W.m13 = fp.pos.y;
+                W.m14 = fp.pos.z;
+                r3d::HandCue c;
+                c.kind = r3d::HandCueKind::CardFan;
+                c.on = want;
+                c.frame = W;
+                ctx_.handCue(c);
+            }
+        }
+    }
     if (!ctx_.characters) return;
     for (int s = 1; s < 4; ++s) {
         const bool picked = !deal_.on || deal_.picked[(size_t)s];
@@ -257,10 +284,10 @@ void CardTableBase::updateHolding() {
         if (want == holding_[(size_t)s]) continue;
         holding_[(size_t)s] = want;
         if (want && deal_.on && deal_.leave[(size_t)handOf(s).front()] >= 0.f) {
-            const Vector3 at = r3d::cardlayout::dealtPile(s, 0).pos;
-            ctx_.characters->holdCards(s, true, &at);
+            const Vector3 at = layPoint(r3d::cardlayout::dealtPile(s, 0).pos);
+            ctx_.characters->holdCards(chr(s), true, &at);
         } else {
-            ctx_.characters->holdCards(s, want);
+            ctx_.characters->holdCards(chr(s), want);
         }
     }
 }
@@ -270,21 +297,56 @@ void CardTableBase::playFromHand(int seat, int card, const r3d::CardPose& p, boo
     const float delay = hand ? w3d::BOT_GIVE_LEAD : 0.f;
     cards_.place(card, p, true, delay, toss ? 0.09f : 0.06f);
     if (hand) {
-        if (holding_[(size_t)seat]) ctx_.characters->playCard(seat, p.pos, toss);
-        else ctx_.characters->reach(seat, p.pos, 1);
+        if (holding_[(size_t)seat]) ctx_.characters->playCard(chr(seat), p.pos, toss);
+        else ctx_.characters->reach(chr(seat), p.pos, 1);
     }
     soundAt(toss ? ui::Sfx::CardSnap : ui::Sfx::CardPlace, (delay + 0.42f) / speed_);
 }
 
 void CardTableBase::onPlayed(int seat, int card, bool bot) {
-    const r3d::CardPose p = r3d::cardlayout::trick(seat, (int)shown_.size() + (int)(rng_.next() % 7));
+    const r3d::CardPose p = layPose(r3d::cardlayout::trick(seat, (int)shown_.size() + (int)(rng_.next() % 7)));
     shown_.push_back({seat, card});
     if (bot && seat != 0) {
         playFromHand(seat, card, p, rng_.chance(0.25f));
     } else {
-        cards_.place(card, p, true, bot ? w3d::BOT_GIVE_LEAD : 0.f, 0.06f);
-        soundAt(ui::Sfx::CardPlace, ((bot ? w3d::BOT_GIVE_LEAD : 0.f) + 0.42f) / speed_);
+        // the player's card waits for the player's own hand (PlayerHands), unless it was dragged out already
+        const bool dragged = seat == 0 && card == handDragged_;
+        const float lead = bot ? w3d::BOT_GIVE_LEAD
+                         : seat == 0 && !dragged && ctx_.handLead ? ctx_.handLead(r3d::HandCueKind::Give) : 0.f;
+        cards_.place(card, p, true, lead, 0.06f);
+        soundAt(ui::Sfx::CardPlace, (lead + 0.42f) / speed_);
+        if (seat == 0) handCueCard(card, lead);
     }
+}
+
+// Tells the player's hand about the player's card `card` now on its way (lead: how long it waits for the fingers), or
+// dragged by the mouse (lead < 0: followed while the drag lasts).
+void CardTableBase::handCueCard(int card, float lead) {
+    if (!ctx_.handCue || card < 0 || card >= r3d::CARD_COUNT) return;
+    r3d::HandCue c;
+    c.style = 1;
+    c.lead = std::max(0.f, lead);
+    // (the grip: the card's near edge, a little toward its right corner)
+    auto grip = [](const r3d::CardPose& p) {
+        return Vector3Transform({r3d::CARD_W * 0.22f, 0.f, r3d::CARD_H * 0.40f}, r3d::cardMatrix(p));
+    };
+    if (lead < 0.f) {
+        c.kind = r3d::HandCueKind::Carry;
+        c.where = [this, card, grip](Vector3& out) {
+            if (press_ != card || !dragging_) return false;
+            out = grip(cards_.pose(card));
+            return true;
+        };
+    } else {
+        c.kind = r3d::HandCueKind::Give;
+        c.where = [this, card, grip](Vector3& out) {
+            if (!cards_.flying(card)) return false;
+            out = grip(cards_.pose(card));
+            return true;
+        };
+    }
+    c.from = grip(cards_.pose(card));
+    ctx_.handCue(c);
 }
 
 void CardTableBase::onTrickWon(int winner, const std::vector<int>& cards) {
@@ -299,10 +361,10 @@ void CardTableBase::sweepNow() {
     const bool hand = sweepTo_ != 0 && ctx_.characters;
     const float lead = hand ? 0.30f : 0.05f;
     for (size_t i = 0; i < shown_.size(); ++i)
-        cards_.place(shown_[i].card, r3d::cardlayout::gathered(sweepTo_, (int)i), true, lead + 0.03f * (float)i, 0.004f);
+        cards_.place(shown_[i].card, layPose(r3d::cardlayout::gathered(sweepTo_, (int)i)), true, lead + 0.03f * (float)i, 0.004f);
     if (hand) {
         const int h = (int)won_[(size_t)sweepTo_].size();
-        ctx_.characters->gatherCards(sweepTo_, {0.f, w3d::TABLE_Y, 0.f}, r3d::cardlayout::wonPile(sweepTo_, h).pos);
+        ctx_.characters->gatherCards(chr(sweepTo_), layPoint({0.f, w3d::TABLE_Y, 0.f}), layPoint(r3d::cardlayout::wonPile(sweepTo_, h).pos));
     }
     soundAt(ui::Sfx::CardGather, (lead + 0.2f) / speed_);
     sweepAt_ = -1.f;
@@ -313,7 +375,7 @@ void CardTableBase::sweepTo(int seat, const std::vector<int>& cards, Vector3 fro
     const bool hand = seat != 0 && ctx_.characters;
     if (hand) {
         const int h = (int)won_[(size_t)std::clamp(seat, 0, 3)].size();
-        ctx_.characters->gatherCards(seat, from, r3d::cardlayout::wonPile(seat, h).pos);
+        ctx_.characters->gatherCards(chr(seat), from, layPoint(r3d::cardlayout::wonPile(seat, h).pos));
     }
     soundAt(ui::Sfx::CardGather, (hand ? 0.45f : 0.05f) / speed_);
     collectTo(seat, cards, hand ? 0.45f : 0.f);
@@ -324,7 +386,7 @@ void CardTableBase::collectTo(int seat, const std::vector<int>& cards, float del
     for (size_t i = 0; i < cards.size(); ++i) {
         won_[(size_t)seat].push_back(cards[i]);
         const int h = (int)won_[(size_t)seat].size() - 1;
-        cards_.place(cards[i], r3d::cardlayout::wonPile(seat, h), true, delay + 0.012f * (float)i, 0.012f);
+        cards_.place(cards[i], layPose(r3d::cardlayout::wonPile(seat, h)), true, delay + 0.012f * (float)i, 0.012f);
     }
     soundAt(ui::Sfx::CardPlace, (delay + 0.35f) / speed_);
 }
@@ -335,10 +397,10 @@ bool CardTableBase::tableBusy() const {
 
 bool CardTableBase::animating() const { return tableBusy(); }
 
-int CardTableBase::activeSeat() const { return actor(); }
+int CardTableBase::activeSeat() const { return chr(actor()); } // (Rakip: the Characters seat)
 
 void CardTableBase::say(int seat, const std::string& line, bool important) {
-    if (ctx_.characters) ctx_.characters->chat(seat, line, important);
+    if (ctx_.characters) ctx_.characters->chat(chr(seat), line, important); // (Rakip: chr)
 }
 
 void CardTableBase::sound(ui::Sfx s) {
@@ -424,8 +486,6 @@ void CardTableBase::update(float dt, const Camera3D& cam, Vector2 mouse, bool hu
         }
     }
     layoutAll();
-    { static bool dbgDone = false; // DBGREPLAY
-      if (matchOver() && !dbgDone) { dbgDone = true; std::string t; for (auto& l : scoreLines()) t += l + " | "; std::fprintf(stderr, "[dbg] final%s: %s\n", replay_ ? " (replay)" : "", t.c_str()); } }
 }
 
 std::vector<int> CardTableBase::playableInOrder() const {
@@ -488,11 +548,15 @@ void CardTableBase::mouseCards(Vector2 mouse, bool canClick) {
     }
     if (press_ < 0) return;
     hover_ = press_;
-    if (!dragging_ && Vector2Distance(mouse, pressAt_) > 14.f) dragging_ = true;
+    if (!dragging_ && Vector2Distance(mouse, pressAt_) > 14.f) {
+        dragging_ = true;
+        handCueCard(press_, -1.f); // the player's hand follows the dragged card
+    }
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) return;
     // released: a click, or a drag let go over the felt (above the fan)
     const int c = press_;
     const bool drop = !dragging_ || pressAt_.y - mouse.y > 90.f;
+    handDragged_ = dragging_ ? c : -1; // (a dragged card needs no reach: the hand has it)
     press_ = -1;
     dragging_ = false;
     if (!drop) return;
@@ -513,7 +577,7 @@ void CardTableBase::layoutAll() {
         const bool open = faceUpHand(s) && s != 0;
         std::sort(h.begin(), h.end(), [](int a, int b) { return displayKey(a) < displayKey(b); });
         Matrix fan;
-        const bool held = s != 0 && !open && holding_[(size_t)s] && ctx_.characters && ctx_.characters->cardFan(s, fan);
+        const bool held = s != 0 && !open && holding_[(size_t)s] && ctx_.characters && ctx_.characters->cardFan(chr(s), fan);
         // (the cards still on the felt from the deal are not in the fan yet)
         std::vector<int> inHand;
         for (int c : h)
@@ -535,13 +599,17 @@ void CardTableBase::layoutAll() {
                 cards_.setGlow(c, 0.f);
                 continue;
             }
+            if (s == 0 && gameLaysOwnHand()) continue; // (Konken: the game lays the player's fan out in layoutExtra)
             const int i = (int)(std::find(inHand.begin(), inHand.end(), c) - inHand.begin());
             float delay = dealDelay_[(size_t)c];
             dealDelay_[(size_t)c] = 0.f;
             if (held) {
                 cards_.follow(c, r3d::cardlayout::fanCard(fan, i, n));
             } else {
-                const r3d::CardPose p = open ? dummyPose(s, c, h) : r3d::cardlayout::hand(s, i, n);
+                // (the table frame: the player's fan stays by the eye, the rest is laid on the felt)
+                const r3d::CardPose p = open ? layPose(dummyPose(s, c, h))
+                                        : s == 0 ? tableFrame().eyePose(r3d::cardlayout::hand(s, i, n))
+                                                 : layPose(r3d::cardlayout::hand(s, i, n));
                 if (!cards_.visible(c)) cards_.place(c, p, false);
                 else if (s == 0 && press_ == c && dragging_ && ctx_.renderer) {
                     // dragged: the card follows the mouse a hand's breadth over the felt
@@ -550,10 +618,11 @@ void CardTableBase::layoutAll() {
                     if (ray.direction.y < -1e-3f) {
                         const float t = (y - ray.position.y) / ray.direction.y;
                         r3d::CardPose dpose;
-                        dpose.pos = Vector3Add(ray.position, Vector3Scale(ray.direction, t));
+                        // (kept off the player's side of the table in layout space, then back on the real table)
+                        dpose.pos = tableFrame().toLayout(Vector3Add(ray.position, Vector3Scale(ray.direction, t)));
                         dpose.pos.z = std::min(dpose.pos.z, 0.52f);
                         dpose.rot = r3d::cardStanding(0.f, 40.f, true);
-                        cards_.follow(c, dpose);
+                        cards_.follow(c, layPose(dpose));
                     }
                 } else {
                     cards_.place(c, p, true, delay, 0.04f);
@@ -612,6 +681,10 @@ void CardTableBase::layoutAll() {
                 cards_.setTilt(c, 0.f);
             }
     layoutExtra();
+    // (layoutExtra may have sent cards to a won pile just now, e.g. Pişti's capture via sweepTo: they stay visible)
+    for (auto& w : won_)
+        for (int c : w)
+            if (c >= 0 && c < r3d::CARD_COUNT) placed[(size_t)c] = true;
     for (int c = 0; c < r3d::CARD_COUNT; ++c)
         if (!placed[(size_t)c] && !extraPlaced_[(size_t)c]) cards_.hide(c);
     extraPlaced_.fill(false);
@@ -636,11 +709,31 @@ void CardTableBase::placeExtra(int card, const r3d::CardPose& p, bool animate, f
                                              Vector3Scale(w3d::SEAT_DIR[deal_.dealer], -0.07f)));
         c.pos.y += 0.002f;
         c.rot = r3d::cardFlat(0.f, true);
-        cards_.place(card, c, true, 0.f, 0.03f);
+        cards_.place(card, layPose(c), true, 0.f, 0.03f);
         return;
     }
     if (!cards_.visible(card)) cards_.place(card, p, false);
     else cards_.place(card, p, animate, delay, 0.05f);
+}
+
+// (Round 5) A card drawn off the stock, by the player or by a regular's hand.
+void CardTableBase::drawFromStock(int seat, int card, float stagger) {
+    if (card < 0 || card >= r3d::CARD_COUNT || !cards_.visible(card)) return;
+    const r3d::CardPose from = cards_.pose(card);
+    if (seat == 0 || seat > 3 || !ctx_.characters) { // (stays put this frame; layoutAll flies it to the fan next)
+        placeExtra(card, from, false);
+        return;
+    }
+    r3d::CardPose to = layPose(r3d::cardlayout::hand(seat, 0, 1));
+    Matrix fan;
+    const int n = std::max(1, (int)handOf(seat).size());
+    if (holding_[(size_t)seat] && ctx_.characters->cardFan(chr(seat), fan)) to = r3d::cardlayout::fanCard(fan, n / 2, n);
+    const float lead = w3d::BOT_TAKE_LEAD + stagger;
+    placeExtra(card, to, true, lead);
+    if (stagger <= 0.f) {
+        const float fly = std::clamp(0.22f + Vector3Distance(from.pos, to.pos) * 0.55f, 0.25f, 0.75f); // (Cards3D::place)
+        ctx_.characters->drawCard(chr(seat), from.pos, fly);
+    }
 }
 
 void CardTableBase::submit(r3d::Renderer& r) { cards_.submit(r); }
@@ -666,16 +759,25 @@ void CardTableBase::restoreView() {
     won_ = wonPiles();
     for (int s = 0; s < 4; ++s)
         for (size_t i = 0; i < won_[(size_t)s].size(); ++i)
-            cards_.place(won_[(size_t)s][i], r3d::cardlayout::wonPile(s, (int)i), false);
+            cards_.place(won_[(size_t)s][i], layPose(r3d::cardlayout::wonPile(s, (int)i)), false);
     for (const auto& sc : trickOnTable()) {
-        cards_.place(sc.second, r3d::cardlayout::trick(sc.first, (int)shown_.size() + (int)(rng_.next() % 7)), false);
+        cards_.place(sc.second, layPose(r3d::cardlayout::trick(sc.first, (int)shown_.size() + (int)(rng_.next() % 7))), false);
         shown_.push_back({sc.first, sc.second});
     }
     layoutAll(); // the hands (and layoutExtra's cards) appear in place: nothing was visible
 }
 
 void CardTableBase::drawButtons(Vector2 mouse, bool aiSeat) {
-    hud_.buttons(mouse, {"İpucu"}, {!aiSeat && !replay_ && hintAvailable()}, {false}, aiSeat && !replay_);
+    {   // "İpucu", then the game's own (Altmışaltı: gameButtons())
+        std::vector<std::string> labels{"İpucu"};
+        std::vector<bool> on{!aiSeat && !replay_ && hintAvailable()}, glow{false};
+        for (const GameButton& b : gameButtons()) {
+            labels.push_back(b.label);
+            on.push_back(b.enabled && !aiSeat && !replay_);
+            glow.push_back(b.glow);
+        }
+        hud_.buttons(mouse, labels, on, glow, aiSeat && !replay_);
+    }
     std::string help;
     if (replay_) help = "Maç tekrarı  ·  Esc menü";
     else if (hud_.buttonFocused()) help = "Tab / Shift+Tab düğme seç  ·  Enter / Boşluk bas  ·  Oklar kartlara dön  ·  Esc menü";

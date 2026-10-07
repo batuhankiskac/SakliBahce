@@ -309,12 +309,12 @@ void Tavla3D::setFrame(const Matrix& frame) {
     frameInv_ = MatrixInvert(frame);
 }
 
-void Tavla3D::moveChecker(int player, int from, int to, float delay) {
+int Tavla3D::moveChecker(int player, int from, int to, float delay) {
     // the top checker of `player` at `from`
     int best = -1;
     for (int i = 0; i < CHECKERS; ++i)
         if (chk_[i].player == player && chk_[i].where == from && (best < 0 || chk_[i].slot > chk_[best].slot)) best = i;
-    if (best < 0) return;
+    if (best < 0) return -1;
     int n = 0;
     for (const Checker& c : chk_)
         if (c.where == to && c.player == player) ++n;
@@ -327,6 +327,26 @@ void Tavla3D::moveChecker(int player, int from, int to, float delay) {
     c.delay = delay;
     c.hop = 0.035f;
     c.dur = std::clamp(0.25f + Vector3Distance(c.from, c.to) * 0.9f, 0.3f, 0.65f);
+    return best;
+}
+
+bool Tavla3D::checkerMoving(int i, Vector3& world) const {
+    if (i < 0 || i >= CHECKERS || chk_[i].t >= 1.f) return false;
+    world = toWorld(Vector3Add(chk_[i].cur, {0.f, CH, 0.f}));
+    return true;
+}
+
+bool Tavla3D::diceThrowPoint(Vector3& world, int player) const {
+    Vector3 sum{0, 0, 0};
+    int n = 0;
+    for (const Die& d : dice_)
+        if (d.visible && d.t < 1.f && (d.from.z > 0.f) == (player == 0)) { // (player 0 throws from the near side)
+            sum = Vector3Add(sum, d.from);
+            ++n;
+        }
+    if (n == 0) return false;
+    world = toWorld(Vector3Scale(sum, 1.f / (float)n));
+    return true;
 }
 
 void Tavla3D::setPosition(const std::array<int8_t, 24>& pts, const std::array<int8_t, 2>& bar,

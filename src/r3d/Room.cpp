@@ -105,6 +105,9 @@ bool Room::init(Renderer& r, uint64_t seed) {
     I.initWeather();
     I.initCat();
     I.initDaylight();
+    I.initSpecial();  // (ozelgun) özel günler, the passing shower
+    I.garden = I.resolveGarden();
+    if (I.garden) I.initGarden();
     for (Impl::Lamp& L : I.lamps) L.dust = r.makeMat(Color{255, 212, 158, 26}, I.texDust, 0.f, 1.f, 1.f);
     {
         MeshBuilder q;
@@ -137,12 +140,14 @@ bool Room::init(Renderer& r, uint64_t seed) {
         localtime_r(&now, &lt);
         I.lastDay = lt.tm_yday;
     }
-    I.warmUpSmoke();
+    if (!I.garden) I.warmUpSmoke();
     I.ready = true;
     return true;
 }
 
 void Room::Impl::freeAll(Renderer& r) {
+    freeSpecial(r);  // (ozelgun)
+    freeGarden(r);
     freeDaylight(r);
     freeWeather(r);
     freeCat(r);
@@ -200,6 +205,7 @@ void Room::setScoreboard(const std::string& title, const std::vector<std::string
 }
 void Room::setTitleMode(bool on) { impl_->title = on; }
 void Room::setTavlaFocus(bool on) { impl_->tavlaFocus = on; }
+void Room::setFloorPeople(const std::vector<Vector3>& people) { impl_->floorPeople = people; } // (duzelt: the cat)
 bool Room::consumeCatMeow(Vector3& where) {
     if (!impl_->catMeowed) return false;
     impl_->catMeowed = false;
@@ -224,6 +230,13 @@ void Room::update(float dt) {
     I.updateSmoke(dt);
     I.updateWeather(dt);
     I.updateCat(dt);
+    I.updateSpecial(dt);  // (ozelgun)
+    I.venueCheckT -= dt;
+    if (I.venueCheckT <= 0.f) {  // otomatik: the clock, the calendar and the weather move on
+        I.venueCheckT = 5.f;
+        I.evalVenue();
+    }
+    if (I.garden) I.updateGarden(dt);
     if (I.scoreDirty) {
         drawScoreboardCanvas(I.cvScore, I.scoreTitle, I.scoreLines, I.seed + (uint32_t)I.scoreLines.size() * 31u);
         I.scoreDirty = false;
@@ -238,8 +251,14 @@ void Room::submit(Renderer& r) {
     if (!I.ready) return;
     for (const Impl::Puff& p : I.pending) r.emitSmoke(p.pos, p.p);
     I.pending.clear();
+    I.submitSpecial(r);  // (ozelgun) the day's decorations, inside or in the garden
+    if (I.garden) {
+        I.submitGarden(r);
+        return;
+    }
     I.submitLights(r);
-    for (const Impl::Static& s : I.statics) r.submit(&s.mesh, s.mat, s.xf, s.flags);
+    for (const Impl::Static& s : I.statics)
+        if (s.venues & 1u) r.submit(&s.mesh, s.mat, s.xf, s.flags);
     I.submitLamps(r);
     I.submitProps(r);
     I.submitWeather(r);
@@ -298,7 +317,7 @@ void Room::Impl::updateProps(float dt) {
     tv.step(dt);
     if (tv.goalEvent) {
         tv.goalEvent = false;
-        tvGoal = true;
+        tvGoal = !garden || specialTvOut();  // (the TV is inside; ozelgun: on a derby night one is out in the garden)
     }
     tvRedraw -= dt;
     if (tvRedraw <= 0.f) {
@@ -470,11 +489,11 @@ void Room::Impl::updateSmoke(float dt) {
             emit(Vector3Add(e.pos, Vector3{rng.uniform(-0.003f, 0.003f), 0.f, rng.uniform(-0.003f, 0.003f)}), p);
         }
     }
-    ambientAcc += dt * (title ? 7.f : 5.5f);
+    ambientAcc += dt * (garden ? 0.8f : (title ? 7.f : 5.5f));
     while (ambientAcc >= 1.f) {
         ambientAcc -= 1.f;
         float r = rng.uniform();
-        int kind = r < 0.55f ? 0 : (r < 0.82f ? 1 : 2);
+        int kind = garden ? 2 : (r < 0.55f ? 0 : (r < 0.82f ? 1 : 2));  // out in the garden the air carries it away
         Vector3 p = ambientPos(rng, kind, bgLampPos());
         SmokeParams sp = ambientPuff(rng, kind, time);
         // the fan stirs the smoke under the ceiling
@@ -603,7 +622,9 @@ void Room::Impl::submitLamps(Renderer& r) {
         r.submit(&shadeIn, lit ? &mShadeIn : &mCeramic, M, 0);
         if (lit) r.submit(&bulbMesh, &mBulb, M, 0);
         float top = L.bulb.y + 0.165f * s;
-        Matrix C = MatrixMultiply(MatrixMultiply(MatrixScale(1.f, CY - top, 1.f), MatrixTranslate(L.bulb.x, top, L.bulb.z)), L.xf);
+        // (in the garden the counter's lamp hangs from the ocak's little roof, the others from the vine trellis)
+        const float cordTop = garden && L.small ? 2.42f : CY;
+        Matrix C = MatrixMultiply(MatrixMultiply(MatrixScale(1.f, cordTop - top, 1.f), MatrixTranslate(L.bulb.x, top, L.bulb.z)), L.xf);
         r.submit(&cordMesh, &mPaint, C, 0);
         if (L.level < 0.02f) continue;
         const bool key = (int)i == keyLamp();
@@ -612,10 +633,14 @@ void Room::Impl::submitLamps(Renderer& r) {
         // light shaft facing the camera about the vertical axis
         Vector3 rim = Vector3Transform(Vector3Add(L.bulb, Vector3{0, -0.075f * s, 0}), L.xf);
         float yaw = std::atan2(cam.x - rim.x, cam.z - rim.z);
-        L.dust.material.maps[MATERIAL_MAP_ALBEDO].color.a = (unsigned char)std::clamp(26.f * L.level * (key ? 0.8f : 1.f), 0.f, 255.f);
-        r.submit(&dustMeshes[i], &L.dust, MatrixMultiply(MatrixRotateY(yaw), translate(rim)), Transparent | Additive | DoubleSided | NoFog);
+        // (out in the garden the air is clear: only a faint cone at night)
+        const float airK = garden ? 0.4f * (1.f - dayK) : 1.f;
+        L.dust.material.maps[MATERIAL_MAP_ALBEDO].color.a = (unsigned char)std::clamp(26.f * L.level * (key ? 0.8f : 1.f) * airK, 0.f, 255.f);
+        if (airK > 0.02f)
+            r.submit(&dustMeshes[i], &L.dust, MatrixMultiply(MatrixRotateY(yaw), translate(rim)), Transparent | Additive | DoubleSided | NoFog);
     }
     for (const Mote& m : motes) {
+        if (garden) break;  // (no dust motes in the open air)
         const Lamp& L = lamps[m.lamp];
         float tw = 0.5f + 0.5f * std::sin(m.tw * 2.3f + m.p.x * 40.f);
         r.submitGlow(m.p, 0.0045f, Color{255, 226, 180, 255}, (0.25f + 0.45f * tw) * L.level);
@@ -623,13 +648,15 @@ void Room::Impl::submitLamps(Renderer& r) {
 }
 
 void Room::Impl::submitProps(Renderer& r) {
+    const bool in = !garden;  // the room's own things; the garden has its own chairs (RoomGarden.cpp)
     // chairs
-    for (const Chair& c : chairs)
-        r.submit(&chairMesh, &mVarnish, MatrixMultiply(MatrixRotateY((c.yaw + c.yawOff) * DEG2RAD), translate(Vector3Add(c.pos, c.off))), CastShadow);
+    if (in)
+        for (const Chair& c : chairs)
+            r.submit(&chairMesh, &mVarnish, MatrixMultiply(MatrixRotateY((c.yaw + c.yawOff) * DEG2RAD), translate(Vector3Add(c.pos, c.off))), CastShadow);
     // ceiling fan
-    r.submit(&fanBlades, &mVarnish, MatrixMultiply(MatrixRotateY(fanAngle), translate(fanPos)), 0);
+    if (in) r.submit(&fanBlades, &mVarnish, MatrixMultiply(MatrixRotateY(fanAngle), translate(fanPos)), 0);
     // clock hands (real local time)
-    {
+    if (in) {
         std::time_t now = std::time(nullptr);
         std::tm lt{};
         localtime_r(&now, &lt);
@@ -675,16 +702,17 @@ void Room::Impl::submitProps(Renderer& r) {
     // tea glasses on the background tables and the counter
     for (const GlassSet& g : glassSets) r.submit(&g.glass, &mGlass, translate(g.at), Transparent | DoubleSided);
     // window panes (condensation) and the painted lettering
-    for (const Pane& p : panes) r.submit(&p.mesh, p.mat, translate(p.at), Transparent | DoubleSided);
+    if (in)
+        for (const Pane& p : panes) r.submit(&p.mesh, p.mat, translate(p.at), Transparent | DoubleSided);
     // bead curtain swaying in the draught
-    for (int g = 0; g < 3; ++g) {
+    for (int g = 0; g < (in ? 3 : 0); ++g) {
         float a = std::sin(time * (0.8f + 0.13f * g) + g * 1.7f) * 1.1f + std::sin(time * 2.3f + g) * 0.3f + sweepLevel * 2.f * std::sin(time * 3.f + g);
         float b = std::sin(time * 0.6f + g * 2.1f) * 0.8f;
         Matrix M = MatrixMultiply(MatrixMultiply(MatrixRotateZ(a * DEG2RAD), MatrixRotateX(b * DEG2RAD)), translate(curtainPivot));
         r.submit(&curtainMesh[g], &mVarnish, M, 0);
     }
     // headlight sweep across the ceiling
-    if (sweepLevel * (1.f - dayK) > 0.01f) {
+    if (in && sweepLevel * (1.f - dayK) > 0.01f) {
         float zc = 0.f, best = -1.f;
         for (float zw : {-1.7f, 0.8f, 2.8f}) {
             float s = std::exp(-(carZ - zw) * (carZ - zw) / 2.2f);
@@ -701,8 +729,8 @@ void Room::Impl::submitProps(Renderer& r) {
     // --- glows: TV, stove, gas flame, radio dial, street lamps, neighbours' windows, car lights
     {
         Vector3 sc = Vector3Subtract(tvFront, Vector3Scale(tvNormal, 0.25f));
-        r.submitGlow(sc, 0.42f, Color{140, 170, 255, 255}, 0.16f * tvLight);
-        if (stoveLit > 0.02f) {
+        if (in) r.submitGlow(sc, 0.42f, Color{140, 170, 255, 255}, 0.16f * tvLight);
+        if (in && stoveLit > 0.02f) {
             r.submitGlow(stoveGlowPos, 0.12f + 0.05f * stoveLit, Color{255, 120, 40, 255}, 0.55f * stoveLevel);
             r.submitGlow(Vector3Add(stoveGlowPos, Vector3{0, -0.2f, 0}), 0.35f + 0.15f * stoveLit, Color{255, 110, 40, 255}, 0.14f * stoveLevel);
         }
@@ -721,7 +749,7 @@ void Room::Impl::submitProps(Renderer& r) {
             r.submitGlow(neighbourWindows[i], 0.5f, c, 0.18f * f * night);
         }
         }
-        if (carActive > 0.f && dayK < 0.6f) {
+        if (in && carActive > 0.f && dayK < 0.6f) {  // (behind the garden's wall the lane's cars stay hidden)
             for (int s = -1; s <= 1; s += 2) {
                 r.submitGlow({-6.2f + s * 0.65f, 0.62f, carZ}, 0.28f, Color{255, 246, 220, 255}, 0.9f);
                 r.submitGlow({-6.2f + s * 0.65f, 0.62f, carZ + carDir * 0.2f}, 1.1f, Color{255, 240, 210, 255}, 0.18f);

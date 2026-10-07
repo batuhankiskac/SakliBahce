@@ -220,6 +220,13 @@ struct TableState {
     float speed = 1.f;
     bool hints = true;
     std::function<void(ui::Sfx)>* sfx = nullptr;
+    // the player's own hands (Table3D::handCue / handLead; Table3D.cpp handCueFor)
+    HandCueFn* handCue = nullptr;
+    HandLeadFn* handLead = nullptr;
+    std::array<float, okey::NUM_TILES> draggedAt{}; // when each tile was last dragged by the mouse (now)
+    int handDragged = -1;                           // the tile the hand follows while it is dragged
+    void handCueFor(int id, int fromCont, int toCont, float delay);
+    float handLeadFor(int id, int fromCont, int toCont) const;
     float now = 0.f;
     std::array<Vector3, 4> heads{};
     bool headsSet = false;

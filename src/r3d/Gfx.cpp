@@ -873,7 +873,16 @@ struct Renderer::Impl {
         SetShaderValue(lit, locKeyColor, &keyLin, SHADER_UNIFORM_VEC3);
         Vector4 kp{keyCosIn, keyCosOut, std::max(key.range, 0.1f), KEY_LIGHT_SIZE};
         SetShaderValue(lit, locKeyParams, &kp, SHADER_UNIFORM_VEC4);
-        Vector4 b{key.target.x, key.target.y, key.target.z, BOUNCE_STRENGTH};
+        // the bounce follows the key light's irradiance on the table (a pendant ~1.1 m above it: x1; the garden's sun,
+        // a strong key light far away, would otherwise bounce its raw intensity off the felt)
+        float bounceK = 1.f;
+        {
+            const float d2 = Vector3DistanceSqr(key.position, key.target), r2 = std::max(key.range * key.range, 1e-4f);
+            const float w = std::clamp(1.f - (d2 / r2) * (d2 / r2), 0.f, 1.f);
+            const float att = ATT_K / (d2 + ATT_R2) * w * w;
+            bounceK = std::min(1.f, att / 0.494f);
+        }
+        Vector4 b{key.target.x, key.target.y, key.target.z, BOUNCE_STRENGTH * bounceK};
         SetShaderValue(lit, locBounce, &b, SHADER_UNIFORM_VEC4);
         int so = shadowOn ? 1 : 0;
         SetShaderValue(lit, locShadowOn, &so, SHADER_UNIFORM_INT);
@@ -1082,7 +1091,8 @@ struct Renderer::Impl {
         lc.fovy = half * 2.f;
         lc.projection = CAMERA_PERSPECTIVE;
         shadowTanHalf = std::tan(half * DEG2RAD);
-        shadowFar = std::clamp(key.range, 1.f, 12.f);
+        // (40: the garden's sun is a key light 25 m away, so that it falls off like sunlight over the whole garden)
+        shadowFar = std::clamp(key.range, 1.f, 40.f);
         rlSetClipPlanes(SHADOW_NEAR, shadowFar);
         RenderTexture2D rt{};
         rt.id = shadowFbo;

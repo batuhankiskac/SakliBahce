@@ -355,6 +355,10 @@ protected:
             case E::HandEnd: {
                 for (const std::string& l : e.lines) hud_.toast(l, ui::pal::Highlight, 4.0f);
                 const batak::HandResult& r = g_.lastHandResult();
+                // Başarımlar: all thirteen tricks to the player; his ihale of 8 or more made
+                if (r.tricks[0] == 13) noteAchievement("batak13");
+                for (const batak::SideResult& sr : r.sides)
+                    if (sr.declarer && sr.made && r.declarer == 0 && r.contract >= 8) noteAchievement("ihale8");
                 for (const batak::SideResult& sr : r.sides) {
                     if (!sr.declarer) continue;
                     const int d = r.declarer;

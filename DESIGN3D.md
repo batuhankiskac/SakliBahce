@@ -79,6 +79,15 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
   mirrored by their screen direction): umbrellas and caps glide past above the café curtains; on rainy nights
   umbrellas or a newspaper held over the head, on dry nights caps, a cane, a cigarette. The passing car's
   tyres are heard (`Sfx::CarPass`, wet or dry) peaking as its headlights sweep past our seat.
+* Özel günler (`RoomSpecial.cpp`, `CharactersSpecial.cpp`; DESIGN.md "Özel günler"): built once at init, a handful of
+  submissions on the day only. Bayram: four strings of red / white bunting under the ceiling (three under the trellis),
+  the flag (official proportions, a cloth grid with folds) in the back-wall slot between the scoreboard and the price
+  board where it shows over Kel Mahmut's head from our seat; lokum plates on three background tables, a brass bowl of
+  candy on the counter. Ramazan evenings: güllaç / baklava plates, a güllaç tray, a lit "Şehr-i Ramazan" sign with a
+  painted mahya in the slot. Derby: the poster in the slot (right of his head), a striped scarf draped over the CRT
+  (`tvXf` space), two felt pennants; in the garden a portable CRT on a stand by the ocak showing `cvTv`. People: a tie
+  or a carnation (bayram) and team scarves (derby), their points sampled from each torso mesh's own front surface;
+  standing men are `Watcher` bodies posed by `updateWatcher` with their own focus (the TV, the card players).
 * The kahvehane cat (`RoomCat.cpp`, Room-owned): a procedural rig (two torso ellipsoids that pitch and bend, a
   waist, neck, head with ears/muzzle/eyes, two-bone IK legs with paws, an 8-segment tail that sways free or
   wraps round the body) posed by target poses the current pose eases toward (curl, loaf, sit, groom, bow,
@@ -88,6 +97,21 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
   street door watching the rain; now and then it looks at the camera; very rarely `Sfx::Meow`. Walks are
   planned on a 10 cm occupancy grid of the floor (A* + string pulling) that keeps 1.35 m off our table and clear
   of every table, chair, the counter, stove, coat rack and bench. ~25 draw submissions, no point light.
+  (duzelt, round 5) The grid also knows the garden's own floor (the çınar's pit and kerb, the pots at the walls' feet
+  and by the door, the trellis and lean-to posts, the derby's TV stand) and the people on the floor: App passes
+  `Characters::floorPeople` (bystanders, the special days' standing men, the çaycı, a burned Konken player; x, z and a
+  0.3 m radius) to `Room::setFloorPeople` every frame; the plan is rebuilt when someone moved (at most every 0.25 s), a
+  walk that would run into someone is replanned, a spot someone stands on is not chosen and a resting cat someone
+  stands over gets up after a moment. No way found: never a straight line any more — first a squeeze-through plan
+  with a smaller clearance (`Cat::tight`), else another spot, else it stays and looks round. `make catwalk`
+  (room_snapshot's "catwalk") runs half an hour of the room per case and counts the seconds the cat spends inside
+  something: 0 inside and in the garden, with and without people (6–10 s, up to 0.23 m deep, when the room is not told
+  about the people); `Room::update` stays at ~0.2 ms.
+* Konken "son kalan" (`CharactersKonken.cpp`): a regular who burned gets up at the next deal and watches the rest
+  standing a step behind his chair (`Characters::setSeatOut`): a `Watcher` body in his own clothes walking out and
+  standing with his hands behind his back, his face parts (eyes, lids, brows, lips, mustache halves, Nuri's spectacles)
+  carried on the standing head relative to it as they sat on the seated one; his glass stays on the table; head
+  position, bubbles and the others' glances follow him.
 * Title mode: same room; App drives a slow cinematic camera.
 
 ## 4. People (Characters)
@@ -136,8 +160,41 @@ A real corner kahvehane at night. Room 8.4 × 7 m, ceiling 3.1 m (`World.h`). Mu
 * The çaycı: young man with a white shirt/apron and a hanging three-arm tea tray (askılı tepsi); walks
   from `COUNTER_POS` around the room (avoid walking through tables/chairs), serves our table
   periodically (refills glasses; Sfx::GlassSet/TeaClink), sometimes other tables.
+* The ocakçı (`CharactersOcakci.cpp`, body in `CharactersOcakciMesh.inc` compiled inside `CharactersMesh.cpp`): an
+  older tea maker at the counter's left end (x 1.86, z -3.08, facing +X; the same spot inside and in the garden), white
+  shirt with rolled sleeves, navy bib apron (painted on the torso SDF + a skirt sheet over the legs), grey horseshoe hair,
+  heavy mustache, a cloth over his shoulder; his crate with a copper basin and clean glasses stands by the wall at
+  x 1.3–1.7 (hidden on a derby night in the garden, when the portable TV stands there). He owns the left çaydanlık and
+  its demlik (RoomBuild.cpp no longer builds them). A scripted loop: each action is a function of its own clock giving
+  body / gaze / hand targets; the hands ease toward them (two-bone IK), and the props ride in his hands with a short
+  blend when they change hands. Actions: brew (demlik onto the counter, water from the kettle into it), rinse and wipe
+  a glass, turn the flame up, wipe the counter, read the paper, chat (the çaycı or the okey player at the end), and
+  inside watch the TV. The çaycı's trips wait for him: `Cast::ocakTrayGate` holds a trip until he took the boy's tray
+  over the okey player's chair at `kMeet`, filled its three glasses (demlik, then kettle; the tray's tea levels are
+  real, `Cast::submitTray`) and handed it back; the boy steps over to `kBoyStand` for it and empties a tray glass per
+  glass he serves. A 30 s safety valve lets a trip go anyway. Quiet sounds through `Characters::playSfxVol`
+  (GlassSet, TeaClink); steam from the open kettle, the spouts and the fresh glasses. Developer: `SAKLI_OCAKCI` =
+  `tepsi` (a tray round at once), `demle`, `yika`, `ocak`, `sil`, `gazete`, `sohbet`, `tv`; `SAKLI_OCAKCI_LOG=1`
+  logs his actions; snapshot view `--view ocakci`.
 * Speech bubbles: `ui::Banter` for the lines; bubbles drawn in 2D above the speaker's projected head
   (Ui font, word-wrapped, fade in/out, tail pointing at the head, clamped on-screen, never overlapping).
+* Faces (Yüz, `CharactersFace.cpp`): every `Mood` (neutral, happy, laugh, grumpy, surprised, sad, thinking, smug,
+  content) is a target face — brows (raise, tilt), upper lids, mouth corners (the lower lip variants), jaw — scaled
+  around each man's resting face by his own strength and reached at his own speed (Kel Mahmut 1.35×, quick to flare up
+  and to roar with laughter; Emekli Nuri 0.75×, slow, a sceptical brow instead of a scowl; Hacı Rıza in between).
+  The expression fades back to rest when its time runs out; a new one often comes with a blink; the head follows it
+  (up when surprised, down when sad). The regulars' mustache is two halves turned about its middle (`stacheWing`):
+  the ends rise with a smile, droop with a frown, the whole lifts as the mouth opens — the part of a face that reads
+  from the seat. Moods come from the okey events (as before), `react` (the other games: each in his own way, and
+  Mahmut enjoys a neighbour's bad luck), `crowdReact` (a big moment), being named in someone's bubble (teased: a look
+  and a face after ~0.6 s) and thinking on their turn. Expressions are slightly larger than life on purpose.
+* Lip sync: while a bubble is up the jaw follows the murmur — `ui::Audio::mouthOpen(voice)` returns the playing
+  line's loudness (10 ms frames computed by the VoiceWorker after rendering, read at the audio thread's play position
+  a few frames ahead) through the `Characters::voiceMouth` hook. With voices off or no audio it returns -1 and the
+  mouth follows a syllable schedule built from the text at the same pace as the voice profiles (vowels open it —
+  a/o wide, ı/i little, o/ö/u/ü round the lips — m/b/p and word ends close it, punctuation pauses, the same 2.5 s cap).
+  Brows flick up on loud syllables, '!' lines keep them up, '?' lines lift them at the end. The çaycı's lips follow
+  his voice the same way. No sips or cigarettes start in the middle of a sentence.
 
 ## 5. The table (Table3D + PlayerCamera)
 

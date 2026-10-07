@@ -582,6 +582,7 @@ void Characters::crowdReact(int kind, Vector3 where, float strength) {
         if (!first || p.reactIn < first->reactIn) first = &p;
     }
     if (first) first->shout = true;
+    if (!m.titleMode) m.faceCrowd(kind);  // (Yüz) the regulars' faces too
     for (Watcher& w : m.watchers) {
         if (w.state != 1) continue;
         w.reactIn = m.rng.f(0.05f, 0.35f);
@@ -589,6 +590,7 @@ void Characters::crowdReact(int kind, Vector3 where, float strength) {
         w.gaze = where;
         w.gazeHold = 2.5f;
     }
+    m.specialCrowdReact(kind, where);  // (ozelgun) the men standing by the TV on a derby night
     // a bystander shouts when no patron does (or as the second voice of a big cheer)
     if ((!first || (kind == CrowdCheer && m.rng.chance(0.4f))) && m.watchers[0].state == 1) {
         m.crowdLineCd = first ? 0.f : m.crowdLineCd;

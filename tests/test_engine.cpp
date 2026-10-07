@@ -2215,6 +2215,83 @@ void testEldenBitis() {
     CHECK_EQ(g.lastHandResult().penalties[3], 0);
 }
 
+// 101 kuralları: bitiş katları (katlanır / tek kat / katsız), açma sınırı, açmayan yazar.
+void testFinishMultModes() {
+    Game g;
+    // elden + okey + pairs (x8 when the katlar stack: testEldenBitis)
+    Setup s3;
+    G pairs = {{T(R, 5), T(R, 5, 1)}, {T(B, 9), T(B, 9, 1)}, {T(Y, 1), T(Y, 1, 1)}, {T(K, 12), T(K, 12, 1)},
+               {T(R, 13), T(R, 13, 1)}};
+    for (const V& m : pairs) s3.hands[3].insert(s3.hands[3].end(), m.begin(), m.end());
+    s3.hands[3].push_back(GJ2);
+    s3.hands[0] = {T(Y, 2)};
+    s3.hands[1] = {T(B, 2)};
+    s3.hands[2] = {T(R, 2)};
+    s3.seat = 3;
+    struct Case { FinishMult fm; int mult; int unopened; const char* text; };
+    const Case cases[] = {
+        {FinishMult::Stack, 8, 202, "Emekli Nuri eli bitirdi! (okeyle, çiftten, elden bitiş, ×8)"},
+        {FinishMult::Single, 2, 202, "Emekli Nuri eli bitirdi! (okeyle, çiftten, elden bitiş, ×2)"},
+        {FinishMult::None, 1, 202, "Emekli Nuri eli bitirdi! (katsız oyun: kat yok)"},
+        {FinishMult::Single, 2, 404, "Emekli Nuri eli bitirdi! (okeyle, çiftten, elden bitiş, ×2)"},
+    };
+    for (const Case& c : cases) {
+        Setup s = s3;
+        s.cfg.finishMult = c.fm;
+        s.cfg.unopenedScore = c.unopened;
+        apply(g, s);
+        CHECK_EQ(g.finishMultiplier(true, true, true), c.mult);
+        CHECK(g.openHand(3, pairs).ok);
+        CHECK(g.discard(3, GJ2).ok);
+        const HandResult& r = g.lastHandResult();
+        CHECK(r.finishedInOneGo && r.finishedWithJoker && r.finishedWithPairs); // the facts stay, only the kat changes
+        CHECK_EQ(r.multiplier, c.mult);
+        CHECK_EQ(r.score[3], -101 * c.mult);
+        CHECK_EQ(r.score[0], c.unopened * c.mult); // açmayan yazar x the kat
+        CHECK(g.handMultipliers() == std::vector<int>{c.mult});
+        std::vector<GameEvent> ev = g.drainEvents();
+        const GameEvent* he = findEv(ev, EvType::HandEnd);
+        CHECK(he && he->text == c.text);
+        if (he && he->text != c.text) std::printf("  got: %s\n", he->text.c_str());
+    }
+    // the table of finishMultiplier for each mode
+    RulesConfig rc;
+    for (int m = 0; m < 3; ++m) {
+        rc.finishMult = (FinishMult)m;
+        Game q(rc);
+        for (int bits = 0; bits < 8; ++bits) {
+            const int n = (bits & 1) + ((bits >> 1) & 1) + ((bits >> 2) & 1);
+            const int want = m == 0 ? (1 << n) : m == 1 ? (n ? 2 : 1) : 1;
+            CHECK_EQ(q.finishMultiplier(bits & 1, bits & 2, bits & 4), want);
+        }
+    }
+    // a pair opener's leftover still counts double without katlar
+    Setup t;
+    t.cfg.finishMult = FinishMult::None;
+    t.hands[3] = {T(Y, 2)};
+    t.hands[1] = {T(B, 10), T(B, 3)};
+    t.seat = 3;
+    apply(g, t);
+    markOpened(g, 3, false);
+    markOpened(g, 1, true);
+    g.debugPlayer(3).openedTurn = g.turnNumber() - 4; // (not elden)
+    CHECK(g.discard(3, T(Y, 2)).ok);
+    CHECK_EQ(g.lastHandResult().multiplier, 1);
+    CHECK_EQ(g.lastHandResult().score[1], 13 * 2);
+
+    // açma sınırı: 51 opens with what 101 refuses
+    Setup o;
+    o.cfg.openThreshold = 51;
+    o.hands[0] = {T(R, 10), T(R, 11), T(R, 12), T(Y, 9), T(B, 9), T(R, 9), T(K, 1)};
+    apply(g, o);
+    CHECK_EQ(g.seriesOpenNeed(), 51);
+    const G small = {{T(R, 10), T(R, 11), T(R, 12)}, {T(Y, 9), T(B, 9), T(R, 9)}}; // 33 + 27 = 60
+    CHECK(g.checkOpen(0, small).valid);
+    o.cfg.openThreshold = 121;
+    apply(g, o);
+    CHECK_EQ(g.checkOpen(0, small).error, std::string("Açmak için en az 121 gerekli (şu an 60)"));
+}
+
 void testPileExhaustion() {
     Game g;
     Setup s;
@@ -2697,7 +2774,9 @@ private:
             if (r.finishedWithJoker) ++st_.okeyFinish;
             if (r.finishedWithPairs) ++st_.pairFinish;
             if (r.finishedInOneGo) ++st_.eldenFinish;
-            mult = (r.finishedWithJoker ? 2 : 1) * (r.finishedWithPairs ? 2 : 1) * (r.finishedInOneGo ? 2 : 1);
+            mult = g_.finishMultiplier(r.finishedWithJoker, r.finishedWithPairs, r.finishedInOneGo); // (101 kuralları)
+            if (cfg_.finishMult == FinishMult::Stack)
+                CHECK_EQ(mult, (r.finishedWithJoker ? 2 : 1) * (r.finishedWithPairs ? 2 : 1) * (r.finishedInOneGo ? 2 : 1));
         } else {
             ++st_.exhausted;
             CHECK(r.reason == HandEndReason::PileExhausted);
@@ -3229,11 +3308,13 @@ void testClassicMelds() {
 
 // Save / resume: a match replayed from its seed and action log (through the text form) ends in the same state.
 void testActionLogReplay() {
-    for (int variant = 0; variant < 3; ++variant) {
+    for (int variant = 0; variant < 5; ++variant) {
         RulesConfig cfg;
         cfg.numHands = 2;
         if (variant == 1) cfg.teams = true;
         if (variant == 2) cfg.variant = Variant::Okey, cfg.okeyStartPoints = 3;
+        if (variant == 3) cfg.finishMult = FinishMult::Single, cfg.openThreshold = 51, cfg.unopenedScore = 404; // 101 kuralları
+        if (variant == 4) cfg.finishMult = FinishMult::None, cfg.katlamali = true, cfg.teams = true, cfg.penaltyReturnLeft = true;
         Game g(cfg);
         g.startMatch(77 + (uint64_t)variant);
         Rng rng(9);
@@ -3272,6 +3353,7 @@ void testActionLogReplay() {
             CHECK(r.player(s).hand == g.player(s).hand);
         }
         CHECK_EQ(r.actionLog().size(), g.actionLog().size());
+        CHECK(r.handMultipliers() == g.handMultipliers()); // (101 kuralları)
     }
     LoggedAction m{LogKind::Open, 2, -1, -1, 0, {{1, 2, 3}, {40, 41, 42, 43}}}, back;
     CHECK(LoggedAction::decode(m.encode(), back));
@@ -3514,6 +3596,19 @@ void testFuzz(int scale) {
     RulesConfig esli;
     esli.teams = true;
     runFuzz("greedy/esli", esli, {G_, G_, G_, G_}, 100 * scale, 7, total);
+    // 101 kuralları
+    RulesConfig tek;
+    tek.finishMult = FinishMult::Single;
+    tek.openThreshold = 51;
+    tek.unopenedScore = 404;
+    runFuzz("greedy/tek-kat,51,404", tek, {G_, G_, G_, G_}, 100 * scale, 8, total);
+    RulesConfig katsiz;
+    katsiz.finishMult = FinishMult::None;
+    katsiz.katlamali = true;
+    katsiz.penaltyReturnLeft = true;
+    katsiz.penaltyJokerDiscard = false;
+    katsiz.teams = true;
+    runFuzz("mixed/katsiz,esli", katsiz, {G_, R_, G_, R_}, 100 * scale, 9, total);
 
     // the greedy fuzz must really reach the interesting paths
     CHECK(total.finishes > 100);
@@ -3584,6 +3679,7 @@ int main(int argc, char** argv) {
         {"game: discard penalties", testDiscardPenalties},
         {"game: scoring", testScoring},
         {"game: elden bitiş", testEldenBitis},
+        {"game: bitiş katları (101 kuralları)", testFinishMultModes},
         {"game: pile exhaustion", testPileExhaustion},
         {"game: match end", testMatchEnd},
         {"klasik: melds", testClassicMelds},

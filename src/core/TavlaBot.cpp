@@ -321,6 +321,166 @@ double evalFrame(const Frame& f, const Weights& W) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Gülbahar / Fevga (Variant::sameWay): both sides run the same way round, nobody is hit, one checker holds a
+// point. The frame is then two OWN frames: me[r] at my rel r, op[s] at HIS rel s (he moves down his rel too);
+// my rel r and his rel (r + 12) % 24 are the same point. No bar. keith / pipsMe / marsSavePips read `me` only,
+// so they work on these frames as they are.
+//
+// The evaluation: the pip race, the blocks each side puts in the other's way (runs of held points in front of
+// his checkers, a 6-run a full prime; the dice values his checkers lose to my points), stacking, checkers off and
+// the mars risk. A pure race (nobody can be blocked any more) is the wastage-adjusted race as in klasik.
+struct SameWeights {
+    double pip = 1.0;
+    double block = 1.0;  // scale of kBlockVal for my runs in front of his checkers
+    double mob = 1.0;    // per die value (of 6) one of his points loses to my points, per checker there (capped)
+    double stack = 0.6;  // per checker above 3 on a point
+    double off = 1.5;
+    double mars = 0.5;
+    double start = 0.0;  // per checker still on my start point after the opening (getting them out)
+};
+SameWeights sameClassic() { return SameWeights(); }
+// Kurt, per çeşit, from paired self-play against Usta (2-3k games a setting, Kurt's 2-ply on top): in Gülbahar the
+// ladder's huge doubles make blocks count less and a flexible, unstacked army more; in Fevga the blocks are the game.
+SameWeights sameTuned(Variant v) {
+    SameWeights w;
+    if (v == Variant::Gulbahar) {
+        w.block = 0.8;
+        w.mob = 0.5;
+        w.stack = 1.2;
+    } else {
+        w.block = 2.0;
+        w.mob = 1.5;
+        w.stack = 1.2;
+    }
+    return w;
+}
+SameWeights sameSloppy() {
+    SameWeights w;
+    w.block = 0.2;
+    w.mob = 0.0;
+    w.stack = 0.2;
+    w.mars = 0.0;
+    return w;
+}
+const SameWeights kSameClassic = sameClassic();
+const SameWeights kSameTunedGulbahar = sameTuned(Variant::Gulbahar);
+const SameWeights kSameTunedFevga = sameTuned(Variant::Fevga);
+const SameWeights& sameTunedFor(Variant v) { return v == Variant::Gulbahar ? kSameTunedGulbahar : kSameTunedFevga; }
+const SameWeights kSameSloppy = sameSloppy();
+// Value of a run of held points (length 1..6) in front of the other side's checkers.
+const double kBlockVal[7] = {0, 0.6, 1.8, 4.0, 7.5, 12.5, 20.0};
+
+inline int sw(int r) { return (r + 12) % 24; } // my rel <-> his rel of the same point
+
+Frame makeFrameSame(const Position& pos, int p, Variant v) {
+    Frame f;
+    for (int r = 0; r < 24; ++r) {
+        const int vi = pos.pts[absPoint(v, p, r)], vo = pos.pts[absPoint(v, 1 - p, r)];
+        f.me[r] = p == 0 ? (vi > 0 ? vi : 0) : (vi < 0 ? -vi : 0);
+        f.op[r] = p == 0 ? (vo < 0 ? -vo : 0) : (vo > 0 ? vo : 0);
+    }
+    f.meBar = f.opBar = 0;
+    f.meOff = pos.off[p];
+    f.opOff = pos.off[1 - p];
+    return f;
+}
+
+Frame flipSame(const Frame& f) {
+    Frame g = f;
+    for (int r = 0; r < 24; ++r) {
+        g.me[r] = f.op[r];
+        g.op[r] = f.me[r];
+    }
+    g.meOff = f.opOff;
+    g.opOff = f.meOff;
+    return g;
+}
+
+// Can either side still be blocked by the other? (one of his checkers on the way ahead of one of mine, or the
+// other way round)
+bool contactSame(const Frame& f) {
+    int maxMe = -1, maxOp = -1;
+    for (int r = 23; r >= 0 && maxMe < 0; --r)
+        if (f.me[r]) maxMe = r;
+    for (int r = 23; r >= 0 && maxOp < 0; --r)
+        if (f.op[r]) maxOp = r;
+    for (int r = 0; r < maxMe; ++r)
+        if (f.op[sw(r)]) return true;
+    for (int r = 0; r < maxOp; ++r)
+        if (f.me[sw(r)]) return true;
+    return false;
+}
+
+// What my held points cost the other side (f.me against f.op).
+double blockValue(const Frame& f, const SameWeights& W) {
+    int behind[25];
+    behind[24] = 0;
+    for (int s = 23; s >= 0; --s) behind[s] = behind[s + 1] + f.op[s]; // behind[s]: his checkers at his rel >= s
+    double v = 0;
+    int run = 0;
+    for (int s = 0; s <= 24; ++s) {
+        const bool held = s < 24 && f.me[sw(s)] > 0;
+        if (held) {
+            ++run;
+            continue;
+        }
+        if (run > 0) {
+            const int nb = behind[s]; // his checkers behind the run (rel above its top s - 1)
+            if (nb > 0) v += W.block * kBlockVal[std::min(run, 6)] * (0.35 + 0.65 * std::min(nb, 8) / 8.0);
+        }
+        run = 0;
+    }
+    if (W.mob > 0) {
+        for (int s = 1; s < 24; ++s) {
+            if (!f.op[s]) continue;
+            int lost = 0;
+            for (int d = 1; d <= 6 && s - d >= 0; ++d) lost += f.me[sw(s - d)] > 0 ? 1 : 0;
+            v += W.mob * lost * std::min(f.op[s], 3) / 6.0;
+        }
+    }
+    return v;
+}
+
+double stackCost(const Frame& f, const SameWeights& W) {
+    double c = 0;
+    for (int r = 0; r < 23; ++r)
+        if (f.me[r] > 3) c += W.stack * (f.me[r] - 3) * (r < 6 ? 0.5 : 1.0);
+    // the start point: stacked there anyway at first; what still sits there later costs
+    if (W.start > 0 && f.me[23] < kCheckers) c += W.start * f.me[23];
+    return c;
+}
+
+double evalSame(const Frame& f, const SameWeights& W) {
+    if (f.meOff == kCheckers) return 1000.0 * (f.opOff == 0 ? 2 : 1);
+    if (f.opOff == kCheckers) return -1000.0 * (f.meOff == 0 ? 2 : 1);
+    const Frame g = flipSame(f);
+    if (!contactSame(f)) {
+        const double km = keith(f), ko = keith(g);
+        double v = ko - km;
+        v -= marsTerm(f, ko / 8.17);
+        v += marsTerm(g, km / 8.17);
+        return v;
+    }
+    const int myPip = pipsMe(f), opPip = pipsMe(g);
+    double v = (opPip - myPip) * W.pip;
+    v += blockValue(f, W) - blockValue(g, W);
+    v -= stackCost(f, W) - stackCost(g, W);
+    v += (f.meOff - f.opOff) * W.off;
+    v -= marsTerm(f, opPip / 8.17) * W.mars;
+    v += marsTerm(g, myPip / 8.17) * W.mars;
+    return v;
+}
+
+// A level's evaluation of `pos` for p (p has just moved), in any çeşit. set: 0 Acemi, 1 Usta, 2 Kurt.
+double evalLevel(const Position& pos, int p, Variant v, int set) {
+    if (v == Variant::Klasik) return evalFrame(makeFrame(pos, p), set == 0 ? kSloppy : set == 1 ? kClassic : kTuned);
+    return evalSame(makeFrameSame(pos, p, v), set == 0 ? kSameSloppy : set == 1 ? kSameClassic : sameTunedFor(v));
+}
+bool contactIn(const Position& pos, int p, Variant v) {
+    return v == Variant::Klasik ? contact(makeFrame(pos, p)) : contactSame(makeFrameSame(pos, p, v));
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Katlama zarı: the chances of the side to roll ("me" of the frame).
 
 constexpr double kRollPips = 8.17;     // an average roll
@@ -338,9 +498,15 @@ double normalCdf(double z) { return 0.5 * std::erfc(-z / std::sqrt(2.0)); }
 // Race with me to roll: a normal approximation over the rolls each side still needs (the spread grows with the
 // square root of the rolls to go); being on roll is worth half a roll. The spread and kContactScale / kOnRoll
 // were fitted on Usta self-play (predicted vs. realised win rates agree within ~2% from 15% to 85%).
-double raceWin(double myPips, double opPips) {
-    const double lead = (opPips - myPips) / kRollPips + 0.5;
-    const double sd = 0.36 * std::sqrt(std::max(1.0, (myPips + opPips) / kRollPips)) + 0.1;
+// Gülbahar: the ladder makes an average roll much longer and far more uneven (a 1-1 may run 84 pips): the race and
+// the contact estimates are spread out accordingly (fitted so the cube's take / drop rates look like klasik's).
+constexpr double kGulRollPips = 12.0, kGulSpread = 1.8, kGulContactScale = 55.0;
+
+double raceWin(double myPips, double opPips, Variant v = Variant::Klasik) {
+    const bool gul = v == Variant::Gulbahar;
+    const double rp = gul ? kGulRollPips : kRollPips;
+    const double lead = (opPips - myPips) / rp + 0.5;
+    const double sd = (0.36 * std::sqrt(std::max(1.0, (myPips + opPips) / rp)) + 0.1) * (gul ? kGulSpread : 1.0);
     return normalCdf(lead / sd);
 }
 
@@ -353,21 +519,24 @@ struct Chances {
 // Kurt: its evaluation turned into chances. In a race the wastage-adjusted counts go into raceWin; in contact
 // the evaluation of the position as the opponent sees it (he just moved, I roll) through a logistic.
 // Usta: the pip race alone; with contact it trusts the counts less (shrunk toward even).
-double ustaWin(const Position& pos, int p) {
-    const double w = raceWin(pipCount(pos, p), pipCount(pos, 1 - p));
-    return contact(makeFrame(pos, p)) ? 0.5 + (w - 0.5) * 0.6 : w;
+double ustaWin(const Position& pos, int p, Variant v) {
+    const double w = raceWin(pipCount(pos, p, v), pipCount(pos, 1 - p, v), v);
+    return contactIn(pos, p, v) ? 0.5 + (w - 0.5) * 0.6 : w;
 }
 
-Chances kurtChances(const Position& pos, int p) {
-    const Frame f = makeFrame(pos, p);
-    const Frame g = flip(f);
+Chances kurtChances(const Position& pos, int p, Variant v) {
+    const bool klasik = v == Variant::Klasik;
+    const Frame f = klasik ? makeFrame(pos, p) : makeFrameSame(pos, p, v);
+    const Frame g = klasik ? flip(f) : flipSame(f);
     Chances c;
     if (f.meOff == kCheckers || g.meOff == kCheckers) {
         c.win = f.meOff == kCheckers ? 1.0 : 0.0;
         return c;
     }
-    if (!contact(f)) c.win = raceWin(keith(f) * 6.0 / 7.0, keith(g) * 6.0 / 7.0);
-    else c.win = 1.0 / (1.0 + std::exp((evalFrame(g, kTuned) - kOnRoll) / kContactScale));
+    if (!(klasik ? contact(f) : contactSame(f))) c.win = raceWin(keith(f) * 6.0 / 7.0, keith(g) * 6.0 / 7.0, v);
+    else if (klasik) c.win = 1.0 / (1.0 + std::exp((evalFrame(g, kTuned) - kOnRoll) / kContactScale));
+    else c.win = 1.0 / (1.0 + std::exp((evalSame(g, sameTunedFor(v)) - kOnRoll) /
+                                       (v == Variant::Gulbahar ? kGulContactScale : kContactScale)));
     c.win = std::min(0.995, std::max(0.005, c.win));
     // mars: the side at risk needs its first checker off before the other finishes (marsTerm's 0..14 ramp)
     c.marsWin = c.win * marsTerm(g, pipsMe(f) / kRollPips) / 14.0;
@@ -394,26 +563,26 @@ uint64_t stateSig(const Position& pos, const std::vector<int>& left, int p, int 
 
 } // namespace
 
-double botEvaluate(const Position& pos, int p) { return evalFrame(makeFrame(pos, p), kTuned); }
-double botWinProbability(const Position& pos, int p) { return kurtChances(pos, p).win; }
+double botEvaluate(const Position& pos, int p, Variant v) { return evalLevel(pos, p, v, 2); }
+double botWinProbability(const Position& pos, int p, Variant v) { return kurtChances(pos, p, v).win; }
 
-double botEquityToRoll(const Position& pos, int p, double* win) {
+double botEquityToRoll(const Position& pos, int p, double* win, Variant v) {
     if (pos.off[0] == kCheckers || pos.off[1] == kCheckers) { // a finished game: 1 a game, 2 a mars
         const bool won = pos.off[p] == kCheckers;
         if (win) *win = won ? 1.0 : 0.0;
         const int base = pos.off[won ? 1 - p : p] == 0 ? 2 : 1;
         return won ? base : -base;
     }
-    const Chances c = kurtChances(pos, p);
+    const Chances c = kurtChances(pos, p, v);
     if (win) *win = c.win;
     return c.equity();
 }
 
-double botEquityAfterMove(const Position& pos, int p, int depth, double* win) {
+double botEquityAfterMove(const Position& pos, int p, int depth, double* win, Variant v) {
     const int opp = 1 - p;
     if (pos.off[p] == kCheckers || pos.off[opp] == kCheckers || depth <= 1) {
         double w = 0.0;
-        const double e = -botEquityToRoll(pos, opp, &w);
+        const double e = -botEquityToRoll(pos, opp, &w, v);
         if (win) *win = 1.0 - w;
         return e;
     }
@@ -422,18 +591,18 @@ double botEquityAfterMove(const Position& pos, int p, int depth, double* win) {
     for (int a = 1; a <= 6; ++a) {
         for (int b = a; b <= 6; ++b) {
             const double weight = a == b ? 1.0 : 2.0;
-            generateResults(pos, opp, a, b, replies);
+            generateResults(pos, opp, a, b, replies, v);
             const Position* best = &pos;
             double his = -1e18;
             for (const Position& y : replies) {
-                const double v = evalFrame(makeFrame(y, opp), kTuned);
-                if (v > his) {
-                    his = v;
+                const double e = evalLevel(y, opp, v, 2);
+                if (e > his) {
+                    his = e;
                     best = &y;
                 }
             }
             double w = 0.0;
-            sum += weight * botEquityToRoll(*best, p, &w);
+            sum += weight * botEquityToRoll(*best, p, &w, v);
             wsum += weight * w;
         }
     }
@@ -510,21 +679,22 @@ struct Bot::Impl {
     // Index of the chosen play.
     size_t choose(const Game& g, int p, const std::vector<Play>& plays) {
         if (plays.size() == 1) return 0;
+        const Variant var = g.variant();
         if (level == BotLevel::Easy) {
             okey::Rng rng = turnRng(g, p, plays.size());
             // sloppy evaluation with noise; now and then just one of its few best-looking plays
             std::vector<std::pair<double, size_t>> sc(plays.size());
             for (size_t i = 0; i < plays.size(); ++i)
-                sc[i] = {evalFrame(makeFrame(plays[i].result, p), kSloppy) + rng.uniform(-kEasyNoise, kEasyNoise), i};
+                sc[i] = {evalLevel(plays[i].result, p, var, 0) + rng.uniform(-kEasyNoise, kEasyNoise), i};
             std::stable_sort(sc.begin(), sc.end(), [](const std::pair<double, size_t>& x, const std::pair<double, size_t>& y) {
                 return x.first > y.first;
             });
             if (rng.chance(kEasyRandom)) return sc[(size_t)rng.range((int)std::min<size_t>(4, sc.size()))].second;
             return sc[0].second;
         }
-        const Weights& W = level == BotLevel::Normal ? kClassic : kTuned;
+        const int set = level == BotLevel::Normal ? 1 : 2;
         std::vector<double> one(plays.size());
-        for (size_t i = 0; i < plays.size(); ++i) one[i] = evalFrame(makeFrame(plays[i].result, p), W);
+        for (size_t i = 0; i < plays.size(); ++i) one[i] = evalLevel(plays[i].result, p, var, set);
         const size_t best1 = (size_t)(std::max_element(one.begin(), one.end()) - one.begin());
         if (level == BotLevel::Normal) return best1;
 
@@ -534,7 +704,7 @@ struct Bot::Impl {
         std::vector<size_t> order(plays.size());
         for (size_t i = 0; i < order.size(); ++i) order[i] = i;
         std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return one[a] > one[b]; });
-        const bool isContact = contact(makeFrame(plays[best1].result, p));
+        const bool isContact = contactIn(plays[best1].result, p, var);
         const size_t K = std::min(order.size(), isContact ? kKurtCandidates : kKurtRaceCandidates);
         std::vector<Position> replies;
         long evals = 0;
@@ -551,14 +721,14 @@ struct Bot::Impl {
                 double sum = 0;
                 for (int a = 1; a <= 6; ++a) {
                     for (int b = a; b <= 6; ++b) {
-                        generateResults(x, opp, a, b, replies);
+                        generateResults(x, opp, a, b, replies, var);
                         double his;
                         if (replies.empty()) {
-                            his = evalFrame(makeFrame(x, opp), kTuned);
+                            his = evalLevel(x, opp, var, 2);
                             ++evals;
                         } else {
                             his = -1e18;
-                            for (const Position& y : replies) his = std::max(his, evalFrame(makeFrame(y, opp), kTuned));
+                            for (const Position& y : replies) his = std::max(his, evalLevel(y, opp, var, 2));
                             evals += (long)replies.size();
                         }
                         sum -= (a == b ? 1 : 2) * his;
@@ -581,7 +751,7 @@ struct Bot::Impl {
         std::vector<int> left = g.dice().left();
         for (const Step& s : pl.steps) {
             plan.push_back(Planned{s, stateSig(pos, left, p, g.turnNumber())});
-            applyStepTo(pos, p, s);
+            applyStepTo(pos, p, s, g.variant());
             auto it = std::find(left.begin(), left.end(), s.die);
             if (it != left.end()) left.erase(it);
         }
@@ -598,12 +768,12 @@ struct Bot::Impl {
         }
         if (g.score(p) + cube >= mp) return false; // the cube already wins the match: a dead double
         if (level == BotLevel::Normal) {
-            const double w = ustaWin(g.position(), p);
+            const double w = ustaWin(g.position(), p, g.variant());
             return w >= kUstaDouble && w <= kUstaTooGood;
         }
         // Kurt: after the Crawford game the trailer doubles at once (the leader would always drop late)
         if (g.score(opp) == mp - 1 && g.score(p) < mp - 1) return true;
-        const Chances c = kurtChances(g.position(), p);
+        const Chances c = kurtChances(g.position(), p, g.variant());
         return c.win >= kKurtDouble && c.equity() <= kKurtTooGood;
     }
     // p was offered a double: take it?
@@ -616,8 +786,8 @@ struct Bot::Impl {
         }
         if (g.score(opp) + cube >= mp) return true; // dropping loses the match: a free take
         // (the opponent is to roll in these estimates: he offered before his roll)
-        if (level == BotLevel::Normal) return 1.0 - ustaWin(g.position(), opp) >= kUstaTake;
-        return -kurtChances(g.position(), opp).equity() >= kKurtTake;
+        if (level == BotLevel::Normal) return 1.0 - ustaWin(g.position(), opp, g.variant()) >= kUstaTake;
+        return -kurtChances(g.position(), opp, g.variant()).equity() >= kKurtTake;
     }
 
     BotAction next(const Game& g, int p) {

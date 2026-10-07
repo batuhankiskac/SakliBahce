@@ -439,9 +439,22 @@ void Room::Impl::freeWeather(Renderer& r) {
 // street (through the back window). Streaks near the street lamps catch more light.
 void Room::Impl::placeStreak(Streak& s, okey::Rng& rng, bool anywhereY) {
     const bool back = rng.chance(0.24f);
-    if (back) s.p = {rng.uniform(-5.2f, -1.6f), 0.f, rng.uniform(-6.2f, -3.75f)};
+    if (garden) {
+        // in the garden: everywhere beyond the awning, and drips running off its edges
+        const float u = rng.uniform();
+        if (u < 0.16f) {
+            const bool left = rng.chance(0.55f);
+            s.p = left ? Vector3{w3d::ROOM_X0 - 0.27f, 0.f, rng.uniform(-3.55f, 3.75f)} : Vector3{rng.uniform(-4.4f, 4.1f), 0.f, -3.63f};
+            s.p.y = anywhereY ? rng.uniform(-0.4f, 2.9f) : 2.9f;
+        } else {
+            if (u < 0.5f) s.p = {rng.uniform(-7.5f, -4.6f), 0.f, rng.uniform(-6.f, 5.f)};
+            else if (u < 0.85f) s.p = {rng.uniform(-6.f, 4.f), 0.f, rng.uniform(-8.f, -3.8f)};
+            else s.p = {rng.uniform(-5.f, 4.f), 0.f, rng.uniform(4.f, 6.f)};
+            s.p.y = anywhereY ? rng.uniform(-0.4f, 6.5f) : rng.uniform(5.f, 6.8f);
+        }
+    } else if (back) s.p = {rng.uniform(-5.2f, -1.6f), 0.f, rng.uniform(-6.2f, -3.75f)};
     else s.p = {rng.uniform(-6.8f, -4.55f), 0.f, rng.uniform(-4.6f, 4.4f)};
-    s.p.y = anywhereY ? rng.uniform(-0.4f, 3.8f) : rng.uniform(3.5f, 4.1f);
+    if (!garden) s.p.y = anywhereY ? rng.uniform(-0.4f, 3.8f) : rng.uniform(3.5f, 4.1f);
     s.speed = rng.uniform(6.2f, 8.2f);
     s.var = rng.range(0, 2);
     auto lampK = [&](Vector3 l, float k) {
@@ -561,6 +574,7 @@ void Room::Impl::drawDrops() {
 
 // ============================================================================ per frame
 void Room::Impl::updateWeather(float dt) {
+    updateShower(dt);  // (ozelgun) a passing shower on a fair day (RoomSpecial.cpp)
     // tonight's rain eases off and picks up again over minutes (and comes and goes with the hour and the season)
     rainBase += (rainTarget - rainBase) * std::min(1.f, dt * 0.35f);
     if (rainBase < 0.005f && rainTarget <= 0.f) rainBase = 0.f;
@@ -568,6 +582,7 @@ void Room::Impl::updateWeather(float dt) {
     if (rainBase > 0.f) {
         for (DropSlot& s : dropSlots) simDrops(s, dt);
         dropRedraw -= dt;
+        if (garden) dropRedraw = std::max(dropRedraw, 0.01f);  // (no windows out there: no canvas redraws)
         // 12 Hz is plenty for drops that creep down the glass; every render-to-texture pass makes the driver wait
         // for the GPU (the CPU time is absorbed by the 60 Hz frame, but there is no reason to spend it more often)
         if (dropRedraw <= 0.f) {
@@ -590,7 +605,7 @@ void Room::Impl::updateWeather(float dt) {
             w.type = pool[rng.range(0, 6)];
             const FigSpec& f = kFigs[w.type];
             w.speed = f.stride > 1.2f ? rng.uniform(2.6f, 3.1f) : (f.arms == Arms::Cane ? rng.uniform(0.75f, 0.9f) : rng.uniform(1.15f, 1.45f));
-            const bool back = rng.chance(0.3f);
+            const bool back = !garden && rng.chance(0.3f);  // (the garden has the sea behind it, no back street)
             const float sgn = rng.chance(0.5f) ? 1.f : -1.f;
             if (back) {
                 w.p = {sgn > 0 ? -7.6f : 0.6f, 0.f, -4.0f + rng.uniform(-0.12f, 0.12f)};
@@ -630,9 +645,12 @@ void Room::Impl::submitWeather(Renderer& r) {
         r.submitBillboard(cvWalkers.texture, src, {w.p.x, WALK_BOARD_H * 0.5f + bounce, w.p.z}, {WALK_BOARD_W, WALK_BOARD_H}, WHITE, false);
     }
     if (rainBase <= 0.01f) return;
-    for (const Pane& p : dropPanes) r.submit(&p.mesh, p.mat, MatrixTranslate(p.at.x, p.at.y, p.at.z), Transparent | DoubleSided);
+    if (!garden)
+        for (const Pane& p : dropPanes) r.submit(&p.mesh, p.mat, MatrixTranslate(p.at.x, p.at.y, p.at.z), Transparent | DoubleSided);
     const float tw = (float)texStreak.width;
-    for (const Streak& s : streaks) {
+    const size_t nStreaks = garden ? streaks.size() : std::min(streaks.size(), (size_t)170);  // (the garden adds more)
+    for (size_t si = 0; si < nStreaks; ++si) {
+        const Streak& s = streaks[si];
         // three horizontal crops of the streak strip keep neighbouring boards from repeating
         Rectangle src{0.f, (float)s.var * 40.f, tw, (float)texStreak.height - 80.f};
         float a = std::clamp(95.f * rain * s.bright, 0.f, 255.f);

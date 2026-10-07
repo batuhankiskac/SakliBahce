@@ -14,6 +14,12 @@
 //                   searched over the opponent's 21 rolls, the opponent answering each with his best reply
 //                   (expectimax). Typical decision ~1 ms, p99 ~16 ms, worst < 60 ms at -O2 on an M-series Mac.
 //
+// Gülbahar / Fevga (Rules::variant): the same three levels on their own evaluation (no hits there): the pip race,
+// the blocks each side holds in front of the other's checkers (runs of points up to a full 6-run, the dice values
+// his checkers lose), stacking, getting off the start point, checkers off and the mars risk; a pure race as in
+// klasik. Acemi sees mostly pips; Usta hand-set weights; Kurt tuned weights plus the same 2-ply (in Gülbahar the
+// opponent's doubles are searched as one rung of the ladder). Every bot reads the çeşit from Game::variant().
+//
 // Katlama zarı (Rules::doubling), offer / take / drop:
 //   Acemi: a crude pip-count feeling with noise: doubles on a big pip lead now and then, takes almost anything.
 //   Usta : a win probability from the pip race alone (normal approximation over the rolls left): doubles in
@@ -45,15 +51,15 @@ BotAction fallbackAction(const Game& g, int p);
 
 // Kurt's static evaluation (exposed for tests / hints): score of `pos` for player p, assuming p has just
 // moved and the opponent is to roll. Roughly in pips; a finished game is +-1000 per point.
-double botEvaluate(const Position& pos, int p);
+double botEvaluate(const Position& pos, int p, Variant v = Variant::Klasik);
 // Kurt's estimate of p's chance to win the game from `pos` with p to roll (0..1; tests / hints / the sim).
-double botWinProbability(const Position& pos, int p);
+double botWinProbability(const Position& pos, int p, Variant v = Variant::Klasik);
 // Hata analizi: Kurt's equity of player p right after he moved to `pos` (the opponent to roll): cubeless, per cube
 // unit (+-1 a game, +-2 a mars). depth 1: straight from the position's chances; depth 2: averaged over the opponent's
 // 21 rolls, each answered by his best reply (as Kurt searches). `win` (optional) receives p's chance to win the game.
-double botEquityAfterMove(const Position& pos, int p, int depth = 2, double* win = nullptr);
+double botEquityAfterMove(const Position& pos, int p, int depth = 2, double* win = nullptr, Variant v = Variant::Klasik);
 // Kurt's cubeless equity (and win chance) of p with p to roll.
-double botEquityToRoll(const Position& pos, int p, double* win = nullptr);
+double botEquityToRoll(const Position& pos, int p, double* win = nullptr, Variant v = Variant::Klasik);
 
 class Bot {
 public:

@@ -53,6 +53,8 @@ bool Characters::init(Renderer& r, uint64_t seed) {
     m.setupOpponents();
     m.setupCrowd();
     m.initLife(r);
+    m.initSpecial(r);  // (ozelgun)
+    m.initOcakci(r);   // (Ocakçı) the tea maker at the counter
     m.banter.reset(m.seed * 31u + 7u);
     m.banter.setNames(m.names);
     m.banter.setEnabled(!m.titleMode);
@@ -75,6 +77,9 @@ void Characters::shutdown(Renderer& r) {
     Impl& m = *impl_;
     if (!m.ready) return;
     m.freeLife(r);
+    m.freeSpecial(r);  // (ozelgun)
+    m.freeOcakci(r);   // (Ocakçı)
+    m.freePlayerGlass(r);  // (the player's coloured glass, CharactersPlayer.cpp)
     freeAll(m.M, r);
     m.ready = false;
 }
@@ -110,7 +115,8 @@ void Characters::onTvGoal() {
     if (!m.ready) return;
     if (!m.titleMode) m.banter.tvGoal();
     // the TV hangs high in the back-left corner; Mahmut cheers, the others glance over
-    const Vector3 tv = chr::kTvPos;
+    // (ozelgun) on a derby night in the garden the portable TV stands by the ocak (RoomSpecial.cpp)
+    const Vector3 tv = m.specialGarden && m.specialDay == 4 ? Vector3{1.42f, 1.15f, -2.95f} : chr::kTvPos;
     for (int s = 1; s <= 3; ++s) {
         Opponent& o = m.opp[s];
         if (s == 2) {
@@ -155,9 +161,7 @@ void Characters::react(int seat, int mood, Vector3 lookAt) {
             o.gazeHold = m.rng.f(0.8f, 1.6f);
         }
     }
-    if (seat < 1 || seat > 3 || mood <= 0) return;
-    const chr::Mood md = mood == 1 ? chr::Mood::Happy : mood == 2 ? chr::Mood::Grumpy : chr::Mood::Surprised;
-    m.setMood(m.opp[seat], md, 2.2f);
+    m.faceReact(seat, mood, lookAt);  // (Yüz: each in his own way, CharactersFace.cpp)
 }
 
 bool Characters::chat(int seat, const std::string& text, bool important) {
@@ -219,9 +223,14 @@ void Characters::update(float dt, const Camera3D& viewer) {
     m.viewerSet = true;
     if (m.activeSeat == 0) m.humanWait += dt;
     else if (m.activeSeat > 0) m.humanWait = 0.f;
-    for (int s = 1; s <= 3; ++s) m.updateOpponent(m.opp[s], dt);
+    for (int s = 1; s <= 3; ++s) {
+        if (m.seatOut[(size_t)s].on) m.updateSeatOut(m.opp[s], dt); // (Konken son kalan: burned, he stands and watches)
+        else m.updateOpponent(m.opp[s], dt);
+    }
     m.updateLife(dt);
+    m.updateSpecial(dt);  // (ozelgun)
     m.updateCrowd(dt);
+    m.updateOcakci(dt);  // (Ocakçı) after the çaycı: the tray changes hands between them
     m.updateGlasses(dt);
     m.emitSteam(dt);
 
@@ -316,10 +325,10 @@ void Cast::updateBubbles(float dt) {
         ++visible;
         banter.spoke(best);  // (the çaycı too: Banter spaces his lines as well)
         if (owner && owner->speak) owner->speak(best, B.cur[best].text);
+        onLineFace(best, B.cur[best].text);  // (Yüz) the mouth's timing; whoever is named in it reacts
         if (best <= 3) {
             Opponent& o = opp[best];
             o.talk = B.cur[best].text;
-            o.jawKeys.clear();
             o.talkT = 0.f;
             o.talkDur = B.cur[best].dur * 0.85f;
             // who is he talking to?
@@ -677,7 +686,13 @@ void Cast::submitOpponent(Renderer& r, const Opponent& o) {
         ++submitCount;
     }
     r.submit(&M.lowerLip[o.lipVariant], &M.lipMat, o.lipW, 0);
-    r.submit(&pm.stache, &pm.hairMat, o.headW, 0);
+    if (pm.stacheWing[0].vertexCount > 0) { // (Yüz) the two halves move with the mouth
+        r.submit(&pm.stacheWing[0], &pm.hairMat, o.stacheW[0], 0);
+        r.submit(&pm.stacheWing[1], &pm.hairMat, o.stacheW[1], 0);
+        ++submitCount;
+    } else {
+        r.submit(&pm.stache, &pm.hairMat, o.headW, 0);
+    }
     submitCount += 8;
     if (o.kind == 2) {
         r.submit(&M.spectacles, &M.frameMat, o.headW, 0);
@@ -793,9 +808,13 @@ void Cast::submitCrowd(Renderer& r) {
     }
     r.submit(&M.lowerLip[3], &M.lipMat, b.lipW, 0);
     r.submit(&pm.stache, &pm.hairMat, b.headW, 0);
-    r.submit(&M.trayHanger, &M.trayMat, b.trayW, CastShadow);
-    r.submit(&M.trayTea, &M.porcelain, b.trayW, 0);
-    r.submit(&M.trayGlasses, &M.glassMat, b.trayW, Transparent);
+    if (ocak) {
+        submitTray(r, b.trayW);  // (Ocakçı) the glasses as he filled them; the tray in his hands while he has it
+    } else {
+        r.submit(&M.trayHanger, &M.trayMat, b.trayW, CastShadow);
+        r.submit(&M.trayTea, &M.porcelain, b.trayW, 0);
+        r.submit(&M.trayGlasses, &M.glassMat, b.trayW, Transparent);
+    }
     submitCount += 25;
 }
 
@@ -819,12 +838,19 @@ void Characters::submit(Renderer& r) {
             r.submit(&m.M.tea[li], g.oralet ? &m.M.oraletMat : &m.M.teaMat, g.world, 0);
             ++m.submitCount;
         }
-        r.submit(&m.M.glass, &m.M.glassMat, g.world, Transparent);
+        // (the player's own glass may be coloured: Ayarlar "Sen" -> bardak)
+        const Mat* gm = s == 0 && m.playerGlassStyle > 0 ? &m.playerGlassMat[m.playerGlassStyle] : &m.M.glassMat;
+        r.submit(&m.M.glass, gm, g.world, Transparent);
         m.submitCount += 2;
     }
-    for (int s = 1; s <= 3; ++s) m.submitOpponent(r, m.opp[s]);
+    for (int s = 1; s <= 3; ++s) {
+        if (m.seatOut[(size_t)s].on) m.submitSeatOut(r, m.opp[s]); // (Konken son kalan)
+        else m.submitOpponent(r, m.opp[s]);
+    }
     m.submitCrowd(r);
     m.submitLife(r);
+    m.submitSpecial(r);  // (ozelgun)
+    m.submitOcakci(r);   // (Ocakçı)
 }
 
 } // namespace r3d

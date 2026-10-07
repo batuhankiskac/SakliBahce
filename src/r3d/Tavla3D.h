@@ -28,7 +28,12 @@ public:
                      bool snap);
     // One checker of `player` goes from -> to (as a step: a lifted hop); call before setPosition of the new position
     // so exactly that checker makes the move. `delay` holds it back (a bot's hand reaching for it first).
-    void moveChecker(int player, int from, int to, float delay);
+    // Returns the checker's index (-1: none there).
+    int moveChecker(int player, int from, int to, float delay);
+    // The player's own hand (PlayerHands): the top of checker `i` while it is on its way (world; false once it has
+    // landed), and where `player`'s dice of the last throw leave the hand (world; false when none are in the air).
+    bool checkerMoving(int i, Vector3& world) const;
+    bool diceThrowPoint(Vector3& world, int player = 0) const;
 
     // Dice: thrown by `player` (0 from the bottom, 1 from the top), landing showing d1 / d2 (d2 = 0: one die).
     // `opening`: the opening roll, one die each (d1 player 0's, d2 player 1's).

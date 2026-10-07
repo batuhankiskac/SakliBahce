@@ -149,38 +149,6 @@ Matrix glassInHand(bool left, float handScale) {
     return basisMatrix(Vector3Scale(gx, inv), Vector3Scale(gy, inv), Vector3Scale(gz, inv), t);
 }
 
-// Per-codepoint jaw openness for lip flaps (Turkish vowels open the mouth).
-std::vector<float> jawTrack(const std::string& s) {
-    std::vector<float> out;
-    for (size_t i = 0; i < s.size();) {
-        unsigned char c = (unsigned char)s[i];
-        int len = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
-        float v = 0.15f;
-        if (len == 1) {
-            char l = (char)std::tolower(c);
-            if (l == 'a' || l == 'o') v = 0.95f;
-            else if (l == 'e' || l == 'u') v = 0.7f;
-            else if (l == 'i') v = 0.5f;
-            else if (l == ' ') v = 0.0f;
-            else if (l == ',' || l == '.' || l == '!' || l == '?') v = -1.f;  // pause
-            else if (l == 'm' || l == 'b' || l == 'p') v = 0.0f;
-            else v = 0.22f;
-        } else if (len == 2 && i + 1 < s.size()) {
-            unsigned char d = (unsigned char)s[i + 1];
-            if (c == 0xC4 && d == 0xB1) v = 0.45f;                       // ı
-            else if (c == 0xC3 && (d == 0xB6 || d == 0x96)) v = 0.75f;   // ö
-            else if (c == 0xC3 && (d == 0xBC || d == 0x9C)) v = 0.55f;   // ü
-            else if (c == 0xC4 && d == 0xB0) v = 0.5f;                   // İ
-            else v = 0.22f;
-        } else if (len == 3) {
-            v = -1.f;  // … and quotes: pause
-        }
-        out.push_back(v);
-        i += (size_t)len;
-    }
-    return out;
-}
-
 } // namespace
 
 // ============================================================================ setup
@@ -1333,7 +1301,8 @@ void Cast::idleOpponent(Opponent& o, float dt) {
                        !(o.arm[0].track.on && o.arm[0].track.kind == TK_Smoke);  // one hand at the face at a time
         // (not while the çaycı is on his round to our table: fresh tea is coming)
         const bool teaComing = boy.plan == 1 && (boy.state == 1 || boy.state == 2);
-        if (armFree && g.level > 0.04f && g.holder < 0 && o.gest == G_None && !teaComing && !(myTurn && o.turnT < 0.5f)) {
+        if (armFree && g.level > 0.04f && g.holder < 0 && o.gest == G_None && !teaComing && !(myTurn && o.turnT < 0.5f) &&
+            o.talkT < 0.f) {  // (Yüz: not in the middle of a sentence)
             startSip(o);
             o.sipIn = (o.kind == 1 ? rng.f(14.f, 28.f) : rng.f(18.f, 36.f)) * (titleMode ? 0.8f : 1.f);
         } else {
@@ -1344,7 +1313,8 @@ void Cast::idleOpponent(Opponent& o, float dt) {
     if (o.kind == 1) {
         o.smokeIn -= dt;
         if (o.smokeIn <= 0.f) {
-            if (!o.arm[0].track.on && o.gest == G_None && !(o.arm[1].track.on && o.arm[1].track.kind == TK_Sip)) {
+            if (!o.arm[0].track.on && o.gest == G_None && !(o.arm[1].track.on && o.arm[1].track.kind == TK_Sip) &&
+                o.talkT < 0.f) {  // (Yüz: not while he talks)
                 startSmoke(o, rng.chance(0.3f));
                 o.smokeIn = rng.f(7.f, 16.f);
             } else {
@@ -1674,6 +1644,7 @@ void Cast::updateGlasses(float dt) {
         Matrix target = restM;
         if (g.holder >= 1 && g.holder <= 3) target = mul(g.inHand, opp[g.holder].arm[g.holderArm].hand);
         else if (g.holder == 4) target = mul(g.inHand, boy.arm[g.holderArm].hand);
+        else if (g.holder == 0) target = playerGlassW;  // the player's own hand (PlayerHands)
         if (g.blend < 1.f) {
             g.blend = std::min(1.f, g.blend + dt / 0.16f);
             g.world = blendMatrix(g.from, target, smoother01(g.blend));
@@ -1971,162 +1942,12 @@ void Cast::updateOpponent(Opponent& o, float dt) {
     if (o.cards) updateCardHold(o);
     // gaze follows its goal (quick but not instant); the head springs follow the gaze
     o.gaze = approachExp(o.gaze, o.gazeGoal, 9.f, dt);
+    faceBody(o, dt);  // (Yüz) the head goes with the expression and the syllables
     poseSeated(o, dt, o.headStiff);
     for (int a = 0; a < 2; ++a) resolveArm(o, a, dt, o.L.handScale);
 
-    // ---- face
-    Face goal;
-    Face neutral;
-    if (o.kind == 1) neutral.smile = 0.25f;
-    if (o.kind == 2) {
-        neutral.smile = -0.3f;
-        neutral.browTilt[0] = neutral.browTilt[1] = 0.08f;
-    }
-    if (o.kind == 0) {
-        neutral.smile = 0.15f;
-        neutral.lidOpen = 0.92f;
-    }
-    goal = neutral;
-    switch (o.mood) {
-    case Mood::Happy:
-        goal.smile = 0.85f;
-        goal.browRaise[0] = goal.browRaise[1] = 0.002f;
-        goal.lidOpen = 0.82f;
-        goal.browTilt[0] = goal.browTilt[1] = -0.05f;
-        break;
-    case Mood::Laugh:
-        goal.smile = 1.f;
-        goal.browRaise[0] = goal.browRaise[1] = 0.003f;
-        goal.lidOpen = 0.5f;
-        goal.jaw = 0.4f;
-        break;
-    case Mood::Grumpy:
-        goal.smile = -0.85f;
-        goal.browRaise[0] = goal.browRaise[1] = -0.0025f;
-        goal.browTilt[0] = goal.browTilt[1] = 0.28f;
-        goal.lidOpen = 0.82f;
-        break;
-    case Mood::Surprised:
-        goal.smile = 0.f;
-        goal.browRaise[0] = goal.browRaise[1] = 0.0055f;
-        goal.browTilt[0] = goal.browTilt[1] = -0.12f;
-        goal.lidOpen = 1.3f;
-        goal.mouthWide = 0.7f;
-        goal.jaw = 0.3f;
-        break;
-    case Mood::Sad:
-        goal.smile = -0.6f;
-        goal.browRaise[0] = goal.browRaise[1] = 0.001f;
-        goal.browTilt[0] = goal.browTilt[1] = -0.32f;
-        goal.lidOpen = 0.78f;
-        break;
-    case Mood::Thinking:
-        goal.smile = -0.25f;
-        goal.browRaise[0] = 0.004f;
-        goal.browRaise[1] = -0.0015f;
-        goal.browTilt[1] = 0.2f;
-        goal.lidOpen = 0.78f;
-        break;
-    case Mood::Smug:
-        goal.smile = 0.65f;
-        goal.browRaise[0] = 0.0035f;
-        goal.browRaise[1] = 0.f;
-        goal.lidOpen = 0.72f;
-        break;
-    case Mood::Content:
-        goal.smile = 0.45f;
-        goal.lidOpen = 0.88f;
-        break;
-    default: break;
-    }
-    if (o.gest == G_Drink && o.gestT > 1.4f && o.gestT < 2.7f) goal.lidOpen = std::min(goal.lidOpen, 0.45f);
-    if (o.drag > 0.3f) goal.lidOpen = std::min(goal.lidOpen, 0.6f);
-    const float fr = 9.f;
-    for (int i = 0; i < 2; ++i) {
-        o.face.browRaise[i] = approachExp(o.face.browRaise[i], goal.browRaise[i], fr, dt);
-        o.face.browTilt[i] = approachExp(o.face.browTilt[i], goal.browTilt[i], fr, dt);
-    }
-    o.face.lidOpen = approachExp(o.face.lidOpen, goal.lidOpen, fr, dt);
-    o.face.smile = approachExp(o.face.smile, goal.smile, 6.f, dt);
-    o.face.mouthWide = approachExp(o.face.mouthWide, goal.mouthWide, fr, dt);
-
-    // talking: lip flaps from the text
-    float jawGoal = std::max(goal.jaw, jawGest);
-    if (o.talkT >= 0.f) {
-        o.talkT += dt;
-        if (o.talkT > o.talkDur) {
-            o.talkT = -1.f;
-        } else {
-            if (o.jawKeys.empty()) o.jawKeys = jawTrack(o.talk);
-            float cps = 13.5f;
-            int idx = (int)(o.talkT * cps);
-            if (idx < (int)o.jawKeys.size()) {
-                float v = o.jawKeys[idx];
-                if (v < 0.f) v = 0.f;
-                float wob = 0.85f + 0.15f * std::sin(o.talkT * 23.f);
-                jawGoal = std::max(jawGoal, v * 0.85f * wob);
-                o.nodPitch += 0.025f * std::sin(o.talkT * 7.f) * (v > 0.3f);
-            }
-        }
-    }
-    spring(o.jaw, o.jawV, jawGoal, 28.f, dt);
-    o.jaw = clampf(o.jaw, 0.f, 1.f);
-
-    // blinking
-    o.blinkIn -= dt;
-    if (std::fabs(o.hYawV) > 3.5f && o.blinkT < 0.f && rng.chance(dt * 6.f)) o.blinkIn = 0.f;
-    if (o.blinkIn <= 0.f && o.blinkT < 0.f) {
-        o.blinkT = 0.f;
-        o.blinkIn = rng.chance(0.18f) ? 0.28f : rng.f(2.2f, 5.5f);
-    }
-    if (o.blinkT >= 0.f) {
-        o.blinkT += dt;
-        const float bd = 0.16f;
-        o.lidClose = std::sin(clampf(o.blinkT / bd, 0.f, 1.f) * PI_F);
-        if (o.blinkT >= bd) {
-            o.blinkT = -1.f;
-            o.lidClose = 0.f;
-        }
-    }
-
-    // eyes: aim each eye at the gaze point (head space), with micro saccades
-    o.microIn -= dt;
-    if (o.microIn <= 0.f) {
-        o.microIn = rng.f(0.35f, 1.4f);
-        o.micro = {rng.f(-0.035f, 0.035f), rng.f(-0.025f, 0.025f)};
-    }
-    const FaceGeo& fg = o.pm->face;
-    Matrix headInv = MatrixInvert(o.headW);
-    Vector3 tH = xfPoint(headInv, o.gaze);
-    Vector3 mid = Vector3Lerp(fg.eye[0], fg.eye[1], 0.5f);
-    Vector3 d = Vector3Subtract(tH, mid);
-    float eyGoal = clampf(std::atan2(-d.x, -d.z), -0.55f, 0.55f) + o.micro.x;
-    float epGoal = clampf(std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)), -0.45f, 0.35f) + o.micro.y;
-    o.eYaw = approachExp(o.eYaw, eyGoal, 30.f, dt);
-    o.ePitch = approachExp(o.ePitch, epGoal, 30.f, dt);
-    const float es = fg.eyeR / 0.0135f;
-    float squint = clampf(1.f - o.face.lidOpen, -0.35f, 0.6f);
-    float openEdge = -0.40f + squint * 0.5f - o.ePitch * 0.55f;
-    float edge = lerpf(openEdge, 0.60f, std::max(o.lidClose, o.gest == G_Laugh ? 0.35f : 0.f));
-    for (int i = 0; i < 2; ++i) {
-        // converge slightly on near targets
-        Vector3 de = Vector3Subtract(tH, fg.eye[i]);
-        float ey = clampf(std::atan2(-de.x, -de.z), -0.55f, 0.55f);
-        float yawI = lerpf(o.eYaw, ey + o.micro.x, 0.22f);  // a little convergence, never cross-eyed
-        o.eyeW[i] = mul(S3(es, es, es), RX(o.ePitch), RY(yawI));
-        o.eyeW[i] = mul(o.eyeW[i], T(fg.eye[i]), o.headW);
-        o.lidW[i] = mul(mul(S3(es, es, es), RX(-edge), RY(yawI * 0.25f)), T(fg.eye[i]), o.headW);
-        float sgn = i == 0 ? 1.f : -1.f;
-        Vector3 bp = Vector3Add(fg.brow[i], {0, o.face.browRaise[i] + 0.0015f * (1.f - o.face.lidOpen) * 0.f, 0});
-        o.browW[i] = mul(RZ(sgn * o.face.browTilt[i]), T(bp), o.headW);
-    }
-    float jawAmt = clampf(o.jaw + o.face.mouthWide * 0.4f, 0.f, 1.f);
-    // closed: the cavity (with its teeth) tucks back behind the lips; open: it drops with the jaw
-    Vector3 mc = Vector3Add(fg.mouth, {0, -0.0045f * jawAmt, 0.004f - 0.004f * smooth01(jawAmt * 4.f)});
-    float sx = 1.f + 0.18f * o.face.smile - 0.25f * o.face.mouthWide;
-    o.mouthW = mul(S3(sx, 0.06f + 0.95f * jawAmt, 1.f), T(mc), o.headW);
-    o.lipVariant = std::clamp((int)std::lround(o.face.smile * 2.f) + 2, 0, 4);
-    o.lipW = mul(T(Vector3Add(fg.mouth, {0, -0.0058f - 0.0095f * jawAmt, -0.0015f})), o.headW);
+    // ---- face: expressions, blinks, eyes, the talking mouth, the mustache (CharactersFace.cpp)
+    updateFace(o, dt, jawGest);
 
     // Mahmut's cigarette
     if (o.kind == 1) {
@@ -2153,7 +1974,7 @@ void Cast::updateOpponent(Opponent& o, float dt) {
             if (o.exhaleT >= 0.f) {
                 o.exhaleT += dt;
                 if (o.exhaleT < 1.0f && rng.chance(dt * 26.f)) {
-                    Vector3 mouth = xfPoint(o.headW, Vector3Add(fg.mouth, {0, -0.004f, -0.02f}));
+                    Vector3 mouth = xfPoint(o.headW, Vector3Add(o.pm->face.mouth, {0, -0.004f, -0.02f}));
                     Vector3 fwd = vnorm(xfDir(o.headW, {0.05f, -0.25f, -1.f}));
                     SmokeParams sp;
                     sp.velocity = Vector3Scale(fwd, rng.f(0.16f, 0.28f) * (1.f - o.exhaleT * 0.6f));

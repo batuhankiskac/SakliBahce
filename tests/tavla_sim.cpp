@@ -1,7 +1,9 @@
 // Headless tavla bot-vs-bot simulation for SaklıBahçe.
 //
-//   tavla_sim --games N --seed S --levels a,b [--match P] [--doubling] [--threads T] [--verbose]
+//   tavla_sim --games N --seed S --levels a,b [--match P] [--doubling] [--variant klasik|gulbahar|fevga]
+//             [--threads T] [--verbose]
 //
+// --variant: the tavla çeşidi (Rules::variant), klasik by default.
 // levels: 0 = Acemi (Easy), 1 = Usta (Normal), 2 = Kurt (Hard). Games are played in duplicate pairs: every
 // deal (seed) is played twice with the sides swapped. The dice sequence depends only on the seed (each roll
 // draws from the game Rng in the same order whatever is played), so both levels get the same dice from the
@@ -92,9 +94,12 @@ struct Stats {
 };
 
 // Plays one match (one game when matchPoints == 1). seatLevel[s] = level of seat s. Returns per-game outcomes.
+Variant gVariant = Variant::Klasik;
+
 std::vector<GameOut> playMatch(uint64_t seed, const std::array<int, 2>& seatLevel, int matchPoints, bool doubling,
                                Stats& st, bool verbose, int& matchWinnerSeat) {
     Rules r;
+    r.variant = gVariant;
     // a single game (matchPoints 0) is the first game of a long match: no score to protect
     const bool single = matchPoints == 0;
     r.matchPoints = single ? 1000 : matchPoints;
@@ -198,8 +203,14 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--threads") && i + 1 < argc) threads = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
         else if (!std::strcmp(argv[i], "--doubling")) doubling = true;
-        else {
-            std::printf("usage: tavla_sim --games N --seed S --levels a,b [--match P] [--doubling] [--threads T] [--verbose]\n");
+        else if (!std::strcmp(argv[i], "--variant") && i + 1 < argc) {
+            const std::string v = argv[++i];
+            if (v == "klasik") gVariant = Variant::Klasik;
+            else if (v == "gulbahar") gVariant = Variant::Gulbahar;
+            else if (v == "fevga") gVariant = Variant::Fevga;
+            else { std::printf("--variant klasik|gulbahar|fevga\n"); return 2; }
+        } else {
+            std::printf("usage: tavla_sim --games N --seed S --levels a,b [--match P] [--doubling] [--variant V] [--threads T] [--verbose]\n");
             return 2;
         }
     }
@@ -282,10 +293,11 @@ int main(int argc, char** argv) {
     const double ppg = mean / gamesPerDeal;
     const double ppgSe = nd > 0 ? sd / std::sqrt(nd) / gamesPerDeal : 0;
 
-    std::printf("tavla_sim: %s (A) vs %s (B), %lld games (%lld duplicate deals), seed %llu, %s%s, %d threads, %.1f s\n",
+    std::printf("tavla_sim: %s (A) vs %s (B), %lld games (%lld duplicate deals), seed %llu, %s%s%s, %d threads, %.1f s\n",
                 levelName(la), levelName(lb), all.games, (long long)nd, (unsigned long long)seed,
                 matchPoints ? ("matches to " + std::to_string(matchPoints)).c_str() : "single games",
-                doubling ? " with the cube" : "", threads, wall / 1000.0);
+                doubling ? " with the cube" : "",
+                gVariant == Variant::Klasik ? "" : (std::string(", ") + variantName(gVariant)).c_str(), threads, wall / 1000.0);
     std::printf("  A game win rate     : %.2f%% +- %.2f%%\n", 100 * wr, 100 * wrSe);
     std::printf("  A net points / game : %+.4f +- %.4f (paired by deal, z = %.1f)\n", ppg, ppgSe, ppgSe > 0 ? ppg / ppgSe : 0.0);
     std::printf("  points / game       : A %.3f  B %.3f\n", all.points[0] / std::max(1.0, n), all.points[1] / std::max(1.0, n));

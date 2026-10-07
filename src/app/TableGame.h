@@ -5,6 +5,7 @@
 // (okey::Game + Table3D).
 #include "r3d/Characters.h"
 #include "r3d/Gfx.h"
+#include "r3d/HandCue.h"
 #include "ui/Audio.h"
 #include "ui/Screens.h"
 
@@ -21,6 +22,10 @@ struct TableContext {
     r3d::Renderer* renderer = nullptr;
     r3d::Characters* characters = nullptr;
     std::function<void(ui::Sfx)> sfx;      // plays a sound now
+    // The player's own hands (r3d::PlayerHands, HandCue.h; both optional): the table tells them what the player's
+    // card / checker / dice do, and holds the object back by the lead so the fingers are on it first.
+    r3d::HandCueFn handCue;
+    r3d::HandLeadFn handLead;
 };
 
 class TableGame {
@@ -51,6 +56,12 @@ public:
     // Where it is played: 0 our okey table, 1 the tavla table (w3d::tavlaFrame; App moves the camera, the opponent,
     // the glasses and the key light there).
     virtual int location() const { return 0; }
+    // (Konken son kalan) The player is out of the match and watches the rest at speed: App moves the score sheets on by
+    // itself, as in the Yapay Zeka mode.
+    virtual bool spectating() const { return false; }
+    // (Konken son kalan) The player had a seat in the hand that just ended (false: he had burned and watched): the
+    // stats count only the hands he played.
+    virtual bool humanInHand() const { return true; }
 
     virtual void setLevel(int level) = 0;          // 0 Acemi, 1 Usta, 2 Kurt (the opponents)
     virtual void setAnimationSpeed(float s) = 0;
@@ -78,6 +89,22 @@ public:
     // tools/tables_check: a short name for what this frame's HUD shows that is worth a picture ("" = nothing special);
     // with --out the first frame of every new name is saved.
     virtual std::string debugPhase() const { return {}; }
+
+    // ---- Başarımlar: what just happened at the table that may open a badge, by the badge's event name ("pisti",
+    // "mars", "batak13", ...: the list is in ui/Achievements.h). App takes them every frame and counts them only in a
+    // match the player plays himself (App::recording()); a table just notes what the player did, in play and in
+    // replays alike (not while restoring a saved match: that path animates nothing and notes nothing).
+    std::vector<std::string> achievementEvents() {
+        std::vector<std::string> out;
+        out.swap(achievementEvents_);
+        return out;
+    }
+
+protected:
+    void noteAchievement(const char* ev) { achievementEvents_.emplace_back(ev); }
+
+private:
+    std::vector<std::string> achievementEvents_;
 };
 
 // The game behind a ui::GameKind that isn't an okey game (nullptr for the okey games / not built yet).

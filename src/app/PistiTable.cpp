@@ -1,4 +1,7 @@
-// Pişti at our table (four players, eşli, or you and Kel Mahmut): engine pisti::Game, bots pisti::Bot.
+// Pişti at our table (four players, eşli), or you and the regular chosen in Ayarlar (Rakip, Kel Mahmut by default) at
+// the two-seat tavla table (iki kişilik): engine
+// pisti::Game, bots pisti::Bot. The rules and the scoring are the same everywhere; only the table differs
+// (CardTableFrame: the layout below is written for our table and mapped through layPose() / layPoint()).
 #include "app/CardTable.h"
 #include "core/Pisti.h"
 #include "core/PistiBot.h"
@@ -43,8 +46,10 @@ public:
         r.targetScore = std::clamp(st.pistiTarget, 51, 301);
         g_ = pisti::Game(r);
         names_ = names;
+        oppSeat_ = 2; // Rakip: iki kişilik pişti seats the chosen regular across (layout seat 2)
+        if (r.mode == pisti::Mode::Ikili) seatOpponent(ui::twoPlayerOpponent(st, ui::GameKind::Pisti));
         for (int s = 0; s < 4; ++s) {
-            g_.setPlayer(s, names[(size_t)s], s == 0);
+            g_.setPlayer(s, names_[(size_t)s], s == 0);
             const pisti::BotLevel lv = s == 0 ? pisti::BotLevel::Kurt : (pisti::BotLevel)std::clamp(level_, 0, 2);
             bots_[(size_t)s] = std::make_unique<pisti::Bot>(lv, seed * 4 + (uint64_t)s + 0x9157ull);
         }
@@ -69,7 +74,13 @@ public:
         for (int s = 1; s < 4; ++s)
             if (bots_[(size_t)s]) bots_[(size_t)s]->setLevel((pisti::BotLevel)level_);
     }
-    std::vector<int> seats() const override { return g_.activeSeats(); }
+    std::vector<int> seats() const override {
+        if (g_.rules().mode == pisti::Mode::Ikili) return {0, oppSeat_}; // (Rakip: the Characters seat)
+        return g_.activeSeats();
+    }
+    // İki kişilik pişti (seat 0 vs seat 2) is played at the two-seat tavla table, the opponent across (App moves him,
+    // the glasses, the camera and the key light there); the others stay at our table and watch.
+    int location() const override { return g_.rules().mode == pisti::Mode::Ikili ? 1 : 0; }
     bool handOver() const override { return g_.stage() == pisti::Stage::HandOver || g_.stage() == pisti::Stage::MatchOver; }
     bool matchOver() const override { return g_.stage() == pisti::Stage::MatchOver; }
 
@@ -88,7 +99,7 @@ public:
         std::array<Vector3, 4> heads{};
         std::array<r3d::GameHud::Plate, 4> plates{};
         for (int s = 1; s < 4; ++s) {
-            heads[(size_t)s] = ctx_.characters ? ctx_.characters->headPosition(s) : Vector3{};
+            heads[(size_t)s] = ctx_.characters ? ctx_.characters->headPosition(chr(s)) : Vector3{};
             if (!g_.isActive(s)) continue;
             r3d::GameHud::Plate& p = plates[(size_t)s];
             p.show = true;
@@ -101,7 +112,7 @@ public:
         }
         hud_.plates(r, heads, plates);
         if (g_.stage() == pisti::Stage::Playing)
-            hud_.label3D(r, {0.f, w3d::TABLE_Y + 0.01f, 0.12f},
+            hud_.label3D(r, layPoint({0.f, w3d::TABLE_Y + 0.01f, 0.12f}),
                          "Yerde " + std::to_string(g_.tableCount()) + "  \xC2\xB7  destede " + std::to_string(g_.deckCount()),
                          Color{226, 216, 196, 255}, 14.f);
         Color sc = ui::pal::TextLight;
@@ -293,6 +304,7 @@ protected:
                     if (b) b->resetForHand();
                 hud_.toast(e.text, ui::pal::Highlight, 2.6f);
                 dealer_ = e.seat;
+                prevPisti_ = false; // Başarımlar
                 break;
             case E::Deal: dealt = true; break;
             case E::TableTurnUp:
@@ -306,25 +318,32 @@ protected:
                 captureSeat_ = e.seat;
                 captureCards_ = e.cards;
                 captureAt_ = now_ + 0.9f / speed_;
+                // Başarımlar: the player's pişti right after another pişti (anybody's)
+                if (e.seat == 0 && e.pisti && prevPisti_) noteAchievement("pisti_ustune");
+                prevPisti_ = e.pisti;
                 if (kart::rankOf(e.card) == kart::Vale && e.seat >= 1 && rng_.chance(0.3f))
-                    say(e.seat, kValeLines[e.seat][rng_.range(2)]);
+                    say(e.seat, kValeLines[chr(e.seat)][rng_.range(2)]);
                 break;
             case E::Pisti:
                 hud_.toast(e.text, ui::pal::Highlight, 3.2f);
                 soundAt(ui::Sfx::CardSlap, 0.5f / speed_);
                 // the whole kahvehane hears it
                 if (ctx_.characters) ctx_.characters->crowdReact(e.seat == 0 || g_.sideOf(e.seat) == g_.sideOf(0) ? r3d::Characters::CrowdCheer : r3d::Characters::CrowdLaugh,
-                                                                  {0.f, w3d::TABLE_Y + 0.05f, 0.f}, 0.55f);
+                                                                  layPoint({0.f, w3d::TABLE_Y + 0.05f, 0.f}), 0.55f);
                 if (e.seat >= 0 && e.seat < 4) {
                     const int sd = g_.sideOf(e.seat);
                     if (sd >= 0) ++pistis_[(size_t)sd];
                 }
+                if (e.seat == 0) { // Başarımlar
+                    noteAchievement("pisti");
+                    if (e.jack) noteAchievement("vale_pisti");
+                }
                 if (e.seat >= 1) {
-                    say(e.seat, kPistiSelf[e.seat][rng_.range(3)], true);
-                    if (ctx_.characters) ctx_.characters->react(e.seat, 1, {0.f, w3d::TABLE_Y, 0.f});
+                    say(e.seat, kPistiSelf[chr(e.seat)][rng_.range(3)], true);
+                    if (ctx_.characters) ctx_.characters->react(chr(e.seat), 1, layPoint({0.f, w3d::TABLE_Y, 0.f}));
                 } else {
                     const int s = g_.rules().mode == pisti::Mode::Ikili ? 2 : 1 + rng_.range(3);
-                    say(s, fillName(kPistiHuman[s][rng_.range(2)], names_[0]), true);
+                    say(s, fillName(kPistiHuman[chr(s)][rng_.range(2)], names_[0]), true);
                 }
                 break;
             case E::LastCapture:
@@ -394,8 +413,8 @@ protected:
     std::vector<std::pair<int, r3d::CardPose>> dealtExtras() const override {
         std::vector<std::pair<int, r3d::CardPose>> v;
         int level = 0;
-        for (int c : g_.closedCardsForDisplay()) v.push_back({c, r3d::cardlayout::middle(level++, false)});
-        for (int c : g_.tableCards()) v.push_back({c, r3d::cardlayout::middle(level++, true)});
+        for (int c : g_.closedCardsForDisplay()) v.push_back({c, layPose(r3d::cardlayout::middle(level++, false))});
+        for (int c : g_.tableCards()) v.push_back({c, layPose(r3d::cardlayout::middle(level++, true))});
         return v;
     }
     int deckRemaining() const override { return (int)g_.deckCardsForDisplay().size(); }
@@ -407,17 +426,17 @@ protected:
     void layoutExtra() override {
         // a capture waits a moment on the felt, then the cards go to the taker's pile
         if (captureAt_ >= 0.f && now_ >= captureAt_) {
-            sweepTo(captureSeat_, captureCards_, {0.f, w3d::TABLE_Y, 0.f});
+            sweepTo(captureSeat_, captureCards_, layPoint({0.f, w3d::TABLE_Y, 0.f}));
             for (int c : captureCards_) pending_.erase(std::remove(pending_.begin(), pending_.end(), c), pending_.end());
             captureAt_ = -1.f;
             captureCards_.clear();
         }
         // the middle: the closed cards (face down) under the open pile; the deck face down by the dealer
         int level = 0;
-        for (int c : g_.closedCardsForDisplay()) placeExtra(c, r3d::cardlayout::middle(level++, false));
+        for (int c : g_.closedCardsForDisplay()) placeExtra(c, layPose(r3d::cardlayout::middle(level++, false)));
         const size_t dealtOpen = dealing() ? g_.tableCards().size() : 0; // (the dealt ones lie straight)
         for (int c : g_.tableCards()) {
-            const r3d::CardPose p = r3d::cardlayout::middle(level++, true, dealtOpen ? -1 : c);
+            const r3d::CardPose p = layPose(r3d::cardlayout::middle(level++, true, dealtOpen ? -1 : c));
             placeExtra(c, p);
         }
         // cards just captured stay in the middle until they are swept
@@ -431,15 +450,18 @@ private:
         const std::vector<int>& open = g_.tableCards();
         const auto it = std::find(open.begin(), open.end(), card);
         const int level = (int)g_.closedCardsForDisplay().size() + (int)(it != open.end() ? it - open.begin() : (long)open.size());
-        const r3d::CardPose p = r3d::cardlayout::middle(std::max(0, level), true, card);
+        const r3d::CardPose p = layPose(r3d::cardlayout::middle(std::max(0, level), true, card));
         if (bot && seat != 0) {
             // tossed onto the pile now and then, laid on it otherwise
             playFromHand(seat, card, p, rng_.chance(0.35f));
             return;
         }
-        const float delay = bot ? w3d::BOT_GIVE_LEAD : 0.f;
+        // (the player's card waits for the player's own hand, unless the mouse dragged it out: PlayerHands)
+        const float delay = bot ? w3d::BOT_GIVE_LEAD
+                          : seat == 0 && card != handDragged_ && ctx_.handLead ? ctx_.handLead(r3d::HandCueKind::Give) : 0.f;
         cards_.place(card, p, true, delay, 0.07f);
         soundAt(ui::Sfx::CardPlace, (delay + 0.42f) / speed_);
+        if (seat == 0) handCueCard(card, delay);
     }
 
     pisti::Game g_;
@@ -451,6 +473,7 @@ private:
     int dealer_ = 0;
     std::vector<std::array<int, 4>> history_;
     std::array<int, 4> pistis_{};
+    bool prevPisti_ = false; // Başarımlar: the last capture of this hand was a pişti
 };
 
 } // namespace

@@ -281,6 +281,10 @@ struct PersonMeshes {
     Mesh upper[2]{}, fore[2]{};
     Mesh brow[2]{};
     Mesh stache{};            // mustache (hair material); empty for patrons (baked into the head)
+    // Yüz: the regulars' mustache in two halves (CharactersFace.cpp turns them about stachePivot: the ends rise with
+    // a smile, droop with a frown, lift with the upper lip when he talks); [0] the +x half with the middle tuft
+    Mesh stacheWing[2]{};
+    Vector3 stachePivot{};
     bool hasFace = false;
     Mat cloth{}, skin{}, headMat{}, hairMat{};
     FaceGeo face;

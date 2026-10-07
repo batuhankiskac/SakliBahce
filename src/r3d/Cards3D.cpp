@@ -9,6 +9,8 @@
 
 namespace r3d {
 
+static_assert(CARD_JOKER_KEY == ui::cardgfx::KEY_JOKER, "Cards3D: the joker's atlas key");
+
 namespace {
 
 constexpr float RADIUS = 0.0036f; // corner radius (the atlas cards have 3.6 mm corners)
@@ -138,7 +140,7 @@ bool Cards3D::init(Renderer& r) {
     ui::cardgfx::init();
     if (!ui::cardgfx::ready()) return false;
     for (int i = 0; i < CARD_COUNT; ++i) {
-        meshes_[i] = buildCard(i);
+        meshes_[i] = buildCard(cardFace(i)); // (the second deck shows the same faces)
         mats_[i] = r.makeMat(WHITE, ui::cardgfx::atlas(), 0.18f, 30.f);
     }
     {
@@ -363,6 +365,13 @@ namespace {
 constexpr Vector3 kHumanPivot{0.f, w3d::TABLE_Y + 0.112f, 0.592f};
 constexpr float kHumanFanTiltDeg = 47.f;   // the fan's plane leans back from upright by this much
 } // namespace
+
+Matrix humanFanFrame() {
+    const float tilt = kHumanFanTiltDeg * DEG2RAD;
+    const Vector3 up{0.f, std::cos(tilt), -std::sin(tilt)};
+    const Vector3 face{0.f, std::sin(tilt), std::cos(tilt)};
+    return basisFrame({1.f, 0.f, 0.f}, face, Vector3Negate(up), kHumanPivot);
+}
 
 CardPose hand(int seat, int i, int n) {
     CardPose p;

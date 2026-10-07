@@ -14,6 +14,69 @@
 
 namespace app {
 
+// ---------------------------------------------------------------- the table frame (2026-10)
+// Where a card game is laid out: our okey table, or the two-seat tavla table for two-player card games.
+//
+// Every card layout (r3d::cardlayout::*, w3d::seatLocal / SEAT_DIR / SEAT_RIGHT) is written for the okey table:
+// origin at its centre, seat 0 (the player) at +Z, 1 on the right, 2 across, 3 on the left. Call the coordinates of
+// that layout "layout space". CardTableFrame maps layout space onto the table the game is really played at
+// (TableGame::location()):
+//  - location 0 (our okey table): identity, nothing changes.
+//  - location 1 (the two-seat tavla table, w3d::tavlaFrame; seats 0 and 2 only, the opponent sits across as seat 2):
+//    the layout is turned into the tavla table's frame, and its depth (local z, toward the players) is squeezed by
+//    DEPTH so that what lies on our felt fits the smaller top (the deck, the dealt piles, the won piles, the trick);
+//    across (local x) stays as it is (the tavla table is about as wide as our felt). The player's own fan is held
+//    relative to the eye, not to the felt: eyePose() moves it with the chair (EYE_SHIFT) and does not squeeze it.
+//    The opponent's fan needs nothing: it is in their hand (Characters::cardFan is in world space already).
+//
+// CardTableBase applies the frame to everything it lays out itself (the hands, the deal and the cut, the trick, the
+// gathered trick, the won piles, the deck, the dragged card, the people's reaches and gathers): a game that only uses
+// those needs nothing but `int location() const override { return 1; }` (and seats 0 and 2). A game that places cards
+// of its own (layoutExtra / dealtExtras / placeExtra, like Pişti's middle pile), or points (HUD labels, reactions,
+// Characters calls), passes its layout-space poses and points through CardTableBase::layPose() / layPoint().
+// Poses read back from r3d::Cards3D (pose(), target()) and Characters (cardFan, headPosition) are world already.
+struct CardTableFrame {
+    bool tavla = false;                                    // location 1: the two-seat tavla table
+    static constexpr float DEPTH = w3d::TAVLA_HALF_D / w3d::FELT_HALF;    // the felt's depth onto the tavla top
+    static constexpr float EYE_SHIFT = w3d::SEAT_DIST - w3d::TAVLA_SEAT_DIST; // our chair is this much closer there
+
+    // A layout-space point on / over the table -> world.
+    Vector3 point(Vector3 l) const {
+        return tavla ? w3d::tavlaToWorld({l.x, l.y, l.z * DEPTH}) : l;
+    }
+    // World -> layout space (the inverse of point()).
+    Vector3 toLayout(Vector3 w) const {
+        if (!tavla) return w;
+        Vector3 l = w3d::tavlaToLocal(w);
+        l.z /= DEPTH;
+        return l;
+    }
+    // A layout-space card pose -> world (position as point(), the orientation turned with the table).
+    r3d::CardPose pose(const r3d::CardPose& p) const {
+        if (!tavla) return p;
+        r3d::CardPose o;
+        o.pos = point(p.pos);
+        o.rot = QuaternionMultiply(yaw(), p.rot);
+        return o;
+    }
+    // The player's own fan (cardlayout::hand(0, ...), placed relative to the eye at our table) -> world: it keeps its
+    // place in the view, i.e. it turns about the eye with the tavla seat's steeper resting look (EYE_PITCH_DELTA) and
+    // moves with the chair.
+    static constexpr Vector3 OKEY_EYE{0.f, 1.21f, 0.85f};  // PlayerCamera's resting eye at our table (DEF_EYE) ...
+    static constexpr float EYE_PITCH_DELTA = -36.f - -24.5f; // ... and its pitch there vs at the tavla seat (degrees)
+    r3d::CardPose eyePose(const r3d::CardPose& p) const {
+        if (!tavla) return p;
+        const Quaternion pitch = QuaternionFromAxisAngle({1.f, 0.f, 0.f}, EYE_PITCH_DELTA * DEG2RAD);
+        Vector3 l = Vector3Add(Vector3RotateByQuaternion(Vector3Subtract(p.pos, OKEY_EYE), pitch), OKEY_EYE);
+        l.z -= EYE_SHIFT;
+        r3d::CardPose o;
+        o.pos = w3d::tavlaToWorld(l);
+        o.rot = QuaternionMultiply(yaw(), QuaternionMultiply(pitch, p.rot));
+        return o;
+    }
+    static Quaternion yaw() { return QuaternionFromAxisAngle({0.f, 1.f, 0.f}, w3d::TAVLA_YAW_DEG * DEG2RAD); }
+};
+
 class CardTableBase : public TableGame {
 public:
     bool init(const TableContext& ctx) override;
@@ -51,8 +114,11 @@ protected:
     virtual void layoutExtra() {}                          // cards outside hands / trick / piles (Pişti's middle)
     virtual bool faceUpHand(int seat) const { return seat == 0; } // eşli batak's open dummy
     virtual bool extraBusy() const { return false; }      // the game's own animation the bots must wait for
+    // Konken: the player's fan (seat 0, once the deal has brought it to the hand) is laid out by the game itself in
+    // layoutExtra() — its own order, selection, dragging; the base still deals it and keeps it held. Default: the base.
+    virtual bool gameLaysOwnHand() const { return false; }
     // Dealing: cards outside the hands that come off the deck too (Pişti's table cards), dealt after the hands, and
-    // how many cards stay in the deck (they lie under the ones being dealt).
+    // how many cards stay in the deck (they lie under the ones being dealt). The extras' poses are world (layPose()).
     virtual std::vector<std::pair<int, r3d::CardPose>> dealtExtras() const { return {}; }
     virtual int deckRemaining() const { return 0; }
     virtual bool showCutCard() const { return false; }    // Pişti: the deck's bottom card is shown at the cut
@@ -83,7 +149,7 @@ protected:
     void dealFrom(int dealer);
     // Cards that just arrived in hands (a re-deal mid-hand): dealt the same way from the deck, without the shuffle.
     void dealNew(int dealer);
-    // The deck's slot `i` (from the bottom) by the dealer: riffling while the shuffle runs.
+    // The deck's slot `i` (from the bottom) by the dealer: riffling while the shuffle runs (world: in the table frame).
     r3d::CardPose deckSlot(int dealer, int i) const;
     bool dealing() const { return deal_.on; }
     void onPlayed(int seat, int card, bool bot);           // a card goes from seat's hand to the trick
@@ -94,13 +160,44 @@ protected:
     void collectTo(int seat, const std::vector<int>& cards, float delay); // cards fly to seat's won pile
     // Pişti's capture: the taker's hand comes down on the middle and pushes the cards to its pile.
     void sweepTo(int seat, const std::vector<int>& cards, Vector3 from);
+    // The player's own hand (r3d::PlayerHands via ctx_.handCue): the player's card on its way (or dragged: lead < 0).
+    void handCueCard(int card, float lead);
+    int handDragged_ = -1;  // the card the mouse let go of last (it is in the hand already)
     bool tableBusy() const;                                // deal / trick hold / flights: bots wait
     void say(int seat, const std::string& line, bool important = false);
     void sound(ui::Sfx s);
     void soundAt(ui::Sfx s, float delaySeconds);           // a sound when the card lands (game time)
     // layoutExtra(): put a card that is in none of the hands / trick / piles (keeps it visible this frame)
     void placeExtra(int card, const r3d::CardPose& p, bool animate = true, float delay = 0.f);
+    // The table frame (see CardTableFrame above): layout space (the okey table's cardlayout / w3d seat frames) -> the
+    // world at the table this game is played at (location()). placeExtra(), dealtExtras(), Characters calls and HUD
+    // labels take world poses / points: pass a game's own layout through these.
+    CardTableFrame tableFrame() const { return CardTableFrame{location() == 1}; }
+    r3d::CardPose layPose(const r3d::CardPose& p) const { return tableFrame().pose(p); }
+    Vector3 layPoint(Vector3 p) const { return tableFrame().point(p); }
     std::string seatName(int s) const { return names_[(size_t)s]; }
+    // Rakip (2026-10): at the two-seat table the opponent plays layout seat 2 (across), but the regular sitting there
+    // is the one chosen in Ayarlar (ui::twoPlayerOpponent): oppSeat_ (1..3). chr() turns a layout seat into the
+    // Characters seat (his hands, his voice, his bubbles); the base applies it to every Characters call it makes, the
+    // games to their own (react, headPosition). names_[2] holds his name. watcherSeat(k): the k-th (0, 1) of the two
+    // regulars who are not playing (they stay at the okey table and talk from there).
+    int oppSeat_ = 2;
+    int chr(int seat) const { return seat == 2 ? oppSeat_ : seat; }
+    int watcherSeat(int k) const {
+        int n = 0;
+        for (int s = 1; s <= 3; ++s)
+            if (s != oppSeat_ && n++ == k) return s;
+        return 1;
+    }
+    // A card that has just left the stock for seat's hand (call from layoutExtra the frame it leaves the stock): it
+    // flies there from where it lies instead of popping into the hand; a regular's right hand takes it off the stock and
+    // brings it up into his fan (Characters::drawCard). `stagger`: a second card drawn at once waits this much longer.
+    void drawFromStock(int seat, int card, float stagger = 0.f);
+    // Call in startMatch of a two-player game played at the tavla table (after names_ = names).
+    void seatOpponent(int seat) {
+        oppSeat_ = std::clamp(seat, 1, 3);
+        names_[2] = names_[(size_t)oppSeat_];
+    }
     // Maç tekrarı: the status while the player's seat is to move ("Sıra sende" for the default name "Sen").
     std::string replaySelfStatus() const { return names_[0] == "Sen" ? std::string("Sıra sende") : names_[0] + " düşünüyor…"; }
     // After a resume: the table shows the engine's state at once (hands, the trick, won piles, extras via layoutExtra;
@@ -113,6 +210,14 @@ protected:
     void requestHint();                                   // "İpucu" / H: ask the game's Kurt bot, show its answer
     const Hint* activeHint() const;                       // the hint still standing for this decision (nullptr: none)
     static constexpr int HINT_BUTTON = 0;                 // GameHud click id of "İpucu"
+    // Altmışaltı (2026-10): more buttons of the game's own under "İpucu" (Kapat, Kozu Al); their clicks come to
+    // onHudClick with id 1, 2, ... in this order. Default none: the column is "İpucu" alone as before.
+    struct GameButton {
+        std::string label;
+        bool enabled = true;
+        bool glow = false;
+    };
+    virtual std::vector<GameButton> gameButtons() const { return {}; }
 
     TableContext ctx_;
     r3d::Cards3D cards_;

@@ -412,6 +412,10 @@ void drawTvCanvas(RenderTexture2D& rt, const TvSim& tv, float time) {
         ui::drawText(ui::FontId::Sign, "SPOR", {262, 6}, 17.f, Color{250, 250, 250, 200});
         DrawRectangleRounded({262, 25, 42, 11}, 0.4f, 4, Color{210, 30, 30, 230});
         ui::drawTextCentered(ui::FontId::UiBold, "CANLI", {283, 30.5f}, 9.f, WHITE);
+        if (tv.derby) {  // (ozelgun) maç gecesi: the big derby
+            DrawRectangleRounded({6, 26, 70, 15}, 0.35f, 4, Color{214, 160, 30, 235});
+            ui::drawTextCentered(ui::FontId::UiBold, "DERBİ", {41, 33.5f}, 12.f, Color{30, 20, 10, 255});
+        }
         if (tv.goalFlash > 0.f) {
             float t = tv.goalFlash;
             float a = std::fmod(t * 2.5f, 1.f) > 0.3f ? 1.f : 0.55f;

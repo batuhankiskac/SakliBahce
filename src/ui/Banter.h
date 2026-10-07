@@ -76,6 +76,9 @@ public:
     bool matchStart(int game, int streak, int day = -1);
     // The player rose to a new rank (StatsBook rank name, e.g. "Müdavim"): a regular (maybe the çaycı too) remarks.
     bool rankUp(const std::string& rankName);
+    // Başarımlar: the player just opened the badge `name` (ui::Achievements, e.g. "Pişti Üstüne Pişti"): a regular
+    // with nothing pending congratulates him (now and then the çaycı too). Important line. True if queued.
+    bool achievement(const std::string& name);
 
     // exposed for tests / tools
     static int lineCount();            // total number of distinct lines (tables + exchanges)
@@ -136,5 +139,28 @@ private:
     std::string address(int speaker, int target) const;  // how `speaker` calls `target` (0 = the human)
     std::string humanAddress(int speaker) const;
 };
+
+// Bezik: what the two regulars watching from the okey table call over to the two-seat table (seat 1..3, not `opp`:
+// the opponent playing there, Rakip; Kel Mahmut by default). `situation`: 0 a big combination of the player's, 1 one of
+// the opponent's, 2 a double bezik (500), 3 the stock is gone (the last eight tricks); `pick` chooses among the lines.
+// {h} in a line is the player.
+std::string bezikRemark(int seat, int situation, int pick, int opp = 2);
+
+// Özel günler and the rain in the garden (BanterSpecial.cpp, ozelgun): a line for `day` (w3d::SpecialDay: 1 Ramazan
+// Bayramı, 2 Kurban Bayramı, 3 Ramazan, 4 the derby; 0 for the rain situations) in `situation`, with its speaker (1..3 the
+// regulars by their characters, 4 the çaycı). `pick` chooses among the lines. False if there is none.
+enum class SpecialSit {
+    Greeting,    // the match begins on a special day (bayram greetings, "hayırlı iftarlar", "bu akşam derbi var")
+    Chatter,     // now and then during the evening
+    Davul,       // the sahur davulcu is heard down the street (Ramazan nights)
+    Goal,        // a goal in the derby on the TV
+    RainBegins,  // it starts to rain while we sit in the garden (Mekân otomatik: we will go in after the hand)
+    UnderAwning, // it rains in the garden with Mekân = Bahçe: the awning is down
+    MoveInRain,  // between hands: the rain sends us inside
+    MoveInDerby, // between hands: the derby begins, everybody goes inside to the TV
+    MoveOther,   // between hands: the evening / the season moves us inside
+    MoveOut,     // between hands: a fair day again, out to the garden
+};
+bool specialLine(int day, SpecialSit situation, uint32_t pick, int& seat, std::string& text);
 
 } // namespace ui

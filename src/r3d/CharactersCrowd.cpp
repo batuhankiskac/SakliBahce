@@ -513,23 +513,25 @@ void Cast::updateCayci(float dt) {
         faceTarget = Vector3Add(b.pos, {0, 0, -1.f});
         hasFaceTarget = true;
         if (!titleMode || true) {
-            if (b.roundQueued && b.timer <= 0.f) {  // "Çaylar benden!": our table, then everybody
+            // (Ocakçı) every trip starts from the ocakçı's hands: ocakTrayGate() holds it until he filled the tray
+            if (b.roundQueued && b.timer <= 0.f && ocakTrayGate()) {  // "Çaylar benden!": our table, then everybody
                 planTrip(true, -1);
                 b.roundQueued = false;
                 b.roundBg.clear();
                 for (int t = 0; t < (int)bgTables.size(); ++t)
                     if (!bgTables[(size_t)t].patrons.empty() && patrons[bgTables[(size_t)t].patrons[0]].present) b.roundBg.push_back(t);
                 b.nextOurs = rng.f(70.f, 100.f);
-            } else if ((b.nextOurs <= 0.f || (b.called && b.nextOurs < 40.f)) && b.timer <= 0.f) {
+            } else if ((b.nextOurs <= 0.f || (b.called && b.nextOurs < 40.f)) && b.timer <= 0.f && ocakTrayGate()) {
                 planTrip(true, -1);
                 b.nextOurs = rng.f(60.f, 90.f);
-            } else if (b.nextBg <= 0.f && b.timer <= 0.f) {
+            } else if (b.nextBg <= 0.f && b.timer <= 0.f && ocakTrayGate()) {
                 planTrip(false, pickBgTable());
                 b.nextBg = rng.f(26.f, 48.f);
             }
         }
     }
     if (b.called && b.state == 0 && b.nextOurs > 4.f) b.nextOurs = rng.f(2.f, 4.f);
+    ocakBoyAtCounter(dt);  // (Ocakçı) he steps over to the counter's corner for the tray
     // shortly before a scheduled round somebody at our table calls for tea (so the visit feels asked for)
     if (b.state == 0 && !b.called && !titleMode && b.nextOurs <= 5.f && b.nextOurs + dt > 5.f && rng.chance(0.65f))
         banter.orderTea();
@@ -700,6 +702,7 @@ void Cast::updateCayci(float dt) {
                 g.steamAcc = 0.7f;
                 teaServed.push_back(gi);
                 if (teaServed.size() > 8) teaServed.pop_front();
+                ocakTrayServed();  // (Ocakçı) a glass off the tray
             }
             if (b.serveT > 1.5f) nextStop();
             break;
@@ -733,6 +736,7 @@ void Cast::updateCayci(float dt) {
             A.track.nextKey = 1;
             b.serveStep = 1;
             sfx(ui::Sfx::GlassSet);
+            ocakTrayServed();  // (Ocakçı) a glass off the tray
             // a round on somebody: the men at this table thank him
             if (!titleMode && b.roundReply && crowdLineCd <= 0.f && !T.patrons.empty()) {
                 static const char* const kThanks[] = {"Sağ ol!", "Eksik olma!", "Sağlığına!", "Bereket versin!", "Eline sağlık!"};
@@ -879,6 +883,7 @@ void Cast::updateCayci(float dt) {
     R.cur = rk;
     Key lk = kk(0, trayHold, {0.25f, -0.25f, -0.93f}, {0.9f, -0.35f, 0.25f}, HandPose::Grip);
     lk.pos = wristAt(Vector3Add(trayHold, {0, 0.01f, 0}), lk.fingers, lk.palm, GRIP_CENTER, hs, true);
+    ocakBoyTrayHand(lk, rootInv, hs);  // (Ocakçı) reaching for the tray / the hand free while the ocakçı has it
     Lh.cur = lk;
     Lh.cur.pos = approachExp(Lh.localWrist, lk.pos, 3.f, dt);
     Lh.localWrist = Lh.cur.pos;
@@ -967,10 +972,11 @@ void Cast::updateCayci(float dt) {
     float jawGoal = 0.f;
     if (b.talkT >= 0.f) {
         b.talkT += dt;
-        jawGoal = 0.25f + 0.25f * std::sin(b.talkT * 17.f) + 0.2f * std::sin(b.talkT * 7.f);
+        // (Yüz) his lips follow his voice, or the text's syllables when there is none (CharactersFace.cpp)
+        jawGoal = std::max(0.f, talkOpen(b.tm, 4, b.talkT, dt)) * 0.85f;
         if (b.talkT > b.talkDur) b.talkT = -1.f;
     }
-    b.jaw = approachExp(b.jaw, clampf(jawGoal, 0.f, 1.f), 20.f, dt);
+    b.jaw = approachExp(b.jaw, clampf(jawGoal, 0.f, 1.f), 26.f, dt);
     b.mouthW = mul(S3(1.1f, 0.06f + 0.9f * b.jaw, 1.f),
                    T(Vector3Add(fg.mouth, {0, -0.004f * b.jaw, 0.004f - 0.004f * smooth01(b.jaw * 4.f)})), b.headW);
     b.lipW = mul(T(Vector3Add(fg.mouth, {0, -0.0058f - 0.009f * b.jaw, -0.0015f})), b.headW);

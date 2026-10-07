@@ -446,9 +446,11 @@ void baseHead(Sdf& s, FaceGeo& g, const PersonLook& L, float w, float jowl, floa
 }
 
 // A mustache (separate mesh: hair material, not the shiny scalp).
-Sdf mustacheSdf(Color c, float thick, float span, float droop, float y, uint32_t seed) {
+// `side` (Yüz): 0 the whole mustache; +1 only the +x half with the middle tuft, -1 only the -x half.
+Sdf mustacheSdf(Color c, float thick, float span, float droop, float y, uint32_t seed, int side = 0) {
     Sdf s;
     for (int sgn = -1; sgn <= 1; sgn += 2) {
+        if (side != 0 && sgn != side) continue;
         Vector3 a{sgn * 0.0025f, y + 0.0015f, -0.1015f};
         Vector3 m{sgn * span * 0.55f, y - 0.004f, -0.0975f};
         Vector3 e{sgn * span, y - 0.010f - droop, -0.088f};
@@ -456,7 +458,7 @@ Sdf mustacheSdf(Color c, float thick, float span, float droop, float y, uint32_t
         s.cone(m, e, thick * 0.92f, thick * 0.5f, c, 0.004f);
         if (droop > 0.006f) s.cone(e, {sgn * (span + 0.002f), y - 0.012f - droop * 1.8f, -0.085f}, thick * 0.5f, thick * 0.3f, c, 0.003f);
     }
-    s.ellipsoid({0, y + 0.001f, -0.1025f}, {thick * 1.5f, thick * 0.9f, thick * 0.9f}, c, 0.004f);
+    if (side >= 0) s.ellipsoid({0, y + 0.001f, -0.1025f}, {thick * 1.5f, thick * 0.9f, thick * 0.9f}, c, 0.004f);
     s.paint = [c, seed](Vector3 p, Vector3 n, Color) {
         // combed strands: stripes running down/outward + a darker underside
         float strand = 0.5f + 0.5f * std::sin(p.x * 2400.f + p.y * 900.f);
@@ -1321,6 +1323,12 @@ void buildOpponent(MeshJobs& J, PersonMeshes& pm, int kind, Renderer& r) {
     queueSdf(J, h.s, 0.0031f, kind == 3 ? 9000 : 14000, &pm.head);
     if (h.stache)
         queueSdf(J, mustacheSdf(h.stacheCol, h.thick, h.span, h.droop, h.y, 200u + (uint32_t)kind), 0.0011f, 1800, &pm.stache);
+    if (h.stache && kind <= 2) { // Yüz: the regulars' mustache halves (CharactersFace.cpp moves them)
+        for (int w = 0; w < 2; ++w)
+            queueSdf(J, mustacheSdf(h.stacheCol, h.thick, h.span, h.droop, h.y, 200u + (uint32_t)kind, w == 0 ? 1 : -1),
+                     0.0011f, 1100, &pm.stacheWing[w]);
+        pm.stachePivot = {0.f, h.y + 0.001f, -0.1025f};
+    }
     queueTorso(J, torso, kCellTorso, kind == 1 ? 30000 : 22000, &pm.torso);
     if (kind != 3) queueSdf(J, seatedLegs(L, L.bodyScale), 0.0075f, 4000, &pm.lower);
     queueSdf(J, browSdf(L.browCol, browThick, bushy, 100u + (uint32_t)kind), 0.0011f, 500, &pm.brow[0], &pm.brow[1]);
@@ -1351,6 +1359,9 @@ void buildPatron(MeshJobs& J, PersonMeshes& pm, int v, Renderer& r) {
 }
 
 } // namespace
+
+// (Ocakçı) the tea maker's head, torso and apron, built with the helpers above (CharactersOcakci.cpp uses them)
+#include "r3d/CharactersOcakciMesh.inc"
 
 void buildPeople(Meshes& M, Renderer& r);
 void buildPeople(Meshes& M, Renderer& r) {
@@ -1392,6 +1403,7 @@ void freePerson(PersonMeshes& pm, Renderer& r) {
     U(pm.head);
     U(pm.stache);
     for (int i = 0; i < 2; ++i) {
+        U(pm.stacheWing[i]); // (Yüz)
         U(pm.upper[i]);
         U(pm.fore[i]);
         U(pm.brow[i]);

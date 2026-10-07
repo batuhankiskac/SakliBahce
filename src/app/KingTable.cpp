@@ -310,9 +310,24 @@ protected:
                 log_ = e.text;
                 for (const std::string& l : e.lines) log_ += " | " + l;
                 sound(ui::Sfx::Win);
+                // Başarımlar: a ceza deal without a single penalty for the player
+                if (!g_.sheet().empty() && king::isCeza(g_.sheet().back().contract) && g_.sheet().back().units[0] == 0)
+                    noteAchievement("king_cezasiz");
                 break;
             }
-            case E::MatchEnd: hud_.toast(e.text, ui::pal::Highlight, 5.f); break;
+            case E::MatchEnd: {
+                hud_.toast(e.text, ui::pal::Highlight, 5.f);
+                // Başarımlar: a whole match (with at least one Rıfkı deal) without taking the Rıfkı
+                int rifki = 0;
+                bool took = false;
+                for (const king::HandRecord& h : g_.sheet())
+                    if (h.contract == king::Contract::Rifki) {
+                        ++rifki;
+                        took = took || h.units[0] > 0;
+                    }
+                if (rifki > 0 && !took) noteAchievement("rifki_yok");
+                break;
+            }
             default: break;
             }
         }

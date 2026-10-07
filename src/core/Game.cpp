@@ -10,6 +10,19 @@ namespace okey {
 
 namespace {
 
+// A log entry (every field named: no brace-init with fields left out, -Wmissing-field-initializers).
+LoggedAction act(LogKind kind, int seat, int tile = -1, int meld = -1, int side = 0,
+                 std::vector<std::vector<int>> melds = {}) {
+    LoggedAction a;
+    a.kind = kind;
+    a.seat = seat;
+    a.tile = tile;
+    a.meld = meld;
+    a.side = side;
+    a.melds = std::move(melds);
+    return a;
+}
+
 // Safety valve for headless loops that never drain the queue (the UI drains every frame).
 constexpr size_t MAX_QUEUED_EVENTS = 20000;
 constexpr int INITIAL_HAND = 21;         // 101: everyone gets 21, the starter one more
@@ -121,6 +134,7 @@ void Game::setRules(const RulesConfig& cfg) {
     cfg_ = cfg;
     if (cfg_.numHands < 1) cfg_.numHands = 1;
     if (cfg_.minPairsToOpen < 1) cfg_.minPairsToOpen = 1;
+    if (cfg_.openThreshold < 1) cfg_.openThreshold = 1;
 }
 
 void Game::setPlayer(int seat, const std::string& name, bool human) {
@@ -134,6 +148,7 @@ void Game::startMatch(uint64_t seed) {
     matchSeed_ = seed;
     log_.clear();
     events_.clear();
+    handMults_.clear();
     for (PlayerInfo& p : players_) {
         p.totalScore = classic() ? cfg_.okeyStartPoints : 0;
         p.handScores.clear();
@@ -155,7 +170,7 @@ void Game::startMatch(uint64_t seed) {
 
 void Game::startNextHand() {
     if (handState_ != HandState::HandOver) return;
-    log_.push_back({LogKind::NextHand, -1});
+    log_.push_back(act(LogKind::NextHand, -1));
     ++handIndex_;
     starter_ = rightOf(starter_);
     dealHand();
@@ -676,11 +691,10 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
         bool othersOpened = false;
         for (int s = 0; s < NUM_PLAYERS; ++s) othersOpened = othersOpened || (s != winner && players_[s].opened);
         r.finishedInOneGo = w.opened && w.openedTurn == turnNumber_ && !othersOpened;
-        if (r.finishedWithJoker) mult *= 2;
-        if (r.finishedWithPairs) mult *= 2;
-        if (r.finishedInOneGo) mult *= 2;
+        mult = finishMultiplier(r.finishedWithJoker, r.finishedWithPairs, r.finishedInOneGo);
     }
     r.multiplier = mult;
+    handMults_.push_back(mult);
 
     for (int s = 0; s < NUM_PLAYERS; ++s) {
         PlayerInfo& p = players_[s];
@@ -720,12 +734,26 @@ void Game::endHand(HandEndReason reason, int winner, bool finishedWithJoker) {
             if (r.finishedInOneGo) how += std::string(how.empty() ? "" : ", ") + "elden";
             e.text += " (" + how + " bitiş, ×" + std::to_string(mult) + ")";
         }
+        // 101 kuralları: katsız oyunda kat yazılmaz; tek katta birden çok kat yine ×2
+        else if (cfg_.finishMult == FinishMult::None && (r.finishedWithJoker || r.finishedWithPairs || r.finishedInOneGo)) {
+            e.text += " (katsız oyun: kat yok)";
+        }
     } else {
         e.text = "Ortada taş kalmadı, el bitti";
     }
     push(std::move(e));
 
     if (matchOver) pushMatchEnd();
+}
+
+int Game::finishMultiplier(bool withJoker, bool withPairs, bool inOneGo) const {
+    const int n = (withJoker ? 1 : 0) + (withPairs ? 1 : 0) + (inOneGo ? 1 : 0);
+    switch (cfg_.finishMult) {
+    case FinishMult::None: return 1;
+    case FinishMult::Single: return n > 0 ? 2 : 1;
+    case FinishMult::Stack: break;
+    }
+    return 1 << n;
 }
 
 int Game::colorMultiplier() const {
@@ -748,6 +776,7 @@ void Game::endClassicHand(HandEndReason reason, int winner, bool finishedWithJok
         mult *= colorMultiplier();
     }
     r.multiplier = mult;
+    handMults_.push_back(mult);
     bool someoneOut = false;
     for (int s = 0; s < NUM_PLAYERS; ++s) {
         PlayerInfo& p = players_[s];
@@ -1001,26 +1030,26 @@ ActionResult Game::logged(ActionResult r, LoggedAction a) {
     return r;
 }
 
-ActionResult Game::drawFromPile(int seat) { return logged(drawFromPileImpl(seat), {LogKind::Draw, seat}); }
-ActionResult Game::takeFromLeft(int seat) { return logged(takeFromLeftImpl(seat), {LogKind::TakeLeft, seat}); }
-ActionResult Game::returnLeftTile(int seat) { return logged(returnLeftTileImpl(seat), {LogKind::ReturnLeft, seat}); }
+ActionResult Game::drawFromPile(int seat) { return logged(drawFromPileImpl(seat), act(LogKind::Draw, seat)); }
+ActionResult Game::takeFromLeft(int seat) { return logged(takeFromLeftImpl(seat), act(LogKind::TakeLeft, seat)); }
+ActionResult Game::returnLeftTile(int seat) { return logged(returnLeftTileImpl(seat), act(LogKind::ReturnLeft, seat)); }
 ActionResult Game::openHand(int seat, const std::vector<std::vector<int>>& groups) {
-    return logged(openHandImpl(seat, groups), {LogKind::Open, seat, -1, -1, 0, groups});
+    return logged(openHandImpl(seat, groups), act(LogKind::Open, seat, -1, -1, 0, groups));
 }
 ActionResult Game::layMelds(int seat, const std::vector<std::vector<int>>& groups) {
-    return logged(layMeldsImpl(seat, groups), {LogKind::Lay, seat, -1, -1, 0, groups});
+    return logged(layMeldsImpl(seat, groups), act(LogKind::Lay, seat, -1, -1, 0, groups));
 }
 ActionResult Game::addToMeld(int seat, int tile, int meldIndex, AddSide side) {
-    return logged(addToMeldImpl(seat, tile, meldIndex, side), {LogKind::Add, seat, tile, meldIndex, (int)side});
+    return logged(addToMeldImpl(seat, tile, meldIndex, side), act(LogKind::Add, seat, tile, meldIndex, (int)side));
 }
 ActionResult Game::swapJoker(int seat, int tile, int meldIndex) {
-    return logged(swapJokerImpl(seat, tile, meldIndex), {LogKind::Swap, seat, tile, meldIndex});
+    return logged(swapJokerImpl(seat, tile, meldIndex), act(LogKind::Swap, seat, tile, meldIndex));
 }
-ActionResult Game::discard(int seat, int tile) { return logged(discardImpl(seat, tile), {LogKind::Discard, seat, tile}); }
+ActionResult Game::discard(int seat, int tile) { return logged(discardImpl(seat, tile), act(LogKind::Discard, seat, tile)); }
 ActionResult Game::finishHand(int seat, int tile) {
-    return logged(finishHandImpl(seat, tile), {LogKind::Finish, seat, tile});
+    return logged(finishHandImpl(seat, tile), act(LogKind::Finish, seat, tile));
 }
-ActionResult Game::showIndicator(int seat) { return logged(showIndicatorImpl(seat), {LogKind::ShowIndicator, seat}); }
+ActionResult Game::showIndicator(int seat) { return logged(showIndicatorImpl(seat), act(LogKind::ShowIndicator, seat)); }
 
 bool Game::replay(const LoggedAction& a) {
     switch (a.kind) {

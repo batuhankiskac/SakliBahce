@@ -20,6 +20,11 @@
 //   * a jump is turn - crouch - leap - land: up first, over the seat's rim only once the paws are above it; on the
 //     seat the paws and tail stay on it; down it goes out over the rim first, then trots a step clear;
 //   * the floor plan follows the chairs when the chair-scrape moves them (a walk that would run into one replans);
+//   * (duzelt) it knows the garden's own floor (the tree pit, the pots at the walls' feet and by the door, the trellis
+//     and lean-to posts, the derby's TV stand) and the people standing or walking on the floor (Room::setFloorPeople:
+//     bystanders, the special days' men, the çaycı, a burned Konken player): the plan is rebuilt when they move, a walk
+//     that would run into one replans, a spot someone stands on is not chosen, and a cat someone comes to stand over
+//     gets up and goes;
 //   * a rig with a non-finite or stray part is never drawn, and a non-finite state resets the cat.
 #include "r3d/RoomInternal.h"
 
@@ -179,6 +184,7 @@ Texture2D genBlobTexture() {
 // ---------------------------------------------------------------------------- the floor the cat walks on
 struct FloorGrid {
     static constexpr float CELL = 0.1f;
+    float margin = 0.12f;  // (duzelt) kept clear round everything; the cat's squeeze-through plan (Cat::tight) uses less
     int nx = 0, nz = 0;
     float x0 = w3d::ROOM_X0, z0 = w3d::ROOM_Z0;
     std::vector<uint8_t> blocked;
@@ -189,11 +195,14 @@ struct FloorGrid {
     bool freeAt(Vector2 p) const { return !bad(ix(p.x), iz(p.y)); }
     Vector2 centre(int i, int k) const { return {x0 + (i + 0.5f) * CELL, z0 + (k + 0.5f) * CELL}; }
 
-    void build(const std::vector<Vector3>& chairs) {
+    // (duzelt) `garden`: the garden's own floor too; `tvOut`: the derby's portable TV stands by the ocak; `people`:
+    // x, radius (y), z of the people on the floor.
+    void build(const std::vector<Vector3>& chairs, bool garden = false, bool tvOut = false,
+               const std::vector<Vector3>& people = {}) {
         nx = (int)std::ceil((w3d::ROOM_X1 - w3d::ROOM_X0) / CELL);
         nz = (int)std::ceil((w3d::ROOM_Z1 - w3d::ROOM_Z0) / CELL);
         blocked.assign((size_t)(nx * nz), 0);
-        const float m = 0.12f;  // half the cat's width plus a little clearance
+        const float m = margin;  // half the cat's width plus a little clearance
         auto cells = [&](float xa, float za, float xb, float zb, auto&& inside) {  // cells whose centres are inside
             const int i0 = std::max(0, ix(xa)), i1 = std::min(nx - 1, ix(xb)), k0 = std::max(0, iz(za)), k1 = std::min(nz - 1, iz(zb));
             for (int k = k0; k <= k1; ++k)
@@ -222,10 +231,25 @@ struct FloorGrid {
         for (const Vector3& c : chairs) box(c.x - 0.25f, c.z - 0.25f, c.x + 0.25f, c.z + 0.25f);  // legs splay to 0.29
         // counter, stove, coat rack, wall bench, rubber plant
         box(2.03f, -3.5f, 3.97f, -2.93f);
+        box(1.28f, -3.42f, 2.05f, -2.80f);  // (Ocakçı) the ocakçı and his crate at the counter's left end
         disc(3.8f, 2.55f, 0.42f);
         disc(-2.95f, 3.25f, 0.26f);
         box(-2.17f, 3.13f, 0.47f, 3.7f);
         disc(0.52f, -3.18f, 0.24f);
+        if (garden) gardenFloor(box, disc, tvOut);
+        for (const Vector3& q : people) disc(q.x, q.z, q.y);
+    }
+    // (duzelt) what stands on the garden's floor and not inside (RoomGarden.cpp's buildGarden, RoomSpecial.cpp's TV)
+    template <class Box, class Disc>
+    static void gardenFloor(Box&& box, Disc&& disc, bool tvOut) {
+        disc(w3d::SCOREBOARD_POS.x, -4.12f, 1.3f);                                        // the çınar's pit and its kerb
+        for (float x : {-3.7f, -3.25f, 1.0f, 1.45f, 2.2f, 3.0f}) disc(x, w3d::ROOM_Z1 - 0.18f, 0.19f);  // pots at the wall
+        disc(w3d::ROOM_X1 - 0.2f, 0.86f, 0.19f);                                          // the big pots by the door
+        disc(w3d::ROOM_X1 - 0.2f, 1.18f, 0.16f);
+        for (float x : {0.5f, w3d::ROOM_X1 - 0.12f}) box(x - 0.06f, -2.44f, x + 0.06f, -2.36f);  // the lean-to's posts
+        box(0.39f, -3.41f, 0.51f, -3.29f);                                                // trellis posts on the floor
+        for (float x : {-2.45f, 1.05f}) box(x - 0.06f, w3d::ROOM_Z1 - 0.12f, x + 0.06f, w3d::ROOM_Z1);
+        if (tvOut) box(1.42f - 0.32f, -2.95f - 0.32f, 1.42f + 0.32f, -2.95f + 0.32f);    // the derby's TV on its stand
     }
 
     bool lineFree(Vector2 a, Vector2 b) const {
@@ -252,10 +276,11 @@ struct FloorGrid {
                 }
         return false;
     }
-    // A* over the 8-connected grid (no corner cutting), then string pulling. Returns waypoints after `from`.
+    // A* over the 8-connected grid (no corner cutting), then string pulling. Returns waypoints after `from`; (duzelt)
+    // empty when there is no way there (people may close a passage): never a straight line through the furniture.
     std::vector<Vector2> path(Vector2 from, Vector2 to) const {
         int si = ix(from.x), sk = iz(from.y), gi = ix(to.x), gk = iz(to.y);
-        if (!nearestFree(si, sk) || !nearestFree(gi, gk)) return {to};
+        if (!nearestFree(si, sk) || !nearestFree(gi, gk)) return {};
         const int N = nx * nz;
         std::vector<float> g((size_t)N, 1e9f);
         std::vector<int> prev((size_t)N, -1);
@@ -289,7 +314,7 @@ struct FloorGrid {
                     }
                 }
         }
-        if (prev[(size_t)goal] < 0 && goal != s) return {to};
+        if (prev[(size_t)goal] < 0 && goal != s) return {};
         std::vector<Vector2> cells;
         for (int c = goal; c >= 0; c = prev[(size_t)c]) {
             cells.push_back(centre(c % nx, c / nx));
@@ -357,6 +382,7 @@ struct Spot {
     Vector2 approach;  // chair spots: floor point it jumps from / to (where the chair stood at night-fall)
     float weight;
     float side = 1.f;  // chair spots: which side of the chair (along the chair's own x) it jumps from
+    int venue = -1;    // (duzelt) -1 both places, 0 only inside, 1 only in the garden
 };
 
 enum class Act { Sleep, Loaf, Sit, Groom, Stretch, Walk, Settle, JumpUp, JumpDown, Turn };
@@ -369,6 +395,18 @@ struct Cat {
     Mat mFur, mHead, mEye, mBlob;
     Mesh hips{}, chest{}, belly{}, neck{}, head{}, eyes{}, fUp{}, fLo{}, hUp{}, hLo{}, paw{}, tail{}, blob{};
     FloorGrid grid;
+    // (duzelt) the same floor with only a whisker's clearance: where the comfortable plan finds no way (a chair pulled
+    // out next to the garden's pots, people closing a passage), the cat squeezes through as cats do
+    FloorGrid tight;
+    std::vector<Vector2> way(Vector2 from, Vector2 to) const {
+        std::vector<Vector2> p = grid.path(from, to);
+        return p.empty() ? tight.path(from, to) : p;
+    }
+    void buildFloor(bool garden, bool tv, const std::vector<Vector3>& people) {
+        tight.margin = 0.06f;
+        grid.build(gridChairs, garden, tv, people);
+        tight.build(gridChairs, garden, tv, people);
+    }
     std::vector<Vector3> gridChairs;  // where the chairs were when the grid was built
     std::vector<Spot> spots;
 
@@ -420,6 +458,13 @@ struct Cat {
         int chair;             // index into Room::Impl::chairs, or -1
     };
     std::vector<Obst> obst, near;
+    // (duzelt) the floor as it was planned for: the garden or not, the derby's TV, the people on the floor; the tail's
+    // obstacles up to obstStatic are the room's own, the rest (the garden's, the people) follow the plan
+    bool gridGarden = false, gridTv = false;
+    std::vector<Vector3> gridPeople;
+    size_t obstStatic = 0;
+    float replanT = 0.f;      // the plan is rebuilt at most this often (s)
+    float crowdedT = 0.f;     // someone stands over the resting cat for this long
 };
 
 }  // namespace rm
@@ -556,7 +601,7 @@ void Room::Impl::initCat() {
 
     // the walkable floor
     for (const Chair& ch : chairs) c.gridChairs.push_back(Vector3Add(ch.pos, ch.off));
-    c.grid.build(c.gridChairs);
+    c.buildFloor(false, false, {});
     // what the tail keeps out of (see FloorGrid::build for the same furniture on the floor plan)
     {
         const float X0 = w3d::ROOM_X0, X1 = w3d::ROOM_X1, Z0 = w3d::ROOM_Z0, Z1 = w3d::ROOM_Z1;
@@ -572,13 +617,16 @@ void Room::Impl::initCat() {
             disc(w3d::TAVLA_TABLE.x + (k % 2 ? 1.f : -1.f) * (w3d::TAVLA_HALF_D - 0.04f),
                  w3d::TAVLA_TABLE.z + (k < 2 ? 1.f : -1.f) * (w3d::TAVLA_HALF_W - 0.04f), 0.035f, w3d::TABLE_Y);
         box(2.03f, -3.5f, 3.97f, -2.93f, 1.05f);  // counter
+        box(1.28f, -3.42f, 2.05f, -2.80f, 1.75f);  // (Ocakçı) the ocakçı and his crate
         disc(3.8f, 2.55f, 0.32f, 1.1f);             // stove
         disc(-2.95f, 3.25f, 0.2f, 1.9f);            // coat rack
         box(-2.17f, 3.13f, 0.47f, 3.7f, 0.48f);     // wall bench
         disc(0.52f, -3.18f, 0.17f, 0.45f);          // the rubber plant's tin
         for (int i = 0; i < (int)chairs.size(); ++i)  // chairs: legs splay to 0.29, backrest up to 0.98
             disc(c.gridChairs[(size_t)i].x, c.gridChairs[(size_t)i].z, 0.29f, 0.98f, i);
+        c.obstStatic = c.obst.size();
     }
+    catFloorChanged(true);  // (duzelt) the garden's floor and the people, if any
 
     // favourite spots
     auto emptyChairNear = [&](Vector2 p) {
@@ -595,6 +643,9 @@ void Room::Impl::initCat() {
     c.spots.push_back({SpotKind::FloorSit, {-1.75f, -3.08f}, 0.2f, -1, {}, 0.2f});     // under the scoreboard, facing us
     c.spots.push_back({SpotKind::FloorSit, {-3.8f, 2.8f}, -PI * 0.5f, -1, {}, 0.06f});  // doormat, watching the street
     c.spots.push_back({SpotKind::FloorSit, {-3.97f, -0.45f}, PI * 0.5f, -1, {}, 0.2f});  // under the windows
+    // (duzelt) under the scoreboard is the çınar's pit in the garden: it sits a little to the side of it there
+    c.spots[1].venue = 0;
+    c.spots.push_back({SpotKind::FloorSit, {-1.72f, -2.72f}, 0.35f, -1, {}, 0.2f, 1.f, 1});
     // the chairs are pulled out and turned a little differently every night: a floor spot keeps a curled-up cat's
     // length (head, tail) clear of the nearest chair's splayed legs
     for (Spot& s : c.spots) {
@@ -686,16 +737,25 @@ bool Room::Impl::catNearChair(int chair) const {
 // ============================================================================ behaviour
 namespace {
 
+// (duzelt) a spot of the place we are in that nobody stands on now
+bool spotOpen(const Cat& c, int i) {
+    const Spot& s = c.spots[(size_t)i];
+    if (s.venue >= 0 && s.venue != (c.gridGarden ? 1 : 0)) return false;
+    return c.grid.freeAt(s.kind == SpotKind::Chair ? s.approach : s.p);
+}
+
 int pickSpot(const Cat& c, okey::Rng& rng, int exclude) {
     float tot = 0.f;
     for (int i = 0; i < (int)c.spots.size(); ++i)
-        if (i != exclude) tot += c.spots[(size_t)i].weight;
+        if (i != exclude && spotOpen(c, i)) tot += c.spots[(size_t)i].weight;
     float r = rng.uniform(0.f, tot);
     for (int i = 0; i < (int)c.spots.size(); ++i) {
-        if (i == exclude) continue;
+        if (i == exclude || !spotOpen(c, i)) continue;
         r -= c.spots[(size_t)i].weight;
         if (r <= 0.f) return i;
     }
+    for (int i = 0; i < (int)c.spots.size(); ++i)  // (nothing open: any other one of this place)
+        if (i != exclude && (c.spots[(size_t)i].venue < 0 || c.spots[(size_t)i].venue == (c.gridGarden ? 1 : 0))) return i;
     return exclude == 0 ? 1 : 0;
 }
 
@@ -994,6 +1054,64 @@ void solveRig(Cat& c, float dt) {
 
 }  // namespace
 
+// (duzelt) Rebuilds the floor plan when the place (inside / the garden), the derby's TV or the people on the floor
+// changed (people: at most every 0.25 s unless forced), and replans a walk that would now run into something.
+void Room::Impl::catFloorChanged(bool force) {
+    if (!cat) return;
+    Cat& c = *cat;
+    const bool tv = garden && specialTvOut();
+    bool changed = force || c.gridGarden != garden || c.gridTv != tv;
+    if (!changed && c.replanT <= 0.f) {
+        changed = c.gridPeople.size() != floorPeople.size();
+        for (size_t i = 0; !changed && i < floorPeople.size(); ++i)
+            changed = std::hypot(floorPeople[i].x - c.gridPeople[i].x, floorPeople[i].z - c.gridPeople[i].z) > 0.08f;
+    }
+    if (!changed) return;
+    c.replanT = 0.25f;
+    c.gridGarden = garden;
+    c.gridTv = tv;
+    c.gridPeople = floorPeople;
+    c.buildFloor(c.gridGarden, c.gridTv, c.gridPeople);
+    // the tail's obstacles: the room's own, then the garden's and the people (bodies up to a man's height)
+    c.obst.resize(c.obstStatic);
+    auto box = [&](float xa, float za, float xb, float zb) { c.obst.push_back({xa, za, xb, zb, 0.f, 3.f, -1}); };
+    auto disc = [&](float x, float z, float r) { c.obst.push_back({x, z, x, z, r, 0.3f, -1}); };
+    if (garden) FloorGrid::gardenFloor(box, disc, tv);
+    for (const Vector3& q : floorPeople) c.obst.push_back({q.x, q.z, q.x, q.z, q.y * 0.7f, 1.7f, -1});
+    // a walk that now runs into something is planned again (its goal too, if someone stands on it)
+    if (c.act == Act::Walk && c.pathI < c.path.size() && c.target >= 0) {
+        Vector2 a{c.pos.x, c.pos.z};
+        bool clear = true;
+        for (size_t i = c.pathI; clear && i < c.path.size(); ++i) clear = c.tight.lineFree(a, c.path[i]), a = c.path[i];
+        if (!clear) {
+            Vector2 goal = c.path.back();
+            okey::Rng pr((uint64_t)(std::fabs(c.pos.x) * 1000.f) * 31u + (uint64_t)c.target + seed);
+            std::vector<Vector2> np = c.grid.freeAt(goal) || spotOpen(c, c.target) ? c.way({c.pos.x, c.pos.z}, goal)
+                                                                                   : std::vector<Vector2>{};
+            // someone stands on its spot, or closed the way: another spot it can reach
+            for (int k = 0; np.empty() && k < 6; ++k) {
+                c.target = pickSpot(c, pr, c.target);
+                const Spot& t = c.spots[(size_t)c.target];
+                goal = t.kind == SpotKind::Chair ? t.approach : t.p;
+                np = c.way({c.pos.x, c.pos.z}, goal);
+            }
+            if (np.empty()) {  // nowhere to go: it stops and looks around (Loaf), then tries again
+                c.target = -1;
+                c.path.clear();
+                c.act = Act::Loaf;
+                c.actT = 0.f;
+                c.actDur = 6.f;
+                catChair = -1;
+            } else {
+                const Spot& t = c.spots[(size_t)c.target];
+                catChair = t.kind == SpotKind::Chair ? t.chair : -1;
+                c.path = np;
+            }
+            c.pathI = 0;
+        }
+    }
+}
+
 void Room::Impl::updateCat(float dt) {
     if (!cat) return;
     Cat& c = *cat;
@@ -1051,14 +1169,17 @@ void Room::Impl::updateCat(float dt) {
         Vector2 ap{ch.pos.x + ch.off.x + side.x * s.side * JUMP_DIST, ch.pos.z + ch.off.z + side.z * s.side * JUMP_DIST};
         return c.grid.freeAt(ap) ? ap : s.approach;
     };
-    auto startWalk = [&](int to) {
-        c.target = to;
+    // (duzelt) false (and nothing changes) when there is no way to that spot now
+    auto tryWalk = [&](int to) {
         const Spot& s = c.spots[(size_t)to];
-        // a chair it is heading for is kept where it is (the chair-scrape animation leaves it alone)
-        catChair = s.kind == SpotKind::Chair ? s.chair : -1;
         Vector2 goal = s.kind == SpotKind::Chair ? takeOff(to) : s.p;
         const Vector2 from{c.pos.x, c.pos.z};
-        c.path = c.grid.path(from, goal);
+        std::vector<Vector2> base = c.way(from, goal);
+        if (base.empty()) return false;
+        c.target = to;
+        // a chair it is heading for is kept where it is (the chair-scrape animation leaves it alone)
+        catChair = s.kind == SpotKind::Chair ? s.chair : -1;
+        c.path = base;
         if (s.kind == SpotKind::Chair) {
             // the last few steps run straight at the seat: it arrives facing it (turning on the spot right beside the
             // chair would sweep its tail through the chair's and the table's legs)
@@ -1068,8 +1189,11 @@ void Room::Impl::updateCat(float dt) {
             if (al > 1e-3f) {
                 const Vector2 lead{goal.x + away.x / al * 0.3f, goal.y + away.y / al * 0.3f};
                 if (c.grid.freeAt(lead) && c.grid.lineFree(lead, goal) && std::hypot(from.x - goal.x, from.y - goal.y) > 0.35f) {
-                    c.path = c.grid.path(from, lead);
-                    c.path.push_back(goal);
+                    std::vector<Vector2> p2 = c.way(from, lead);
+                    if (!p2.empty()) {
+                        c.path = p2;
+                        c.path.push_back(goal);
+                    }
                 }
             }
         }
@@ -1078,14 +1202,31 @@ void Room::Impl::updateCat(float dt) {
         if (c.act == Act::JumpDown && !c.path.empty()) {
             const Vector2 ahead{from.x + std::sin(c.yaw) * 0.28f, from.y + std::cos(c.yaw) * 0.28f};
             if (c.grid.lineFree(from, ahead)) {
-                std::vector<Vector2> p2 = c.grid.path(ahead, goal);
-                p2.insert(p2.begin(), ahead);
-                c.path = p2;
+                std::vector<Vector2> p2 = c.way(ahead, goal);
+                if (!p2.empty()) {
+                    p2.insert(p2.begin(), ahead);
+                    c.path = p2;
+                }
             }
         }
         c.pathI = 0;
         c.act = Act::Walk;
         c.actT = 0.f;
+        return true;
+    };
+    // (duzelt) off to `to`, or another spot it can reach; none: it stays where it is and looks around
+    auto startWalk = [&](int to) {
+        for (int k = 0; k < 6; ++k) {
+            if (tryWalk(to)) return;
+            to = pickSpot(c, rng, to);
+        }
+        c.target = -1;
+        catChair = -1;
+        c.path.clear();
+        c.pathI = 0;
+        c.act = Act::Loaf;
+        c.actT = 0.f;
+        c.actDur = rng.uniform(5.f, 12.f);
     };
     auto leave = [&]() {  // off to another spot
         int to = pickSpot(c, rng, c.spot);
@@ -1122,20 +1263,37 @@ void Room::Impl::updateCat(float dt) {
         if (moved) {
             c.gridChairs.clear();
             for (const Chair& ch : chairs) c.gridChairs.push_back(Vector3Add(ch.pos, ch.off));
-            c.grid.build(c.gridChairs);
+            c.buildFloor(c.gridGarden, c.gridTv, c.gridPeople);
             for (Cat::Obst& o : c.obst)
                 if (o.chair >= 0 && o.chair < (int)c.gridChairs.size())
                     o.x0 = o.x1 = c.gridChairs[(size_t)o.chair].x, o.z0 = o.z1 = c.gridChairs[(size_t)o.chair].z;
             if (c.act == Act::Walk && c.pathI < c.path.size()) {
                 Vector2 a{c.pos.x, c.pos.z};
                 bool clear = true;
-                for (size_t i = c.pathI; clear && i < c.path.size(); ++i) clear = c.grid.lineFree(a, c.path[i]), a = c.path[i];
+                for (size_t i = c.pathI; clear && i < c.path.size(); ++i) clear = c.tight.lineFree(a, c.path[i]), a = c.path[i];
                 if (!clear) {
                     const Vector2 goal = c.path.back();
-                    c.path = c.grid.path({c.pos.x, c.pos.z}, goal);
+                    c.path = c.way({c.pos.x, c.pos.z}, goal);
                     c.pathI = 0;
                 }
             }
+        }
+    }
+
+    // (duzelt) the garden's floor, the derby's TV and the people on the floor: the plan follows them
+    catFloorChanged(false);
+    c.replanT -= dt;
+    // someone came to stand over the resting cat: it gets up after a moment and goes somewhere else
+    {
+        const bool resting = !c.onChair && (c.act == Act::Sleep || c.act == Act::Loaf || c.act == Act::Sit || c.act == Act::Groom);
+        bool crowded = false;
+        for (const Vector3& q : floorPeople) crowded = crowded || std::hypot(q.x - c.pos.x, q.z - c.pos.z) < q.y + 0.14f;
+        crowded = crowded || (resting && c.spot >= 0 && c.spot < (int)c.spots.size() && c.spots[(size_t)c.spot].venue >= 0 &&
+                              c.spots[(size_t)c.spot].venue != (garden ? 1 : 0));  // (a spot of the other place)
+        c.crowdedT = resting && crowded ? c.crowdedT + dt : 0.f;
+        if (c.crowdedT > 1.2f) {
+            c.crowdedT = 0.f;
+            leave();
         }
     }
 
@@ -1481,6 +1639,9 @@ void Room::Impl::updateCat(float dt) {
     }
     solveRig(c, dt);
 }
+
+// (duzelt) tools/room_snapshot's "catwalk" check
+Vector3 Room::debugCatPosition() const { return impl_->cat ? impl_->cat->pos : Vector3{0.f, -1.f, 0.f}; }
 
 // ============================================================================ drawing
 void Room::Impl::submitCat(Renderer& r) {

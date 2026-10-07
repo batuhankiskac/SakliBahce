@@ -929,8 +929,11 @@ int main() {
             h.settle();
             h.shot("t19_pending_left", h.seat());
             tt::pressButton(h.table, 2);
-            check(h.game.pendingLeftTile() < 0 && h.game.player(0).handPenalty == pen + h.game.rules().penalty,
-                  "Geri Ver returns the tile with a penalty");
+            // (the penalty only with RulesConfig::penaltyReturnLeft, off by default: then giving it back is free)
+            const int want = pen + (h.game.rules().penaltyReturnLeft ? h.game.rules().penalty : 0);
+            check(h.game.pendingLeftTile() < 0 && h.game.player(0).handPenalty == want,
+                  h.game.rules().penaltyReturnLeft ? "Geri Ver returns the tile with a penalty"
+                                                   : "Geri Ver returns the tile (no penalty: penaltyReturnLeft off)");
             check(h.game.topDiscard(okey::Game::leftOf(0)) == top, "the tile is back on the left pile");
             h.settle();
             h.shot("t20_gave_back", h.seat());

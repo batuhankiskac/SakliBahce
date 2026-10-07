@@ -82,6 +82,8 @@ enum Sit {
     S_CayciGoal,
     S_Cat,              // the kahvehane cat meowed
     S_KatOpen,          // katlamalı: opened over somebody else's opening ({v} = the new total / pairs)
+    S_KatWin,           // 101 kuralları: the speaker finished a hand whose katlar stacked ({v} = the multiplier, 4 or 8)
+    S_KatLose,          // 101 kuralları: {p} finished with stacked katlar ({v} = the multiplier)
     S_FedPenSelf,       // my discard was taken and opened with: {v} = the penalty, {p} = the opener
     S_FedPenGloat,      // I opened with the left tile: {g} = the giver who pays {v}
     S_IndicatorSelf,    // klasik okey: the speaker shows the gösterge's twin
@@ -506,6 +508,18 @@ LINES(kKatR, "Katlamalıda {v}; sabırla geçtik.", "{v} ile geçtim, hayırlıs
 LINES(kKatM, "{v}! Katlamalı da olsa geçtim abi!", "Çıta yükseldi ama Mahmut uçtu: {v}!", "Katlamalıymış, {v} ile geçtim işte!")
 LINES(kKatN, "{v}. Katlamalıda bile açarım, ne sandınız.", "Hıh, {v}. Çıtayı yükseltin bakalım.",
       "Bizim zamanımızda katlamalıda 150'yle açardık. {v} de fena değil.")
+// ---------------------------------------------------------------- 101 kuralları: katlar katlandı (×4, ×8)
+LINES(kKatWinR, "Katladık beyler! Bu el {v} kat yazılır.", "Hesap kağıdına bir {v} katı, hayırlı olsun.",
+      "Sabreden derviş muradına ermiş: {v} kat.")
+LINES(kKatWinM, "Katladık beyler! {v} kat, yazın yazın!", "{v} kat abi! Bugün Mahmut'un günü!",
+      "Okey de geldi, çift de! Katladık!")
+LINES(kKatWinN, "Katladık beyler. {v} kat, ders olsun.", "Bizim zamanımızda böyle bitilirdi: {v} kat.",
+      "Hıh. {v} kat. Hesabı da ben tutarım.")
+LINES(kKatLoseR, "{p} katladı, {v} kat yazılır. Sabır.", "Eyvah, {v} kat… Kalemi verin bakayım.",
+      "{v} kat ha? Eh, bu el onun.")
+LINES(kKatLoseM, "{v} kat mı?! Yandık beyler!", "Katladı {p}! Bu kağıt beni yakar!", "{v} kat abi, olur mu böyle?")
+LINES(kKatLoseN, "{v} kat… Bizim zamanımızda kat bu kadar katlanmazdı.", "Katladı {p}. Ben demiştim.",
+      "Hıh. {v} kat. Kalan taşları sayın bakalım.")
 // ---------------------------------------------------------------- yandan alıp açma cezası (tile number x10 / x20)
 LINES(kFedSelfR, "Eh, {v} de bizden olsun.", "Verdiğim taşla açtın {p}, hayrını gör. {v} yazın.",
       "Kısmet {p}. {v} yazıldı, sabır.", "Bir taş attık, {v} oldu. Hesap böyle.")
@@ -672,6 +686,8 @@ const Tbl kTables[S_Count][4] = {
     {TN, TN, TN, T(kCayciGoal)},
     {T(kCatR), T(kCatM), T(kCatN), T(kCatC)},
     {T(kKatR), T(kKatM), T(kKatN), TN},
+    {T(kKatWinR), T(kKatWinM), T(kKatWinN), TN},    // 101 kuralları
+    {T(kKatLoseR), T(kKatLoseM), T(kKatLoseN), TN}, // 101 kuralları
     {T(kFedSelfR), T(kFedSelfM), T(kFedSelfN), TN},
     {T(kGloatR), T(kGloatM), T(kGloatN), TN},
     {T(kIndSelfR), T(kIndSelfM), T(kIndSelfN), TN},
@@ -1229,7 +1245,13 @@ void Banter::onEvent(const okey::GameEvent& e, const okey::Game& g) {
             const int partner = okey::Game::partnerOf(w);
             if (partner != 0 && chance(0.75f)) say(partner, S_PartnerWin, 1.8f, true, 0, w, 6.f);
         }
-        if (w >= 1 && w <= 3) {
+        const bool katlandi = !g.classic() && r.multiplier >= 4; // 101 kuralları: the katlar stacked
+        if (katlandi && w >= 1 && w <= 3) {
+            say(w, S_KatWin, 0.3f, true, r.multiplier, w, 6.f);
+            if (chance(0.8f)) say(pickOther(w), S_KatLose, 2.6f, true, r.multiplier, w, 7.f);
+        } else if (katlandi && w == 0) {
+            say(pickBot(), S_KatLose, 0.4f, true, r.multiplier, 0, 6.f);
+        } else if (w >= 1 && w <= 3) {
             say(w, r.finishedWithJoker ? S_WinOkey : S_WinSelf, 0.3f, true, 0, w, 6.f);
             const bool streak = (w == lastWinner_);
             if (chance(0.6f)) say(pickOther(w), streak ? S_StreakOther : S_LoseGrumble, 2.6f, true, 0, w, 7.f);
@@ -1463,6 +1485,46 @@ bool Banter::matchStart(int game, int streak, int day) {
         favouriteSaid_ = true;
         return true;
     }
+    // Dama (GameKind 7): now and then a regular says something about the game as it starts
+    if (game == 7 && chance(0.5f)) {
+        static const char* const kDamaLines[4][3] = {
+            {},
+            {"Dama sabır oyunudur evlat; acele eden taşını verir.", "Bir taş fazlası, bin hesap fazlası.",
+             "Dama çıkaran bilir, yol uzundur."},
+            {"Dama mı? Bu iş tribünden izlenir, ben buradan bağırırım!", "Taşı ver, damayı al, abi! Taktik bu!",
+             "Dama dediğin hücum oyunudur, korkak oynanmaz!"},
+            {"Bizim zamanımızda damayı tebeşirle masaya çizerdik.", "Dama aklın oyunudur, zarı yoktur. Şans yok, delikanlı.",
+             "Önce arka sırayı koru. Bunu kimse öğretmez artık."}};
+        const int seat = pickBot();
+        if (external(seat, kDamaLines[seat][rndInt(3)], false)) return true;
+    }
+    // Konken (GameKind 10): now and then a regular says something about the game as it starts
+    if (game == 10 && chance(0.5f)) {
+        static const char* const kKonkenLines[4][3] = {
+            {},
+            {"Konken sabır ister; jokeri sakla, vakti gelince kullan.", "Acele eden yerden alır, geri verir. Bekle.",
+             "Elden bitirmek nasip işidir, zorlamayacaksın."},
+            {"Konken mi? Bu el elden bitiririm abi, yazın bakalım!", "Joker bende mi sende mi, göreceğiz!",
+             "Yüz elli bir mi? Ben yirmide yanmam, merak etme!"},
+            {"Bizim zamanımızda konken tek desteyle oynanırdı, joker de yoktu.", "Cocoş dediğin joker; gençler bilmez.",
+             "Açmadan yüz yazılır, unutmayın. Sonra ağlamak yok."}};
+        const int seat = pickBot();
+        if (external(seat, kKonkenLines[seat][rndInt(3)], false)) return true;
+    }
+    // Altmışaltı (GameKind 8): played at the tavla table with the chosen Rakip; the lines name nobody, so they fit
+    // whoever sits across
+    if (game == 8 && chance(0.5f)) {
+        static const char* const kAltmisaltiLines[4][3] = {
+            {},
+            {"Altmışaltıda saymasını bilen kazanır; aklında tut kâğıtları.", "Kozu erken harcayan sonra arar, bilesin.",
+             "Desteyi kapatmak cesaret ister ama hesap da ister."},
+            {"Altmış altı! Kırkı söyleyen eli alır abi!", "Kapatmaktan korkan kazanamaz, benden söylemesi!",
+             "Koz dokuzu kimdeyse açık koz da onundur!"},
+            {"Bizim zamanımızda altmışaltı kâğıtla değil, akılla oynanırdı.", "Evliliği erken söyle ama el almadan sayılmaz, unutma.",
+             "Erken kapatan çok olur, sonu hüsran olur."}};
+        const int seat = pickBot();
+        if (external(seat, kAltmisaltiLines[seat][rndInt(3)], false)) return true;
+    }
     return false;
 }
 
@@ -1479,6 +1541,56 @@ bool Banter::rankUp(const std::string& rankName) {
     }
     if (!say(seat, S_MemRankUp, 5.5f, true, 0, 0, 12.f)) return false;
     if (chance(0.35f)) say(4, S_MemRankUp, 8.5f, true, 0, -1, 12.f);
+    return true;
+}
+
+// ---------------------------------------------------------------- Başarımlar: a regular congratulates the player
+// {a} the badge's name, {h} the player as the speaker calls him. Kept out of the situation tables: it is a one-off.
+namespace {
+const char* const kAchR[] = {"Maşallah {h}, \"{a}\"! Emeğine sağlık.", "\"{a}\" ha? Sabreden derviş muradına ermiş {h}.",
+                             "Hayırlı olsun {h}: \"{a}\". Bunu da deftere yazdık.",
+                             "Göz aydın {h}, \"{a}\" senin artık. Allah bereket versin."};
+const char* const kAchM[] = {"Vay be {h}! \"{a}\"! Bunu manşete koyarlar!", "\"{a}\" mı? Golü attın {h}, tribünler ayakta!",
+                             "Beyler, \"{a}\"! Bizim {h} kupayı kaldırdı!", "Helal {h}! \"{a}\"! Bu akşam çaylar senden!"};
+const char* const kAchN[] = {"\"{a}\" ha… Eh, aferin {h}. Bizim zamanımızda madalya yoktu.",
+                             "Hıh, \"{a}\". Fena değil {h}, torunuma anlatırım.",
+                             "\"{a}\"… Otuz yıl bekledim ben bunu {h}, sen bir akşamda yaptın.",
+                             "Peki peki {h}, \"{a}\". Kabul, bu sefer hakkını verdin."};
+const char* const kAchC[] = {"Abi \"{a}\"! Çayın benden!", "\"{a}\" abi! Bir ince belli de buna!"};
+} // namespace
+
+bool Banter::achievement(const std::string& name) {
+    if (!enabled_ || name.empty()) return false;
+    int seat = pickBot();
+    for (int k = 0; k < 3; ++k) { // a regular with nothing pending speaks
+        bool busy = false;
+        for (const Pending& p : queue_) busy = busy || p.line.seat == seat;
+        if (!busy) break;
+        seat = seat % 3 + 1;
+    }
+    auto queueLine = [&](int who, const char* const* lines, int n, float delay) {
+        std::string tpl = lines[rndInt(n)];
+        for (size_t at = tpl.find("{a}"); at != std::string::npos; at = tpl.find("{a}", at + name.size()))
+            tpl.replace(at, 3, name);
+        std::string text = fill(tpl, who, 0, 0);
+        for (size_t at; (at = text.find("!\"!")) != std::string::npos;) text.erase(at + 2, 1); // (duzelt) "Pişti!"! -> "Pişti!"
+        // an important line: it replaces whatever the same man was about to say
+        queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [&](const Pending& p) { return p.line.seat == who; }),
+                     queue_.end());
+        Pending p;
+        p.line.seat = who;
+        p.line.text = text;
+        p.line.delay = std::max(delay, sinceSpoke_[(size_t)who] < 2.5f ? 2.5f - sinceSpoke_[(size_t)who] : 0.f);
+        p.line.seconds = bubbleSeconds(text);
+        p.line.maxWait = 12.f;
+        queue_.push_back(p);
+        remember(text);
+        seatCool_[(size_t)who] = std::max(seatCool_[(size_t)who], kSeatCooldown + p.line.delay);
+        globalCool_ = std::max(globalCool_, kGlobalGap + p.line.delay);
+    };
+    const char* const* t = seat == 1 ? kAchR : seat == 2 ? kAchM : kAchN;
+    queueLine(seat, t, 4, 1.2f);
+    if (chance(0.3f)) queueLine(4, kAchC, 2, 4.5f);
     return true;
 }
 
@@ -1632,6 +1744,44 @@ void Banter::spoke(int seat) {
     if (seat < 1 || seat > 4) return;
     seatCool_[seat] = std::max(seatCool_[seat], 3.f);
     sinceSpoke_[seat] = 0.f;
+}
+
+// ---------------------------------------------------------------- Bezik: remarks from the okey table
+namespace {
+const char* const kBezikR[4][3] = {
+    {"Maşallah {h}, kâğıt sana gülüyor.", "Sabırla dizdin {h}, aferin.", "Eh {h}, bezik böyle oynanır."},
+    {"Mahmut, yavaş ol, kahveyi yıkacaksın!", "Mahmut'un şansı da yaver gidiyor bu akşam.", "Hayırlısı Mahmut, hayırlısı."},
+    {"Çift bezik! Ömrümde üç kere gördüm.", "Beş yüz ha… Kısmet böyle bir şey.", "Çift bezik! Hayırlı olsun."},
+    {"Deste bitti, şimdi dikkat: renge uyulur.", "Son sekiz el, asıl oyun şimdi başlıyor.", "Şimdi saymak lazım, kim ne attı."},
+};
+const char* const kBezikN[4][3] = {
+    {"Hıh, {h}. Fena değil, fena değil.", "Bizim zamanımızda böyle kâğıt gelmezdi {h}.", "Aferin {h}. Ama sevinme, el uzun."},
+    {"Mahmut yine bağırıyor, bezik sessiz oynanır!", "Ah Mahmut, şansın kadar aklın olsa…", "Hıh. Mahmut'a kâğıt geliyor, o kadar."},
+    {"Çift bezik mi?! Kırk yıldır bekliyorum ben onu!", "Beş yüz… Ben bunu otuz yılda bir gördüm.", "Hıh! Çift bezik. Kahveye ikram şart."},
+    {"Deste bitti. Şimdi kâğıt saymayan kaybeder.", "Son eller… Bizim zamanımızda bunu ezbere bilirdik.", "Renge uyacaksınız, unutmayın!"},
+};
+// Rakip: Kel Mahmut watching (when Hacı Rıza or Emekli Nuri plays), and the remarks on the opponent's big combination
+// when it is not Mahmut ([watcher][opponent]).
+const char* const kBezikM[4][3] = {
+    {"Vay {h}! Gol gibi el!", "Helal olsun {h}, tribünler ayakta!", "{h}, bu el senin abi!"},
+    {"", "", ""},
+    {"Çift bezik! Abi bu golü kimse kurtaramaz!", "Beş yüz! Manşetlik bu!", "Çift bezik! Çaycı, herkese çay!"},
+    {"Deste bitti, son dakikalar abi! Hücum!", "Uzatmalara girdik, dikkat!", "Şimdi her el penaltı gibi!"},
+};
+const char* const kBezikOppSaid[4][4][3] = {
+    {},
+    {{}, {}, {}, {"Nuri'ye bak, sessiz sedasız diziyor.", "Hayırlısı Nuri, hayırlısı.", "Nuri'nin sabrı meyvesini verdi."}},
+    {{}, {"Hacı Abi de açıldı ha!", "Hacı Abi'ye kâğıt yağıyor abi!", "Vay Hacı Abi, gol gibi!"}, {},
+     {"Nuri Abi açıldı, gözlüğü işe yaradı!", "Nuri Abi'ye bak, sessiz sedasız!", "Vay Nuri Abi, helal!"}},
+    {{}, {"Hacı'nın duası kabul oldu.", "Hıh. Rıza'ya kâğıt geliyor, o kadar.", "Sabır Rıza, sabır; el uzun."}, {}, {}},
+};
+} // namespace
+
+std::string bezikRemark(int seat, int situation, int pick, int opp) {
+    if (situation < 0 || situation > 3 || seat < 1 || seat > 3 || seat == opp) return {};
+    const int i = ((pick % 3) + 3) % 3;
+    if (situation == 1 && opp != 2 && opp >= 1 && opp <= 3) return kBezikOppSaid[seat][opp][i];
+    return seat == 1 ? kBezikR[situation][i] : seat == 2 ? kBezikM[situation][i] : kBezikN[situation][i];
 }
 
 } // namespace ui

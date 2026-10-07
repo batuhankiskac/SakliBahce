@@ -10,7 +10,7 @@
 
 namespace ui {
 
-constexpr int MEMORY_GAMES = 7; // GameKind::Count (101, eşli 101, okey, tavla, pişti, batak, king)
+constexpr int MEMORY_GAMES = 11; // GameKind::Count (101, eşli 101, okey, tavla, pişti, batak, king, dama, 66, bezik, konken)
 
 enum class MatchResult { None = 0, PlayerWon = 1, TheyWon = 2, Other = 3 }; // seen from one regular's record
 

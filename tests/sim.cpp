@@ -1,7 +1,7 @@
 // Headless bot-vs-bot simulation for SaklıBahçe.
 //
 //   sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] [--no-wait] [--katlamali]
-//       [--okey] [--esli]
+//       [--okey] [--esli] [--tek-kat | --katsiz] [--acma N] [--acmayan N]   (101 kuralları)
 //       [--match H]
 //       [--slow MS] [--feed-log FILE] [--styles | --styles-fixed]
 //
@@ -66,6 +66,8 @@ const char* kindName(BotAction::Kind k) {
     case BotAction::Kind::AddToMeld: return "AddToMeld";
     case BotAction::Kind::SwapJoker: return "SwapJoker";
     case BotAction::Kind::Discard: return "Discard";
+    case BotAction::Kind::Finish: return "Finish";
+    case BotAction::Kind::ShowIndicator: return "ShowIndicator";
     }
     return "?";
 }
@@ -227,6 +229,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--duplicate")) duplicate = rotate = true;
         else if (!std::strcmp(argv[i], "--no-wait")) rules.waitTurnAfterOpening = false;
         else if (!std::strcmp(argv[i], "--katlamali")) rules.katlamali = true;
+        // 101 kuralları
+        else if (!std::strcmp(argv[i], "--tek-kat")) rules.finishMult = FinishMult::Single;
+        else if (!std::strcmp(argv[i], "--katsiz")) rules.finishMult = FinishMult::None;
+        else if (!std::strcmp(argv[i], "--acma") && i + 1 < argc) rules.openThreshold = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--acmayan") && i + 1 < argc) rules.unopenedScore = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--okey")) rules.variant = Variant::Okey;
         else if (!std::strcmp(argv[i], "--esli")) rules.teams = true;
         else if (!std::strcmp(argv[i], "--team-ab") && i + 1 < argc) {
@@ -244,7 +251,7 @@ int main(int argc, char** argv) {
 
         else {
             std::fprintf(stderr, "usage: sim --hands N --seed S --levels a,b,c,d [--verbose] [--rotate] [--duplicate] "
-                                 "[--no-wait] [--katlamali] [--okey] [--esli] [--match H] [--slow MS] [--feed-log FILE] "
+                                 "[--no-wait] [--katlamali] [--tek-kat|--katsiz] [--acma N] [--acmayan N] [--okey] [--esli] [--match H] [--slow MS] [--feed-log FILE] "
                                  "[--styles | --styles-fixed]\n");
             return 2;
         }
@@ -383,8 +390,8 @@ int main(int argc, char** argv) {
                         lastFeed[e.player] = -1;
                         if (feed && !g.player(Game::rightOf(e.player)).opened && !g.okey().isJoker(e.tile) &&
                             g.handState() == HandState::Playing) {
-                            const int r = Game::rightOf(e.player);
-                            feedRows.push_back(feedRow(g, e.player, e.tile, ownTurns[r], seatLevel[r], rTook[r]));
+                            const int rs = Game::rightOf(e.player);
+                            feedRows.push_back(feedRow(g, e.player, e.tile, ownTurns[rs], seatLevel[rs], rTook[rs]));
                             lastFeed[e.player] = (int)feedRows.size() - 1;
                         }
                         break;

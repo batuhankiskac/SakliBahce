@@ -8,7 +8,7 @@
 
 namespace ui {
 
-constexpr int STATS_GAMES = 7; // GameKind::Count
+constexpr int STATS_GAMES = 11; // GameKind::Count
 
 struct GameRecord {
     int matches = 0, wins = 0;     // finished matches / won (eşli: the team won)

@@ -9,7 +9,10 @@
 #include "core/KingBot.h"
 #include "core/PistiBot.h"
 #include "core/TavlaBot.h"
+#include "core/AltmisaltiBot.h" // Altmışaltı
+#include "core/BezikBot.h" // Bezik
 #include "ui/Screens.h"
+#include "app/Rules101.h" // 101 kuralları
 
 #include <algorithm>
 #include <cmath>
@@ -106,8 +109,7 @@ okey::RulesConfig okeyRules(ui::GameKind kind, const ui::Settings& st) {
     cfg.okeyStartPoints = std::clamp(st.okeyStart, 1, 99);
     cfg.okeyColorDouble = st.okeyRenkli;
     cfg.numHands = std::clamp(st.numHands, 1, 11);
-    cfg.katlamali = st.katlamali;
-    cfg.leftOpenPenalty = st.yandanCeza;
+    app::apply101Rules(st, cfg); // 101 kuralları (app/Rules101.h)
     return cfg;
 }
 tavla::Rules tavlaRules(const ui::Settings& st) {
@@ -115,6 +117,7 @@ tavla::Rules tavlaRules(const ui::Settings& st) {
     r.matchPoints = std::clamp(st.tavlaPoints, 1, 15);
     r.doubling = st.tavlaDoubling;
     r.katmerliMars = st.tavlaKatmerli;
+    r.variant = (tavla::Variant)std::clamp(st.tavlaCesit, 0, tavla::kVariants - 1); // Tavla çeşidi
     return r;
 }
 pisti::Rules pistiRules(const ui::Settings& st) {
@@ -462,15 +465,15 @@ std::string stepsText(int p, const std::vector<tavla::Step>& steps) {
 }
 
 bool tavlaPlay(const tavla::Position& before, int p, int d1, int d2, const tavla::Position& after, int cube,
-               Mistake& out) {
-    const std::vector<tavla::Play> plays = tavla::generatePlays(before, p, d1, d2);
+               Mistake& out, tavla::Variant var = tavla::Variant::Klasik) {
+    const std::vector<tavla::Play> plays = tavla::generatePlays(before, p, d1, d2, var);
     if (plays.size() <= 1) return false;
     int actual = -1;
     for (size_t i = 0; i < plays.size(); ++i)
         if (plays[i].result == after) actual = (int)i;
     if (actual < 0) return false;
     std::vector<std::pair<double, int>> one;
-    for (size_t i = 0; i < plays.size(); ++i) one.push_back({-tavla::botEquityAfterMove(plays[i].result, p, 1), (int)i});
+    for (size_t i = 0; i < plays.size(); ++i) one.push_back({-tavla::botEquityAfterMove(plays[i].result, p, 1, nullptr, var), (int)i});
     std::stable_sort(one.begin(), one.end());
     std::vector<int> cands;
     for (size_t i = 0; i < one.size() && cands.size() < 6; ++i) cands.push_back(one[i].second);
@@ -479,7 +482,7 @@ bool tavlaPlay(const tavla::Position& before, int p, int d1, int d2, const tavla
     int best = actual;
     for (int i : cands) {
         double w = 0;
-        const double e = tavla::botEquityAfterMove(plays[(size_t)i].result, p, 2, &w);
+        const double e = tavla::botEquityAfterMove(plays[(size_t)i].result, p, 2, &w, var);
         if (i == actual) {
             actualEq = e;
             actualWin = w;
@@ -551,7 +554,7 @@ std::vector<Mistake> analyzeTavla(const ui::Settings& st, uint64_t seed, const s
             const int c = g.cubeValue(), mp = g.matchPoints();
             if (g.score(0) + 2 * c < mp && g.score(1) + 2 * c < mp) {
                 double win = 0;
-                const double eq = -tavla::botEquityToRoll(g.position(), 1, &win); // the opponent is to roll
+                const double eq = -tavla::botEquityToRoll(g.position(), 1, &win, g.variant()); // the opponent is to roll
                 const double eTake = 2.0 * c * eq, eDrop = -1.0 * c;
                 const bool took = a.kind == tavla::ActKind::Take;
                 Mistake m;
@@ -584,12 +587,13 @@ std::vector<Mistake> analyzeTavla(const ui::Settings& st, uint64_t seed, const s
         }
         tracks.erase(std::remove_if(tracks.begin(), tracks.end(), [](const Track& t) { return t.idx == (size_t)-1; }),
                      tracks.end());
+        // (Gülbahar: every rung of a ladder is its own decision: the dice turn to the next double in the same turn)
         if (capturing && (g.stage() != tavla::Stage::Moving || g.current() != 0 || g.turnNumber() != capTurn ||
-                          g.gameIndex() != capGame)) {
+                          g.gameIndex() != capGame || (g.ladder() > 0 && g.dice().d1 != d1))) {
             capturing = false;
             const tavla::Position after = g.gameIndex() != capGame ? pos0 : g.position();
             Mistake m;
-            if (g.gameIndex() == capGame && tavlaPlay(pos0, 0, d1, d2, after, cube, m) && m.notable) {
+            if (g.gameIndex() == capGame && tavlaPlay(pos0, 0, d1, d2, after, cube, m, g.variant()) && m.notable) {
                 m.hand = capGame + 1;
                 m.turn = moveNo;
                 m.when = ordinal(m.hand) + " oyun, " + ordinal(m.turn) + " hamle";
@@ -909,6 +913,187 @@ std::vector<Mistake> analyzeKing(const ui::Settings& st, uint64_t seed, const st
     return all;
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Altmışaltı: Kurt's expected game points of the hand (won +, lost -) for a card or closing the stock
+constexpr double ALTMISALTI_MIN = 0.25;
+
+bool altmisaltiJudge(altmisalti::Bot& bot, const altmisalti::Game& g, int p, const altmisalti::BotAction& act, Mistake& out) {
+    using K = altmisalti::BotAction::Kind;
+    if (act.kind == K::Exchange || g.stage() != altmisalti::Stage::Playing || g.current() != p) return false;
+    if (g.legalCards(p).size() <= 1 && !g.canClose(p)) return false; // forced
+    const std::vector<altmisalti::ActionValue> vals = bot.evaluate(g, p);
+    const altmisalti::ActionValue* a = nullptr;
+    const altmisalti::ActionValue* b = nullptr;
+    for (const altmisalti::ActionValue& v : vals) {
+        if (v.action.kind == act.kind && (act.kind == K::Close || v.action.card == act.card)) a = &v;
+        if (!b || v.value > b->value + 1e-12) b = &v;
+    }
+    if (!a || !b || vals.size() < 2) return false;
+    const bool lead = g.ledCard() < 0;
+    auto doing = [&](const altmisalti::BotAction& x, bool past) -> std::string {
+        if (x.kind == K::Close) return past ? "desteyi kapattın" : "desteyi kapatırdı";
+        return kart::cardAccusativeTR(x.card) + (lead ? (past ? " açtın" : " açardı") : (past ? " attın" : " atardı"));
+    };
+    out = Mistake();
+    out.unit = "oyun";
+    out.topic = act.kind == K::Close ? "kapatma" : "kart";
+    out.cost = std::max(0.0, b->value - a->value);
+    out.noise = a->se;
+    out.played = doing(act, true);
+    if (!out.played.empty() && out.played[0] == 'd') out.played[0] = 'D';
+    out.better = "Kurt " + doing(b->action, false);
+    out.why = "Kurt'un hesabıyla bu elden beklediğin oyun " + number(out.cost) + " düştü";
+    out.notable = notableCost(out.cost, out.noise, ALTMISALTI_MIN);
+    return true;
+}
+
+std::vector<Mistake> analyzeAltmisalti(uint64_t seed, const std::vector<std::string>& lines,
+                                       const std::array<std::string, 4>& names, const std::atomic<bool>* cancel) {
+    altmisalti::Game g;
+    g.setPlayer(0, names[0], true);
+    g.setPlayer(1, names[2], false); // (Kel Mahmut sits across at the tavla table)
+    altmisalti::Bot eval(altmisalti::BotLevel::Kurt, mix(seed, 0x66));
+    g.startMatch(seed);
+    g.drainEvents();
+    std::vector<Mistake> all;
+    std::vector<size_t> tracks;
+    for (const std::string& line : lines) {
+        if (cancelled(cancel)) break;
+        altmisalti::LoggedAction a;
+        if (!altmisalti::LoggedAction::decode(trim(line), a)) break;
+        const int handNo = g.handIndex() + 1;
+        const int trickNo = g.tricks(0) + g.tricks(1) + 1;
+        if (a.player == 0 && (a.kind == altmisalti::LogKind::Play || a.kind == altmisalti::LogKind::Close)) {
+            const altmisalti::BotAction act{a.kind == altmisalti::LogKind::Close ? altmisalti::BotAction::Kind::Close
+                                                                                : altmisalti::BotAction::Kind::Play,
+                                            a.card};
+            Mistake m;
+            if (altmisaltiJudge(eval, g, 0, act, m) && m.notable) {
+                m.hand = handNo;
+                m.turn = trickNo;
+                m.when = ordinal(handNo) + " el, " + ordinal(trickNo) + " tur";
+                all.push_back(m);
+                tracks.push_back(all.size() - 1);
+            }
+        }
+        if (!g.replay(a)) break;
+        for (const altmisalti::GameEvent& e : g.drainEvents()) {
+            for (size_t& t : tracks) {
+                if (t == (size_t)-1) continue;
+                Mistake& m = all[t];
+                if (e.type == altmisalti::EvType::TrickWon && m.topic == "kart") {
+                    if (e.seat == 1) m.why = "eli " + names[2] + " aldı (" + std::to_string(e.amount) + ")";
+                    t = (size_t)-1;
+                } else if (e.type == altmisalti::EvType::HandEnd) {
+                    if (m.topic == "kapatma" && e.seat == 1) m.why = "tutturamadın, " + names[2] + " " + std::to_string(e.amount) + " oyun aldı";
+                    t = (size_t)-1;
+                }
+            }
+        }
+        tracks.erase(std::remove(tracks.begin(), tracks.end(), (size_t)-1), tracks.end());
+    }
+    return all;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Bezik: Kurt's value of the deal from here (the player's points minus Kel Mahmut's) for each card, and a combination
+// left unsaid (the trick's winner passed while one could be declared: it is lost for good only when its cards go).
+constexpr double BEZIK_MIN = 20.0;
+constexpr int BEZIK_SAMPLES = 120;
+
+bool bezikCard(bezik::Bot& bot, const bezik::Game& g, int p, int card, Mistake& out) {
+    if (g.stage() != bezik::Stage::Playing || g.current() != p) return false;
+    const std::vector<bezik::CardValue> vals = bot.evaluateCards(g, p, BEZIK_SAMPLES);
+    if (vals.size() < 2) return false; // forced (or every card the same)
+    const bezik::CardValue* a = nullptr;
+    const bezik::CardValue* b = nullptr;
+    for (const bezik::CardValue& v : vals) {
+        if (v.card == card) a = &v;
+        if (!b || v.value > b->value + 1e-12) b = &v;
+    }
+    if (!a) // the same face (the other copy, or the same card in hand / on the table): judged as that one
+        for (const bezik::CardValue& v : vals)
+            if (bezik::sameFace(v.card, card)) a = &v;
+    if (!a || !b) return false;
+    const bool lead = g.currentTrick().cards.empty();
+    out = Mistake();
+    out.unit = "puan";
+    out.topic = "kart";
+    out.cost = bezik::sameFace(a->card, b->card) ? 0.0 : std::max(0.0, b->value - a->value);
+    out.noise = a->se;
+    out.played = bezik::cardAccusative(card) + (lead ? " açtın" : " attın");
+    out.better = "Kurt " + bezik::cardAccusative(b->card) + (lead ? " açardı" : " atardı");
+    out.why = g.secondStage() ? "son sekiz elde bu " + number(out.cost) + " sayı demek"
+                              : "Kurt'un hesabıyla bu elden beklediğin sayı " + number(out.cost) + " düştü";
+    out.notable = notableCost(out.cost, out.noise, BEZIK_MIN);
+    return true;
+}
+
+std::vector<Mistake> analyzeBezik(const ui::Settings& rules, uint64_t seed, const std::vector<std::string>& lines,
+                                  const std::array<std::string, 4>& names, const std::atomic<bool>* cancel) {
+    bezik::Rules r;
+    r.target = rules.bezikTarget == 500 || rules.bezikTarget == 1500 ? rules.bezikTarget : 1000;
+    bezik::Game g(r);
+    g.setPlayer(0, names[0], true);
+    g.setPlayer(1, names[2], false); // (Kel Mahmut sits across at the two-seat table)
+    bezik::Bot eval(bezik::BotLevel::Kurt, mix(seed, 0xBE2));
+    g.startMatch(seed);
+    g.drainEvents();
+    std::vector<Mistake> all;
+    std::vector<size_t> tracks;
+    for (const std::string& line : lines) {
+        if (cancelled(cancel)) break;
+        bezik::LoggedAction a;
+        if (!bezik::LoggedAction::decode(trim(line), a)) break;
+        const int handNo = g.handIndex() + 1;
+        const int trickNo = g.trickNumber() + 1;
+        if (a.seat == 0 && a.kind == bezik::LogKind::Play) {
+            Mistake m;
+            if (bezikCard(eval, g, 0, a.value, m) && m.notable) {
+                m.hand = handNo;
+                m.turn = trickNo;
+                m.when = ordinal(handNo) + " el, " + ordinal(trickNo) + " el alış";
+                all.push_back(m);
+                tracks.push_back(all.size() - 1);
+            }
+        } else if (a.seat == 0 && a.kind == bezik::LogKind::Pass && g.stage() == bezik::Stage::Declare) {
+            const std::vector<bezik::Meld> ms = g.availableMelds(0);
+            if (!ms.empty() && ms[0].points >= BEZIK_MIN) {
+                Mistake m;
+                m.hand = handNo;
+                m.turn = trickNo - 1;
+                m.when = ordinal(handNo) + " el, " + ordinal(trickNo - 1) + " el alış";
+                m.unit = "puan";
+                m.topic = "deklarasyon";
+                m.played = "Eli aldın ama deklarasyon yapmadın";
+                m.better = std::string("Kurt ") + bezik::meldNameTR(ms[0].kind) + " söylerdi (+" + std::to_string(ms[0].points) + ")";
+                m.cost = ms[0].points;
+                m.notable = true;
+                all.push_back(m);
+            }
+        }
+        if (!g.replay(a)) break;
+        for (const bezik::GameEvent& e : g.drainEvents()) {
+            for (size_t& t : tracks) {
+                if (t == (size_t)-1) continue;
+                Mistake& m = all[t];
+                if (e.type == bezik::EvType::TrickWon && m.topic == "kart") {
+                    if (e.seat == 1) {
+                        int b = 0;
+                        for (int c : e.cards) b += bezik::isBrisque(c) ? 10 : 0;
+                        m.why = "eli " + names[2] + " aldı" + (b ? " (" + std::to_string(b) + " brisk)" : std::string());
+                    }
+                    t = (size_t)-1;
+                } else if (e.type == bezik::EvType::HandEnd) {
+                    t = (size_t)-1;
+                }
+            }
+        }
+        tracks.erase(std::remove(tracks.begin(), tracks.end(), (size_t)-1), tracks.end());
+    }
+    return all;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------------------------------------
@@ -922,14 +1107,22 @@ std::vector<Mistake> analyzeMatch(ui::GameKind kind, const ui::Settings& rules, 
                                   const std::vector<std::string>& actionLines, const std::array<std::string, 4>& names,
                                   int maxResults, const std::atomic<bool>* cancel) {
     std::vector<Mistake> all;
+    // Rakip: in the two-player games the regular across (ui::twoPlayerOpponent) plays engine seat "2"
+    std::array<std::string, 4> two = names;
+    two[2] = names[(size_t)ui::twoPlayerOpponent(rules, kind)];
+    const bool pisti2 = rules.pistiMode == 2;
     switch (kind) {
     case ui::GameKind::Yuzbir:
     case ui::GameKind::YuzbirEsli:
     case ui::GameKind::Okey: all = analyzeOkey(kind, rules, seed, actionLines, names, cancel); break;
-    case ui::GameKind::Tavla: all = analyzeTavla(rules, seed, actionLines, names, cancel); break;
-    case ui::GameKind::Pisti: all = analyzePisti(rules, seed, actionLines, names, cancel); break;
+    case ui::GameKind::Tavla: all = analyzeTavla(rules, seed, actionLines, two, cancel); break;
+    case ui::GameKind::Pisti: all = analyzePisti(rules, seed, actionLines, pisti2 ? two : names, cancel); break;
     case ui::GameKind::Batak: all = analyzeBatak(rules, seed, actionLines, names, cancel); break;
     case ui::GameKind::King: all = analyzeKing(rules, seed, actionLines, names, cancel); break;
+    case ui::GameKind::Altmisalti: all = analyzeAltmisalti(seed, actionLines, two, cancel); break;
+    case ui::GameKind::Bezik: all = analyzeBezik(rules, seed, actionLines, two, cancel); break; // Bezik
+    case ui::GameKind::Dama: all = analyzeDama(rules, seed, actionLines, names, cancel); break; // Dama (AnalysisDama.cpp)
+    case ui::GameKind::Konken: all = analyzeKonken(rules, seed, actionLines, names, cancel); break; // Konken (AnalysisKonken.cpp)
     default: break;
     }
     return pick(std::move(all), maxResults);
@@ -958,8 +1151,8 @@ bool judgeClassicDiscard(const okey::Game& g, int seat, int tile, Mistake& out) 
 }
 
 bool judgeTavlaPlay(const tavla::Position& before, int player, int d1, int d2, const tavla::Position& after, int cube,
-                    Mistake& out) {
-    return tavlaPlay(before, player, d1, d2, after, cube, out);
+                    Mistake& out, tavla::Variant variant) {
+    return tavlaPlay(before, player, d1, d2, after, cube, out, variant);
 }
 
 bool judgePistiCard(const pisti::Game& g, int seat, int card, Mistake& out) {
@@ -978,6 +1171,16 @@ bool judgeKingCard(const king::Game& g, int seat, int card, Mistake& out) {
     if (g.stage() != king::Stage::Playing || g.current() != seat) return false;
     king::Bot bot(king::BotLevel::Kurt, 1);
     return kingCard(bot, g, seat, card, out);
+}
+
+bool judgeAltmisalti(const altmisalti::Game& g, int player, const altmisalti::BotAction& act, Mistake& out) {
+    altmisalti::Bot bot(altmisalti::BotLevel::Kurt, 1);
+    return altmisaltiJudge(bot, g, player, act, out);
+}
+
+bool judgeBezikCard(const bezik::Game& g, int player, int card, Mistake& out) { // Bezik
+    bezik::Bot bot(bezik::BotLevel::Kurt, 1);
+    return bezikCard(bot, g, player, card, out);
 }
 
 } // namespace analysis

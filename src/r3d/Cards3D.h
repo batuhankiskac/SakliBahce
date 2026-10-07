@@ -1,5 +1,5 @@
 #pragma once
-// The 52 playing cards in 3D for the card games (Pişti, Batak, King): thin rounded cards textured from
+// The playing cards in 3D for the card games (Pişti, Batak, King; Bezik's double deck): thin rounded cards textured from
 // ui::cardgfx's atlas, each with a target pose it flies to (an arc, eased, turning on the way), a tint, a lift and
 // ray picking. The games decide where every card belongs each frame (CardLayout helpers below); this module only
 // moves and draws them.
@@ -16,7 +16,15 @@ namespace r3d {
 constexpr float CARD_W = 0.063f;   // metres (poker size)
 constexpr float CARD_H = 0.088f;
 constexpr float CARD_T = 0.0004f;  // thickness
-constexpr int CARD_COUNT = 52;
+// Card instances. Ids 0..51 are the 52 faces of ui::cardgfx (kart ids); a second deck follows (ids 52..103, id k shows
+// face k % CARD_FACES), for the games played with two copies of each card (Bezik's double piquet deck). The one-deck
+// games use only 0..51: the rest stay hidden.
+// Konken: four jokers follow the two decks (ids 104..107, the atlas' joker face CARD_JOKER_KEY = ui::cardgfx::KEY_JOKER).
+constexpr int CARD_FACES = 52;
+constexpr int CARD_JOKERS = 4;
+constexpr int CARD_JOKER_KEY = 54;
+constexpr int CARD_COUNT = 2 * CARD_FACES + CARD_JOKERS;
+inline int cardFace(int id) { return id >= 2 * CARD_FACES ? CARD_JOKER_KEY : id % CARD_FACES; }
 
 struct CardPose {
     Vector3 pos{0, w3d::TABLE_Y, 0};
@@ -90,6 +98,9 @@ namespace cardlayout {
 // hold theirs in their left hand (fanCard in Characters::cardFan's frame) — hand() is their stand-in without people
 // (an upright fan where the hand would be).
 CardPose hand(int seat, int i, int n);
+// The frame of the player's fan (hand(0, ...)): origin at its pivot, x across, y the faces (toward the eye), -z up the
+// cards. The player's left hand holds it there (PlayerHands).
+Matrix humanFanFrame();
 // Card `i` of `n` fanned in a frame from Characters::cardFan (x across, y the faces, -z up the cards).
 CardPose fanCard(const Matrix& frame, int i, int n);
 // The little face-down pile a seat's cards are dealt into on the felt (before they are picked up), `i` from the bottom.

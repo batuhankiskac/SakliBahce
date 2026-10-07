@@ -11,8 +11,8 @@ namespace ui {
 namespace {
 
 // File keys (the same as the record's, istatistik.txt)
-const char* const kGameKey[MEMORY_GAMES] = {"101", "esli101", "okey", "tavla", "pisti", "batak", "king"};
-const char* const kGameName[MEMORY_GAMES] = {"101", "eşli 101", "okey", "tavla", "pişti", "batak", "king"};
+const char* const kGameKey[MEMORY_GAMES] = {"101", "esli101", "okey", "tavla", "pisti", "batak", "king", "dama", "altmisalti", "bezik", "konken"};
+const char* const kGameName[MEMORY_GAMES] = {"101", "eşli 101", "okey", "tavla", "pişti", "batak", "king", "dama", "altmışaltı", "bezik", "konken"};
 
 bool validSeat(int s) { return s >= 1 && s <= 3; }
 bool validGame(int g) { return g >= 0 && g < MEMORY_GAMES; }

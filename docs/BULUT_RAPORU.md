@@ -91,3 +91,43 @@
 - Bulut ortamında hazırlık: `apt-get install` ile X11/GL geliştirme paketleri, `libclang-rt-18-dev` (ASan), raylib 6.0
   kaynaktan `/usr/local`'a; ayrıntılar README'nin "Linux" bölümünde. Görüntüler için `--render-last`, tablescheck için
   `TABLESCHECK_ARGS=--no-3d` kullanın.
+
+## Tamamlanma (2026-10-07, yerel oturum)
+
+Yarım kalan ve başlanmamış maddelerin hepsi bitti:
+- **Madde 7:** App.cpp sekiz dosyaya bölündü; sabit tohumlu görüntüler bölmeden öncekiyle birebir aynı (yalnızca duvar saati ve bir konuşma balonu, aynı sürümün iki koşusunda da değişiyor). Uyarılar temizlendi, `make tidy` hedefi eklendi.
+- **Madde 3:** Dama, Altmışaltı, Bezik, Konken ve tavlanın Gülbahar / Fevga çeşitleri; hepsi kayıt, tekrar, analiz, ipucu, rehber, istatistik, hafıza, başarımlar, klavye ve renk körü moduna bağlı.
+- **Madde 4:** bahçe mekânı (Ayarlar → Mekân), kendi ortam sesiyle.
+- **Madde 5:** 40 başarım (İstatistik → Başarımlar).
+- **Madde 6:** oyuncunun elleri ve Ayarlar → Sen kişiselleştirmesi.
+- **Madde 2'nin eki:** iki kişilik pişti tavla masasında.
+- **Bilinen sorunlar:** table3d_snapshot'taki iki eski denetim düzeldi; `Audio::speak` artık ayrı bir iş parçacığında (ana iş parçacığında ~0,01 ms). Okey dışı oyunların tekrarları hiç ilerlemiyordu, düzeldi.
+
+Doğrulama: `make test` 0 hata; `make tablescheck` (tam 3B) 26 koşu, 0 hata.
+
+## 5. tur (2026-10-07, yerel oturum)
+
+**Görsel ve ses**
+- Müdavimlerin yüz ifadeleri, iki parçalı bıyık ve sesle eşleşen dudak hareketi (`r3d/CharactersFace.cpp`).
+- Ocakçı: çay demliyor, tepsiyi doldurup çırağa veriyor; içeride ve bahçede (`r3d/CharactersOcakci*`).
+- Özel günler: bayram, Ramazan akşamları ve pazar akşamı derbi, tarihler hesapla bulunuyor (`r3d/SpecialDay.h`, `RoomSpecial.cpp`, `CharactersSpecial.cpp`, `app/AppSpecial.cpp`).
+- Bahçede yağmur başlarsa oyun el arasında içeri taşınıyor, Mekân "Bahçe" seçiliyse tente iniyor.
+- Daha doğal konuşma sentezi: Türkçe vurgu ve tonlama, her müdavime ayrı ses rengi, gülme gibi ünlem sesleri (`ui/Audio.cpp`, `tools/voice_render.cpp`).
+
+**Eksikler**
+- İki kişilik oyunlarda tek bir "Rakip" ayarı var (`rakip`); eski ayar anahtarları ve kayıtlar okunmaya devam ediyor.
+- Dama ve Bezik'te rakibin eli gerçekten taşı ya da kâğıdı alıp götürüyor (`r3d/CharactersBoard.cpp`, `PieceCarry.h`).
+- Konken'de yanan oyuncu masadan kalkıyor, maç son kalana kadar sürüyor (`konkenbitis`).
+- Kedi engellere ve insanlara çarpmıyor (`make catwalk`).
+- Başarımlar uçtan uca doğrulandı (`make basarimcheck`).
+
+**101 kuralları**
+- Yeni seçenekler: bitiş katları (Katlanır, Tek kat, Katsız), açma sınırı, açmayanın yazdığı ceza, okey atma, işlek taş ve geri verme cezaları, açınca bir tur bekleme (`app/Rules101.h`, `docs/kurallar_101.md`).
+
+**Doğrulama**
+- `make test`: çıkış 0, bütün suit'ler 0 hata.
+- `make tablescheck`: 29 koşu, 0 hata.
+- `make basarimcheck` ve `make catwalk`: ikisi de ok.
+- Kare süresi, son commit'le sırayla karşılaştırıldı (okey, içeride; üç çift ölçüm). Önceki sürüm 13.4 / 14.2 / 15.4 ms, yeni sürüm 13.7 / 15.1 / 15.3 ms; aynı seviyede.
+
+**Bekleyen:** radyoya eklenecek kayıtlar. Adaylar listelendi, indirme kullanıcı onayı bekliyor.

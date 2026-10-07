@@ -3,6 +3,7 @@
 //   usage: room_snapshot [outdir] [seconds] [only-shot-substring] [seed]
 #include "r3d/Gfx.h"
 #include "r3d/Room.h"
+#include "r3d/SpecialDay.h"
 #include "r3d/World.h"
 #include "ui/Common.h"
 
@@ -212,6 +213,82 @@ int main(int argc, char** argv) {
         std::string path = out + "/" + s.name + ".png";
         ExportImage(img, path.c_str());
         UnloadImage(img);
+    }
+    // (duzelt) "catwalk": the cat's floor plan against the garden's furniture and the people standing on the floor.
+    // Half an hour of the room per case, inside and in the garden, with no one standing, with the special days' men,
+    // the bystanders and the burned Konken players standing where Characters puts them (Room::setFloorPeople), and the
+    // derby's TV out in the garden. Counts the seconds the cat's body is inside something on the floor (after it had
+    // a few seconds to get up from where it woke).
+    if (only == "catwalk") {
+        struct Disc {
+            float x, z, r;
+        };
+        // inside: the derby's men at the TV; the garden: the derby's men round the portable TV; both: the bystanders, the
+        // burned Konken players and two strays by the cat's spots at the stove and the door
+        const std::vector<Vector3> common = {
+            {-0.58f, 0.32f, -1.56f}, {0.62f, 0.32f, -1.62f},                              // the bystanders
+            {1.52f, 0.32f, 0.42f},   {-1.4f, 0.32f, -1.02f}, {-1.56f, 0.32f, -0.18f},   // burned Konken players
+            {-3.0f, 0.32f, 2.6f},    {3.0f, 0.32f, 2.4f}};                              // strays
+        const std::vector<Vector3> derbyIn = {{-2.05f, 0.32f, -0.55f}, {-3.05f, 0.32f, -0.45f}, {-3.55f, 0.32f, -1.15f}};
+        const std::vector<Vector3> derbyOut = {{0.35f, 0.32f, -2.25f}, {1.95f, 0.32f, -2.45f}, {-0.2f, 0.32f, -2.6f}};
+        std::vector<Disc> garden = {{w3d::SCOREBOARD_POS.x, -4.12f, 1.25f}, {4.0f, 0.86f, 0.18f}, {4.0f, 1.18f, 0.15f}};
+        for (float x : {-3.7f, -3.25f, 1.0f, 1.45f, 2.2f, 3.0f}) garden.push_back({x, w3d::ROOM_Z1 - 0.18f, 0.18f});
+        for (Vector2 p : {Vector2{0.5f, -2.4f}, Vector2{4.08f, -2.4f}, Vector2{0.45f, -3.35f}, Vector2{-2.45f, 3.54f}, Vector2{1.05f, 3.54f}})
+            garden.push_back({p.x, p.y, 0.08f});
+        const float step = 0.05f, len = argc > 2 ? seconds : 1800.f;
+        int bad = 0;
+        for (int cs = 0; cs < 6; ++cs) {
+            // cases 4, 5: the people stand there but the room is not told (how it was before): for comparison only
+            const bool blind = cs >= 4, inGarden = cs == 2 || cs == 3 || cs == 5, withPeople = cs % 2 == 1 || blind;
+            Room cr;
+            if (!cr.init(R, seed + 17u * (uint64_t)cs)) return 2;
+            cr.setVenue(inGarden ? 1 : 0);
+            cr.setSpecialDay(withPeople && inGarden ? w3d::GunMac : 0);
+            std::vector<Vector3> pp;
+            if (withPeople) {
+                pp = common;
+                for (const Vector3& q : inGarden ? derbyOut : derbyIn) pp.push_back(q);
+            }
+            float inside = 0.f, walked = 0.f, worst = 0.f;
+            double upMs = 0.0;
+            long ups = 0;
+            Vector3 last = cr.debugCatPosition();
+            for (float t = 0.f; t < len; t += step) {
+                cr.setFloorPeople(blind ? std::vector<Vector3>{} : pp);
+                const auto u0 = std::chrono::steady_clock::now();
+                cr.update(step);
+                upMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - u0).count();
+                ++ups;
+                const Vector3 c = cr.debugCatPosition();
+                walked += std::hypot(c.x - last.x, c.z - last.z);
+                last = c;
+                if (c.y > 0.05f || t < 4.f) continue;  // (on a chair / in the air)
+                float over = 0.f;
+                int what = -1;
+                for (size_t i = 0; i < pp.size(); ++i) {
+                    const float o = 0.24f - std::hypot(c.x - pp[i].x, c.z - pp[i].z);
+                    if (o > over) over = o, what = (int)i;
+                }
+                if (inGarden)
+                    for (size_t i = 0; i < garden.size(); ++i) {
+                        const float o = garden[i].r + 0.04f - std::hypot(c.x - garden[i].x, c.z - garden[i].z);
+                        if (o > over) over = o, what = 100 + (int)i;
+                    }
+                if (over > 0.f) {
+                    if (std::getenv("CATWALK_VERBOSE") && std::fmod(t, 1.f) < step)
+                        std::printf("  t %.0f: cat (%.2f, %.2f) in %d by %.2f\n", t, c.x, c.z, what, over);
+                    inside += step;
+                }
+                worst = std::max(worst, over);
+            }
+            std::printf("catwalk %-7s %-9s: walked %.0f m in %.0f s, inside something %.1f s (deepest %.2f m) | Room::update %.3f ms\n",
+                        inGarden ? "garden" : "inside", blind ? "unknown" : withPeople ? "people" : "nobody", walked, len, inside, worst,
+                        upMs / (double)std::max(1L, ups));
+            if (!blind) bad += inside > 2.f ? 1 : 0;
+            cr.shutdown(R);
+        }
+        std::printf("catwalk: %s\n", bad ? "FAILED" : "ok");
+        return bad ? 1 : 0;
     }
     // "goal": fast-forward the TV match to the next goal and grab the screen during the celebration
     if (only == "goal") {

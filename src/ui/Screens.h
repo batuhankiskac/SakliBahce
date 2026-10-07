@@ -6,13 +6,15 @@
 #include "ui/Audio.h"
 #include "ui/Common.h"
 #include "ui/Stats.h"
+#include "ui/Achievements.h"
 #include <functional>
 #include <string>
 
 namespace ui {
 
 // The games of the kahvehane. The okey games share the okey engine and table; the others have their own.
-enum class GameKind { Yuzbir = 0, YuzbirEsli, Okey, Tavla, Pisti, Batak, King, Count };
+// New games go before Count; gameAvailable() turns each on once its table is ready.
+enum class GameKind { Yuzbir = 0, YuzbirEsli, Okey, Tavla, Pisti, Batak, King, Dama, Altmisalti, Bezik, Konken, Count };
 struct GameInfo {
     const char* name;      // "101", "Eşli 101", "Okey", ...
     const char* neon;      // the title sign's neon line: "101", "OKEY", "TAVLA", ...
@@ -35,7 +37,8 @@ enum class ScreenId {
     Stats,        // Title "İstatistik": the player's record and rank (kahvehane defteri)
     Guide,        // a game's short guide card at its first match (setGuide), "Anladım" -> None
     Replays,      // İstatistik "Tekrarlar": the last finished matches, to watch again
-    Analysis      // "Hatalarım": the player's most expensive mistakes of a match (setAnalysis)
+    Analysis,     // "Hatalarım": the player's most expensive mistakes of a match (setAnalysis)
+    Achievements  // İstatistik "Başarımlar": the badges, locked and open (setAchievements)
 };
 
 struct Settings {
@@ -51,6 +54,15 @@ struct Settings {
     int guideSeen = 0;         // bit per GameKind: its guide was shown
     bool katlamali = false;    // Katlamalı oyun (okey::RulesConfig::katlamali), from the next match
     bool yandanCeza = true;    // yandan alıp açma cezası (okey::RulesConfig::leftOpenPenalty), next match
+    // 101 kuralları (Ayarlar "101 kuralları" page; app/Rules101.h maps them onto okey::RulesConfig; defaults = the
+    // rules as they always were). docs/kurallar_101.md.
+    int y101Acma = 101;        // açma sınırı (openThreshold): 51, 81, 101, 121
+    int y101Kat = 0;           // bitiş katları (okey::FinishMult): 0 katlanır, 1 tek kat, 2 katsız
+    int y101Acmayan = 202;     // açmayan yazar (unopenedScore): 202 or 404
+    bool y101OkeyCeza = true;  // okey atma cezası (penaltyJokerDiscard)
+    bool y101IslekCeza = true; // işlek taş cezası (penaltyPlayableDiscard)
+    bool y101GeriVer = false;  // yandan alınanı geri verme cezası (penaltyReturnLeft)
+    bool y101Bekle = true;     // açtığın turda işlenmez (waitTurnAfterOpening)
     int okeyStart = 20;        // klasik okey: starting points (6, 12, 20), counted down
     bool okeyRenkli = false;   // klasik okey: renkli okey (a red / black gösterge doubles the hand)
     bool batakKozKirilmadan = true; // batak: no koz lead before a koz has been played
@@ -60,17 +72,50 @@ struct Settings {
     int batakTarget = 51;      // batak: the match is won at this score (31, 51, 71)
     int tavlaPoints = 5;       // tavla: the match goes to this many points (3, 5, 7)
     bool tavlaDoubling = false; // tavla: katlama zarı (doubling cube) in play
-    int tavlaRakip = 2;        // tavla: who sits across at the tavla table (seat 1 Hacı Rıza, 2 Kel Mahmut, 3 Emekli Nuri)
+    // Rakip (2026-10): who sits across at the two-seat tavla table in every two-player game (tavla, dama, altmışaltı,
+    // bezik, iki kişilik pişti): seat 1 Hacı Rıza, 2 Kel Mahmut, 3 Emekli Nuri (key `rakip`). 0 = not set: a match
+    // saved before it; twoPlayerOpponent() then falls back to the old per-game keys, and to Kel Mahmut.
+    int rakip = 2;
+    int tavlaRakip = 0;        // the old `tavlarakip` key (read from old settings / saves only; 0 = absent)
+    int tavlaCesit = 0;        // tavla çeşidi (tavla::Variant): 0 klasik, 1 Gülbahar, 2 Fevga
     int pistiTarget = 101;     // pişti: the match is won at this score (101, 151)
     int pistiMode = 0;         // pişti: 0 four players, 1 eşli, 2 two players (you and Kel Mahmut)
+    // Dama
+    int damaRakip = 0;         // the old `damarakip` key (as tavlaRakip; the opponent is `rakip` now)
+    int damaWins = 3;          // dama: the match goes to this many won games (1, 3, 5)
+    // Bezik
+    int bezikTarget = 1000;    // bezik: the match goes to this many points (500, 1000, 1500)
+    // Konken
+    int konkenOpen = 51;       // konken: the opening must be worth this much (40, 51, 71)
+    int konkenLimit = 151;     // konken: the match ends when someone reaches this ("yanar": 101, 151, 201)
+    bool konkenLastStanding = true; // konken bitiş: the burned leave, the last one left wins (false: "ilk yanan")
     // ---- atmosphere / accessibility
     int dayTime = 0;           // 0 otomatik (the computer's clock), 1 sabah, 2 öğle, 3 akşam, 4 gece
     int season = 0;            // 0 otomatik (the date), 1 ilkbahar, 2 yaz, 3 sonbahar, 4 kış
+    int venue = 2;             // mekân: 0 içerisi, 1 bahçe, 2 otomatik (the garden on fair spring / summer days)
+    bool ozelGun = true;       // özel günler (ozelgun): bayram, Ramazan evenings, the Sunday derby from the date
     bool voices = true;        // the regulars murmur when they speak (Audio)
     bool colorBlind = false;   // tiles / cards / checkers with shapes and colour-blind friendly colours
     bool bigText = false;      // larger HUD and speech text
     std::string playerName = "Sen";
+    // ---- Sen: the player's own hands at the table (r3d::PlayerHands; Ayarlar "Sen" page)
+    bool hands = true;         // Ellerimi göster
+    int kol = 0;               // sleeves: 0 ceket, 1 gömlek (rolled up), 2 kazak
+    int kolRenk = 0;           // 0 lacivert, 1 kahverengi, 2 gri, 3 bordo, 4 krem
+    int ten = 1;               // skin: 0 açık, 1 buğday, 2 esmer, 3 koyu
+    bool yuzuk = false;        // a ring
+    bool saat = true;          // a watch
+    int tespih = 0;            // 0 yok, 1 kehribar, 2 oltu, 3 yeşil, 4 mercan
+    int bardak = 0;            // own tea glass: 0 klasik ince belli, 1 yeşil, 2 mavi, 3 mor
+    bool sigara = false;       // a cigarette (off: the regulars smoke enough)
 };
+
+// Rakip: the regular across at the two-seat table in a two-player game `k` (1..3; see Settings::rakip).
+inline int twoPlayerOpponent(const Settings& s, GameKind k) {
+    if (s.rakip >= 1 && s.rakip <= 3) return s.rakip;
+    const int old = k == GameKind::Tavla ? s.tavlaRakip : k == GameKind::Dama ? s.damaRakip : 0;
+    return old >= 1 && old <= 3 ? old : 2; // (altmışaltı, bezik and iki kişilik pişti were always Kel Mahmut)
+}
 
 // One finished match kept for watching again (Replays screen).
 struct ReplayEntry {
@@ -178,6 +223,12 @@ public:
     // "Hatalarım": the MatchOver screen offers it while `available`; the Analysis screen shows `rows` once `ready`
     // (until then "Kurt maçı inceliyor…"). `title` e.g. "Batak · 06.10.2026".
     void setAnalysis(bool available, bool ready, const std::string& title, const std::vector<MistakeView>& rows);
+    // Başarımlar: the badges shown by the Achievements screen (App owns them; null: none open yet), and the banner at
+    // the top of the screen when one opens ("Başarım: Pişti Üstüne Pişti!"; badge index, queued, ~4 s each, drawn over
+    // everything by draw()).
+    void setAchievements(const Achievements* a);
+    void showAchievementBanner(int index);
+    bool achievementBannerUp() const;
     std::function<void(Sfx)> playSfx; // set by App
 
 private:

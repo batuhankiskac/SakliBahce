@@ -23,6 +23,14 @@
 //     3 on 16, 5 on 18.
 //   The UI may mirror the picture left/right (home board on the left) as long as it keeps this mapping
 //   between indices and physical triangles; the engine never cares about the drawing.
+//
+// ÇEŞİTLER (Rules::variant): Gülbahar and Fevga (Moultezim) are played on the same board with the same indices,
+// but both players move the SAME way round (counter-clockwise seen from above) from diagonally opposite corners:
+//   * Player 0 is unchanged: starts with all 15 on index 23, moves down to 0, home 0..5, bears off past 0.
+//   * Player 1 starts with all 15 on index 11 (his far right corner), moves 11 -> 0, then 23 -> 12; his home
+//     board is 12..17 and he bears off past index 12. Index i is his own point ((i + 12) % 24) + 1.
+//   * No hitting, no bar: a single checker holds a point. relPoint / absPoint / pointNumber(Variant, ...) give
+//     the numbering; the klasik helpers below stay as they were.
 // ------------------------------------------------------------------------------------------------------
 #include "core/Rng.h"
 
@@ -40,12 +48,21 @@ constexpr int OFF = 25; // Step::to: bear off ("pul toplamak")
 
 // Board position. pts[i] > 0: that many checkers of player 0 on point i; pts[i] < 0: -pts[i] checkers of
 // player 1. bar[p] = p's hit checkers waiting to enter, off[p] = p's checkers already borne off.
+// Tavla çeşidi (docs/kurallar_tavla.md): Klasik (Türk usulü, the default), Gülbahar (all 15 on the start point,
+// no hitting, doubles climb the ladder up to 6-6 from a player's 4th roll), Fevga / Moultezim (all 15 on the start
+// point, no hitting, the first checker must pass the opponent's start point, no 6-prime trapping all 15).
+enum class Variant : int { Klasik = 0, Gulbahar = 1, Fevga = 2 };
+constexpr int kVariants = 3;
+const char* variantName(Variant v); // "Klasik", "Gülbahar", "Fevga"
+inline bool sameWay(Variant v) { return v != Variant::Klasik; } // both move the same way, a single checker blocks
+
 struct Position {
     std::array<int8_t, kPoints> pts{};
     std::array<int8_t, 2> bar{};
     std::array<int8_t, 2> off{};
 
-    static Position initial();
+    static Position initial();          // klasik
+    static Position initial(Variant v); // Gülbahar / Fevga: 15 on each start point
     int owner(int i) const { return pts[i] > 0 ? 0 : (pts[i] < 0 ? 1 : -1); } // -1 = empty
     int count(int i) const { return pts[i] < 0 ? -pts[i] : pts[i]; }
     int count(int p, int i) const { return p == 0 ? (pts[i] > 0 ? pts[i] : 0) : (pts[i] < 0 ? -pts[i] : 0); }
@@ -61,6 +78,14 @@ inline bool inHome(int p, int i) { return i >= homeLo(p) && i < homeLo(p) + 6; }
 inline int entryPoint(int p, int die) { return p == 0 ? 24 - die : die - 1; }
 inline int pointNumber(int p, int i) { return p == 0 ? i + 1 : 24 - i; } // p's own numbering 1..24
 int pipCount(const Position& pos, int p); // bar checkers count 25 pips
+// The same helpers for any çeşit (Variant::Klasik gives exactly the ones above). rel 0 = p's own 1-point.
+inline int relPoint(Variant v, int p, int i) { return p == 0 ? i : (v == Variant::Klasik ? 23 - i : (i + 12) % 24); }
+inline int absPoint(Variant v, int p, int r) { return p == 0 ? r : (v == Variant::Klasik ? 23 - r : (r + 12) % 24); }
+inline int pointNumber(Variant v, int p, int i) { return relPoint(v, p, i) + 1; }
+inline int homeLo(Variant v, int p) { return v == Variant::Klasik ? homeLo(p) : (p == 0 ? 0 : 12); }
+inline bool inHome(Variant v, int p, int i) { return i >= homeLo(v, p) && i < homeLo(v, p) + 6; }
+inline int startPoint(Variant v, int p) { return absPoint(v, p, 23); } // where p's 24-point is (Gülbahar / Fevga: all 15 start there)
+int pipCount(const Position& pos, int p, Variant v);
 
 struct Step {
     int from = -1; // 0..23 or BAR
@@ -79,12 +104,13 @@ struct Play {
 // Every distinct complete legal play (maximal number of dice used, larger-die rule applied) of player p
 // with dice d1,d2 (d1 == d2 -> four moves) from `pos`, deduplicated by resulting position, in a
 // deterministic order. Empty if no step is possible.
-std::vector<Play> generatePlays(const Position& pos, int p, int d1, int d2);
+// (Gülbahar: one rung of the ladder; a double is four moves of that number, the climb is Game's business.)
+std::vector<Play> generatePlays(const Position& pos, int p, int d1, int d2, Variant v = Variant::Klasik);
 // Faster variant for search: only the resulting positions (same set and order as generatePlays).
-void generateResults(const Position& pos, int p, int d1, int d2, std::vector<Position>& out);
+void generateResults(const Position& pos, int p, int d1, int d2, std::vector<Position>& out, Variant v = Variant::Klasik);
 // Applies one step to a position without any legality check beyond what is needed to keep it consistent
 // (used by bots / tests). Returns false if the step is impossible on this board.
-bool applyStepTo(Position& pos, int p, const Step& s);
+bool applyStepTo(Position& pos, int p, const Step& s, Variant v = Variant::Klasik);
 
 struct Rules {
     int matchPoints = 5;        // maç kaç sayıya (3 / 5 / 7)
@@ -106,6 +132,8 @@ struct Rules {
     // 2 mars, 3 katmerli) x cube. Crawford rule: no doubling in the game right after a player first reaches
     // matchPoints - 1. No doubling before the first move of a game (the opening turn).
     bool doubling = false;
+    // Tavla çeşidi. Gülbahar / Fevga: no katmerli mars (a mars is 2 x cube); the cube works the same in every çeşit.
+    Variant variant = Variant::Klasik;
 };
 
 struct PlayerInfo {
@@ -151,7 +179,8 @@ enum class EvType {
     MatchStart,  // amount = matchPoints
     GameStart,   // amount = game index (0-based); player = starter if already known (winnerStarts) else -1
     OpeningRoll, // d1 = player 0's die, d2 = player 1's die; player = starter, or -1 on a tie (throw again)
-    Roll,        // player rolled d1,d2 (also emitted when the starter plays the opening dice)
+    Roll,        // player rolled d1,d2 (also emitted when the starter plays the opening dice). amount = 1: no throw,
+                 // the next rung of a Gülbahar ladder (the dice are turned to the next double d1 = d2)
     Step,        // player moved from -> to with die; hit = an opponent checker went to his bar.
                  // THE event to animate. The three below are follow-ups of the same step (sound/banter/HUD).
     Hit,         // player hit on point `to`; amount = victim seat
@@ -192,14 +221,17 @@ std::string diceName(int d1, int d2);
 // ---- hamle geçmişi (move history) ----
 // One line of the game's record: a turn (dice and the steps played, none = "oynayamadı") or a cube action
 // (d1 == 0, `note` says what happened: "katladı: 2, kabul").
+// (Gülbahar: every rung of a double's ladder is its own record: "3-3 düse: ...", "4-4 dört cihar: ...".)
 struct TurnRecord {
     int player = -1;
     int d1 = 0, d2 = 0;
     std::vector<Step> steps;
     std::string note;
+    Variant variant = Variant::Klasik; // whose numbering the steps are written in
 };
 // A step in the mover's own numbering: "24/18", "18/13*" (* = hit), "bar/22", "6/çıktı".
 std::string stepNotation(int p, const Step& s);
+std::string stepNotation(int p, const Step& s, Variant v);
 // "6-5 şeşbeş: 24/18 18/13*", "6-6 düşeş: oynayamadı", or the note of a cube action.
 std::string turnNotation(const TurnRecord& t);
 
@@ -237,7 +269,12 @@ public:
     const Position& position() const { return pos_; }
     int barCount(int p) const { return pos_.bar[p]; }
     int offCount(int p) const { return pos_.off[p]; }
-    int pipCount(int p) const { return tavla::pipCount(pos_, p); }
+    int pipCount(int p) const { return tavla::pipCount(pos_, p, rules_.variant); }
+    Variant variant() const { return rules_.variant; }
+    // Gülbahar: the rung of the ladder being played (the double's value, climbing to 6), 0 when no ladder is on.
+    int ladder() const { return ladder_; }
+    // Gülbahar: p's rolls so far in this game (the ladder starts with his 4th).
+    int rollsInGame(int p) const { return rolls_[p]; }
     const Dice& dice() const { return dice_; }
     const GameResult& lastResult() const { return lastResult_; }
     const std::vector<Step>& turnSteps() const { return turnSteps_; } // steps played so far this turn
@@ -311,6 +348,8 @@ private:
     void startTurn(int p);              // -> NeedRoll
     void setDice(int d1, int d2);       // -> Moving + constraints; handles NoMove / auto end
     void finishTurn();
+    void endOfPlay();        // the dice are played out: the next rung of a Gülbahar ladder, else finishTurn()
+    void nextRung();
     void afterStep();
     void endGame(int winner, bool dropped = false);
     void recordTurn();
@@ -359,6 +398,8 @@ private:
     int cubeValue_ = 1;
     int cubeOwner_ = -1;
     bool crawford_ = false, crawfordUsed_ = false;
+    std::array<int, 2> rolls_{}; // rolls of each player in this game (Gülbahar's ladder from the 4th)
+    int ladder_ = 0;             // Gülbahar: the rung being played, 0 = no ladder
 };
 
 } // namespace tavla

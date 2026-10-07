@@ -435,7 +435,7 @@ struct Bot::Impl {
     // Kurt's determinized Monte Carlo: the value (own side minus the others' mean, majority and last capture
     // included) of each candidate in S sampled worlds, val[ci * S + k] (common worlds: paired comparisons).
     // Returns S.
-    int sampleValues(const Game& g, int seat, const std::vector<int>& cands, Rng& rng, int plays,
+    int sampleValues(const Game& g, int seat, const std::vector<int>& cands, Rng& wrng, int plays,
                      std::vector<double>& val) const {
         const std::vector<int>& h = g.hand(seat);
         const Params P = paramsFor(g);
@@ -492,7 +492,7 @@ struct Bot::Impl {
         std::vector<char> used;
         for (int k = 0; k < S; ++k) {
             pool = unknown;
-            rng.shuffle(pool);
+            wrng.shuffle(pool);
             Sim w = base;
             // Hands first for the players known to lack some ranks (they passed on a capture), then the rest.
             used.assign(pool.size(), 0);

@@ -1166,9 +1166,9 @@ struct Bot::Impl {
             if (m.kind == MeldKind::Run) {
                 runs.push_back({m.tiles.front().color, m.tiles.front().number, m.tiles.back().number});
             } else {
-                Grp g{m.tiles.front().number, 0, (int)m.tiles.size()};
-                for (const PlacedTile& t : m.tiles) g.mask |= 1 << t.color;
-                grps.push_back(g);
+                Grp gp{m.tiles.front().number, 0, (int)m.tiles.size()};
+                for (const PlacedTile& t : m.tiles) gp.mask |= 1 << t.color;
+                grps.push_back(gp);
             }
         }
         // Finds a spot for a tile (joker: any open end / short group) and applies it when `apply`.
@@ -1195,23 +1195,23 @@ struct Bot::Impl {
                     return true;
                 }
             }
-            for (Grp& g : grps) {
-                if (g.size >= 4) continue;
+            for (Grp& gp : grps) {
+                if (gp.size >= 4) continue;
                 if (joker) {
                     if (apply) {
                         for (int k = 0; k < NUM_COLORS; ++k)
-                            if (!(g.mask & (1 << k))) {
-                                g.mask |= 1 << k;
+                            if (!(gp.mask & (1 << k))) {
+                                gp.mask |= 1 << k;
                                 break;
                             }
-                        ++g.size;
+                        ++gp.size;
                     }
                     return true;
                 }
-                if (n != g.number || (g.mask & (1 << c))) continue;
+                if (n != gp.number || (gp.mask & (1 << c))) continue;
                 if (apply) {
-                    g.mask |= 1 << c;
-                    ++g.size;
+                    gp.mask |= 1 << c;
+                    ++gp.size;
                 }
                 return true;
             }
@@ -1330,6 +1330,7 @@ struct Bot::Impl {
     struct Hazard {
         double opp = 0.0, part = 0.0;
         double partWin = 0.0, partCost = 0.0;
+        double oppMult = 1.0; // (101 kuralları) the kat an opponent's finish is expected to put on my hand
     };
     static double finishChance(const PlayerInfo& p) {
         if (!p.opened) return 0.01;
@@ -1339,17 +1340,23 @@ struct Bot::Impl {
     Hazard roundHazard() const {
         Hazard hz;
         double survive = 1.0;
+        double wSum = 0.0, wMult = 0.0;
         for (int s = 0; s < NUM_PLAYERS; ++s) {
             if (s == seatNow || s == know.partner) continue;
-            survive *= 1.0 - finishChance(g->player(s));
+            const double f = finishChance(g->player(s));
+            survive *= 1.0 - f;
+            // 101 kuralları: a pair opener's finish is çiftten (x2 unless the game is katsız)
+            wSum += f;
+            wMult += f * g->finishMultiplier(false, g->player(s).opened && g->player(s).openedWithPairs, false);
         }
         hz.opp = 1.0 - survive;
+        if (wSum > 0.0) hz.oppMult = wMult / wSum;
         if (know.team) {
             const RulesConfig& rc = g->rules();
             const double p = finishChance(g->player(know.partner));
             // the partner finishes when no opponent did first (roughly: half the round comes before them)
             hz.part = p * (1.0 - 0.5 * hz.opp);
-            hz.partWin = rc.winnerScore * (know.pPairs ? 2.0 : 1.0);
+            hz.partWin = rc.winnerScore * (double)g->finishMultiplier(false, know.pPairs, false); // (101 kuralları)
             hz.partCost = know.pOpened ? PARTNER_TILE_POINTS * know.pHand * (know.pPairs ? 2.0 : 1.0)
                                        : PARTNER_UNOPENED_SHARE * rc.unopenedScore;
         }
@@ -1357,7 +1364,7 @@ struct Bot::Impl {
     }
     // Expected score of one round before my turn when the hand ends during it, given my cost `mine` if it does.
     static double roundEnd(const Hazard& hz, double mine) {
-        return hz.opp * (mine + hz.partCost) + hz.part * hz.partWin;
+        return hz.opp * (mine + hz.partCost) * hz.oppMult + hz.part * hz.partWin;
     }
 
     // Plays my turns j..D-1 of a rollout for an opened hand (left tile taken when usable, else the pile;
@@ -1376,7 +1383,7 @@ struct Bot::Impl {
             rolloutSwaps(hand, tm);
             placeAll(hand, tm, pairsOpener);
             if (hand.size() == 1) {
-                const int mult = (ok->isJoker(hand[0]) ? 2 : 1) * (pairsOpener ? 2 : 1);
+                const int mult = g->finishMultiplier(ok->isJoker(hand[0]), pairsOpener, false); // (101 kuralları)
                 return ev + surv * g->rules().winnerScore * mult;
             }
             int worst = -1;
@@ -2169,9 +2176,8 @@ struct Bot::Impl {
 
     // Score of finishing right after an opening that leaves one tile (elden when nobody else has opened).
     double finishScore(const Model& m, bool pairs) const {
-        int mult = pairs ? 2 : 1;
-        if (!m.hand.empty() && ok->isJoker(m.hand[0])) mult *= 2;
-        if (!know.anyOpened) mult *= 2;
+        // (101 kuralları: the katlar stack, double once or not at all — Game::finishMultiplier)
+        const int mult = g->finishMultiplier(!m.hand.empty() && ok->isJoker(m.hand[0]), pairs, !know.anyOpened);
         return (double)g->rules().winnerScore * mult;
     }
 

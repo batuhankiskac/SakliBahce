@@ -8,6 +8,9 @@
 //   RoomWeather.cpp rainy nights (drops on the glass, rain outside), passers-by on the street
 //   RoomCat.cpp    the kahvehane cat: procedural rig, naps, walks, jumps onto an empty chair
 //   RoomDaylight.cpp time of day & season: daylight, sun shafts, the stove's season, snow and autumn leaves
+//   RoomGarden*.cpp  the garden kahvehane (the second place to play, Room::setVenue): RoomGarden.cpp venue, build,
+//                    light and submission; RoomGardenTree.cpp the çınar, the vines and the erguvan; RoomGardenLife.cpp
+//                    birds, falling leaves / petals, rain beyond the awning; RoomGardenTex.cpp textures and the view
 #include "core/Rng.h"
 #include "r3d/Room.h"
 #include "r3d/World.h"
@@ -176,6 +179,7 @@ struct TvSim {
     float flicker = 1.f;
     float roll = 0.f;
     float brightness = 0.5f; // average screen luminance estimate (drives the TV light)
+    bool derby = false;      // (ozelgun) maç gecesi: the channel shows "DERBİ" on the score bug
     okey::Rng rng{7};
     void reset(uint64_t seed);
     void kickoff(int team);
@@ -207,6 +211,8 @@ void drawLetteringCanvas(RenderTexture2D& rt);
 namespace rm {
 struct Builders;  // all static geometry builders, one per material/flag group (RoomBuild.cpp)
 struct Cat;       // the kahvehane cat (RoomCat.cpp)
+struct Garden;    // the garden kahvehane (RoomGardenInternal.h)
+struct Special;   // Özel günler: decorations, the passing shower (RoomSpecial.cpp, ozelgun)
 }
 
 // ============================================================================ Room::Impl
@@ -234,8 +240,10 @@ struct Room::Impl {
         const Mat* mat = nullptr;
         Matrix xf = MatrixIdentity();
         uint32_t flags = 0;
+        uint8_t venues = 1;            // bit 0 inside, bit 1 the garden (the furniture and the counter are in both)
     };
     std::vector<Static> statics;       // opaque + transparent statics in submission order
+    uint8_t staticVenues = 1;          // what addStatic marks new statics with
 
     // ---- lamps (local meshes: origin = bulb centre)
     struct Lamp {
@@ -442,14 +450,58 @@ struct Room::Impl {
     void freeDaylight(Renderer& r);
     void placeFlake(Flake& f, okey::Rng& rng, bool anywhereY, bool leaf);
 
+    // ---- the garden kahvehane (RoomGarden*.cpp): Room::setVenue
+    int venueMode = 2;        // ui::Settings::venue: 0 içerisi, 1 bahçe, 2 otomatik
+    bool garden = false;      // resolved: we play in the garden
+    float venueCheckT = 0.f;
+    rm::Garden* gd = nullptr; // built on first use
+    bool resolveGarden() const;
+    void evalVenue(bool force = false);  // (ozelgun) not forced: waits while App holds the venue
+    void initGarden();
+    void buildGarden();
+    void updateGarden(float dt);
+    void submitGarden(Renderer& r);
+    void submitGardenLights(Renderer& r);
+    void freeGarden(Renderer& r);
+    // RoomGardenTree.cpp
+    void buildTree();
+    void buildFoliage();       // leaves of the çınar, the vines and the erguvan for the season (rebuilt on change)
+    void submitTree(Renderer& r);
+    // RoomGardenLife.cpp
+    void initGardenLife();
+    void updateGardenLife(float dt);
+    void submitGardenLife(Renderer& r);
+    void freeGardenLife(Renderer& r);
+
+    // ---- Özel günler and the rain in the garden (RoomSpecial.cpp, ozelgun): w3d::SpecialDay decorations (bunting, the
+    //      flag, lokum / güllaç on the tables, the derby poster and scarves, the portable TV out in the garden), a passing
+    //      shower on fair days, and the venue hold (with Mekân = otomatik App moves us between hands, never mid-move)
+    rm::Special* sp = nullptr;
+    int specialDay = 0;          // w3d::SpecialDay (App resolves it)
+    bool venueHold = false;      // App: a hand is being played
+    int venuePend = 0;           // the resolved place differs: 1 rain, 2 the derby, 3 the clock / the season
+    float phaseRain = 0.f;       // rainTarget as the phase / season set it (evalLook), before a shower
+    bool rainLatch = false;      // otomatik moved us inside for the rain: inside until the phase changes
+    int rainLatchPhase = -1;
+    bool rainStarted = false;    // for Room::consumeRainStart
+    bool rainWas = false;
+    void initSpecial();
+    void updateSpecial(float dt);
+    void updateShower(float dt);
+    void submitSpecial(Renderer& r);
+    void freeSpecial(Renderer& r);
+    bool specialTvOut() const;   // the portable TV stands in the garden (the derby)
+
     // ---- the kahvehane cat (RoomCat.cpp)
     rm::Cat* cat = nullptr;
+    std::vector<Vector3> floorPeople;  // (duzelt) Room::setFloorPeople: x, radius, z of the people on the floor
     int catChair = -1;  // the chair the cat is on: the chair-scrape animation leaves it alone
     bool catMeowed = false;  // for Room::consumeCatMeow
     Vector3 catMeowAt{};
     void initCat();
     bool catNearChair(int chair) const;  // the chair-scrape leaves chairs the cat is on or close to alone
     void updateCat(float dt);
+    void catFloorChanged(bool force);  // (duzelt) the garden's floor / the people moved: the cat's plan follows
     void submitCat(Renderer& r);
     void freeCat(Renderer& r);
 
@@ -467,7 +519,7 @@ struct Room::Impl {
     void planWalls();
     void buildAll();
     void buildArchitecture(rm::Builders& B);
-    void buildWallDecor(rm::Builders& B);
+    void buildWallDecor(rm::Builders& B, rm::Builders& S);
     void buildCounter(rm::Builders& B);
     void buildBgTables(rm::Builders& B);
     void buildTavlaTable(rm::Builders& B);

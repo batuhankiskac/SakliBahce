@@ -342,6 +342,7 @@ void Room::Impl::addStatic(const MeshBuilder& b, const Mat* m, uint32_t flags, M
     s.mat = m;
     s.flags = flags;
     s.xf = xf;
+    s.venues = staticVenues;
     statics.push_back(s);
 }
 
@@ -389,18 +390,44 @@ void Room::Impl::planWalls() {
 }
 
 void Room::Impl::buildAll() {
-    Builders B;
+    Builders B, F;  // F: what stands in the garden too (see below)
     buildArchitecture(B);
-    buildWallDecor(B);
-    buildCounter(B);
-    buildBgTables(B);
-    buildTavlaTable(B);
+    buildWallDecor(B, F);
     buildLamps(B);
     buildStoveTvFan(B);
     buildStreetAndWindows(B);
     buildAshtray();
     buildCurtain();
     chairMesh = buildChairMesh();
+    // The furniture that stands in the garden too (same world positions): the tea counter with its shelves, the
+    // background tables with their games and the tavla table. Their own statics, marked for both places.
+    {
+        buildCounter(F);
+        buildBgTables(F);
+        buildTavlaTable(F);
+        staticVenues = 3;
+        addStatic(F.woodCast, &mWood, CastShadow);
+        addStatic(F.woodDark, &mWoodDark, 0);
+        addStatic(F.paint, &mPaint, 0);
+        addStatic(F.paintCast, &mPaint, CastShadow);
+        addStatic(F.metal, &mMetal, 0);
+        addStatic(F.metalCast, &mMetal, CastShadow);
+        addStatic(F.brass, &mBrass, 0);
+        addStatic(F.ceramic, &mCeramic, 0);
+        addStatic(F.ceramicCast, &mCeramic, CastShadow);
+        addStatic(F.felt, &mFelt, 0);
+        addStatic(F.marble, &mMarble, CastShadow);
+        addStatic(F.art, &mArt, 0);
+        addStatic(F.artGloss, &mArtGloss, 0);
+        addStatic(F.tea, &mTea, 0);
+        addStatic(F.bottle, &mBottle, 0);
+        addStatic(F.wood, &mWood, 0);
+        addStatic(F.cloth, &mCloth, 0);
+        addStatic(F.artChalk, &mArtChalk, 0);
+        addStatic(F.score, &mScore, 0);
+        addStatic(F.bulbs, &mBulb, 0);
+        staticVenues = 1;
+    }
 
     // opaque statics (order: big architecture first)
     addStatic(B.floor, &mFloor, 0);
@@ -580,7 +607,9 @@ void Room::Impl::buildArchitecture(Builders& B) {
 }
 
 // ---------------------------------------------------------------------------- pictures, boards, signs, clock, shelves
-void Room::Impl::buildWallDecor(Builders& B) {
+// `S`: the boards that hang in the garden too, at the same places (the scoreboard and its sign on the çınar's trunk,
+// the price board, the calendar and the veresiye sign on the ocak's wall).
+void Room::Impl::buildWallDecor(Builders& B, Builders& S) {
     const float AW = ART_W, AH = ART_H;
     auto frame = [&](MeshBuilder& mb, const Deco& d, float t, float depth, Color c) {
         Vector3 n = wallN(d.wall);
@@ -600,9 +629,10 @@ void Room::Impl::buildWallDecor(Builders& B) {
         canvasQuad(mb, decoCenter(d, out), d.w, d.h, wallN(d.wall), src, AW, AH);
     };
     // scoreboard: slate in a wooden frame with a chalk ledge
-    frame(B.woodCast, D_SCORE, 0.055f, 0.035f, Color{112, 72, 44, 255});
-    canvasQuad(B.score, decoCenter(D_SCORE, 0.012f), D_SCORE.w, D_SCORE.h, wallN(0), {0, 0, 1024, 696}, 1024, 696);
+    frame(S.woodCast, D_SCORE, 0.055f, 0.035f, Color{112, 72, 44, 255});
+    canvasQuad(S.score, decoCenter(D_SCORE, 0.012f), D_SCORE.w, D_SCORE.h, wallN(0), {0, 0, 1024, 696}, 1024, 696);
     {
+        Builders& B = S;
         Vector3 ledge = decoCenter(Deco{0, D_SCORE.a, D_SCORE.y - D_SCORE.h * 0.5f - 0.05f, 0, 0}, 0.05f);
         rbox(B.woodCast, ledge, {D_SCORE.w * 0.9f, 0.02f, 0.07f}, 0.006f, 2, Color{120, 78, 48, 255});
         B.paint.capsule({ledge.x - 0.25f, ledge.y + 0.016f, ledge.z + 0.01f}, {ledge.x - 0.17f, ledge.y + 0.016f, ledge.z + 0.015f},
@@ -614,6 +644,7 @@ void Room::Impl::buildWallDecor(Builders& B) {
     }
     // brass picture light over the scoreboard: wall plate, swan-neck arm, half-round hood with a bulb strip
     {
+        Builders& B = S;
         const float bx = w3d::SCOREBOARD_POS.x, zw = Z0;
         const Color brass{200, 158, 80, 255};
         const float hy = D_SCORE.y + D_SCORE.h * 0.5f + 0.105f, hz = zw + 0.17f;
@@ -646,20 +677,20 @@ void Room::Impl::buildWallDecor(Builders& B) {
         boardGlowPos = {bx, hy - 0.015f, hz + 0.01f};
         boardLightPos = {bx, hy - 0.1f, zw + 0.36f};
     }
-    frame(B.wood, D_PRICE, 0.04f, 0.03f, Color{96, 60, 36, 255});
-    pic(B.artChalk, D_PRICE, art::PRICE, 0.01f);
+    frame(S.wood, D_PRICE, 0.04f, 0.03f, Color{96, 60, 36, 255});
+    pic(S.artChalk, D_PRICE, art::PRICE, 0.01f);
     // enamel & wooden signs (slightly raised plates)
-    auto plate = [&](const Deco& d, Rectangle src, bool gloss) {
+    auto plate = [&](Builders& P, const Deco& d, Rectangle src, bool gloss) {
         Vector3 c = decoCenter(d, 0.006f);
-        B.paint.roundedBox(c, wallBoxSize(d.wall, d.w, d.h, 0.008f), 0.004f, 2, Color{60, 50, 40, 255});
-        canvasQuad(gloss ? B.artGloss : B.art, decoCenter(d, 0.0112f), d.w, d.h, wallN(d.wall), src, AW, AH);
+        P.paint.roundedBox(c, wallBoxSize(d.wall, d.w, d.h, 0.008f), 0.004f, 2, Color{60, 50, 40, 255});
+        canvasQuad(gloss ? P.artGloss : P.art, decoCenter(d, 0.0112f), d.w, d.h, wallN(d.wall), src, AW, AH);
     };
-    plate(D_KUMAR, art::SIGN_KUMAR, true);
-    plate(D_VERESIYE, art::SIGN_VERESIYE, false);
-    plate(D_WELCOME, art::SIGN_WELCOME, false);
+    plate(S, D_KUMAR, art::SIGN_KUMAR, true);
+    plate(S, D_VERESIYE, art::SIGN_VERESIYE, false);
+    plate(B, D_WELCOME, art::SIGN_WELCOME, false);
     // calendar (paper on a nail)
-    pic(B.art, D_CALENDAR, art::CALENDAR, 0.004f);
-    B.metal.sphere(decoCenter(Deco{0, D_CALENDAR.a, D_CALENDAR.y + D_CALENDAR.h * 0.5f + 0.012f, 0, 0}, 0.006f), 0.005f, 4, 6,
+    pic(S.art, D_CALENDAR, art::CALENDAR, 0.004f);
+    S.metal.sphere(decoCenter(Deco{0, D_CALENDAR.a, D_CALENDAR.y + D_CALENDAR.h * 0.5f + 0.012f, 0, 0}, 0.006f), 0.005f, 4, 6,
                    Color{120, 110, 100, 255});
     // paintings and photos
     frame(B.brass, D_SHIP, 0.05f, 0.035f, Color{200, 160, 80, 255});
@@ -856,7 +887,7 @@ void Room::Impl::buildCounter(Builders& B) {
             B.metalCast.tube(h2, 0.006f * s, 6, Color{40, 36, 34, 255});
         }
     };
-    teapot({2.47f, ct + 0.095f, zf - 0.2f}, 1.f, true);
+    // (Ocakçı) the left çaydanlık and its demlik are the ocakçı's (Characters draws them: he lifts them to brew and pour)
     teapot({2.77f, ct + 0.095f, zf - 0.2f}, 0.85f, true);
     emitters.push_back({{2.47f + 0.12f, ct + 0.095f + 0.176f + 0.1f, zf - 0.2f}, 5.f, 0.f, 0});
     emitters.push_back({{2.47f, ct + 0.095f + 0.176f + 0.14f, zf - 0.2f}, 2.2f, 0.f, 0});

@@ -36,6 +36,8 @@ enum class Sfx {
     CardSlide,    // a dealt card sliding across the felt (a soft papery hiss)
     CardGather,   // a trick / the middle pushed together and squared (a shuffle of cards, a tap)
     CardSnap,     // a tossed card landing flat with a snap
+    Chime,        // Başarımlar: a badge opened (a small brass bell, three rising strikes)
+    Davul,        // (ozelgun) Ramazan nights: the sahur davulcu far down the street (muffled "güm . tak tak güm")
     Count
 };
 
@@ -57,12 +59,26 @@ public:
     void setMusicEnabled(bool on);    // the old radio on the wall (recordings from assets/music)
     void setMasterVolume(float v01);
     void setRain(float amount01);     // rain outside the windows (ambience bus): 0 = a dry night
+    // Bahçe: where we play (r3d::Room::venue(): 0 inside, 1 the garden). The garden bed (sparrows, the odd gull, wind in
+    // the leaves, crickets at `night` instead of the birds, a softer open murmur, no TV and no fan) crossfades with the
+    // room's over a few seconds. Cheap: call every frame.
+    void setVenue(int venue, bool night);
+    // (ozelgun) Rain on the garden's awning (r3d::Room::awningAmount, 0..1): the drops drum on the canvas overhead, a
+    // duller, closer patter over the rain bed. Cheap: call every frame.
+    void setRainCanvas(float k01);
     // A regular's murmur for a speech bubble that just appeared: friendly gibberish synthesised from the Turkish text
-    // (its vowels, consonants, pauses and punctuation; at most ~2.5 s), in the speaker's own voice, panned to where he
-    // sits. `voice`: 1 Hacı Rıza, 2 Kel Mahmut, 3 Emekli Nuri (the seats), 4 a patron in the crowd, 5 the çaycı.
-    // A new line of the same voice fades the previous one out. Main thread; renders the line at once (< 1 ms).
+    // (its syllables, Turkish stress and sentence tune, pauses; interjections and laughs as the sounds they stand for;
+    // at most ~2.5 s), in the speaker's own voice, panned to where he sits. `voice`: 1 Hacı Rıza, 2 Kel Mahmut,
+    // 3 Emekli Nuri (the seats), 4 a patron in the crowd, 5 the çaycı, 6 the player (in the middle, our own voice).
+    // A new line of the same voice fades the previous one out. Main thread; the line is rendered on a worker thread
+    // (a few microseconds here; it starts a millisecond or two later).
     void speak(int voice, const std::string& text);
     void setVoicesEnabled(bool on);   // Settings::voices
+    // ---- Yüz (lip sync) hook: how open `voice`'s mouth is right now (0..1), from the loudness of the line it is
+    // saying (10 ms frames, a few frames ahead of the play position), 0 while its line is still being rendered, -1
+    // when that voice has no line queued or playing (voices off, no audio, the line ended or was dropped): then the
+    // caller times the mouth from the text itself. Main thread, a handful of atomic loads.
+    float mouthOpen(int voice) const;
     // True once when the radio starts a new recording: `text` = "Title — Artist" (for a "now playing" note).
     bool consumeNowPlaying(std::string& text);
 

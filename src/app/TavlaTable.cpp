@@ -9,7 +9,6 @@
 #include "r3d/World.h"
 
 #include <algorithm>
-#include <cstdio> // DBGREPLAY
 #include <memory>
 
 namespace app {
@@ -101,9 +100,10 @@ public:
         r.matchPoints = std::clamp(st.tavlaPoints, 1, 15);
         r.doubling = st.tavlaDoubling;
         r.katmerliMars = st.tavlaKatmerli;
+        r.variant = (tavla::Variant)std::clamp(st.tavlaCesit, 0, tavla::kVariants - 1);
         g_ = tavla::Game(r);
         names_ = names;
-        opp_ = std::clamp(st.tavlaRakip, 1, 3);
+        opp_ = ui::twoPlayerOpponent(st, ui::GameKind::Tavla); // Rakip
         g_.setPlayer(0, names[0], true);
         g_.setPlayer(1, names[opp_], false);
         bots_[0] = std::make_unique<tavla::Bot>(tavla::BotLevel::Hard, seed * 2 + 0x7A1ull);
@@ -121,6 +121,7 @@ public:
         g_.startMatch(seed);
         syncBoard(true);
         pump();
+        if (g_.variant() != tavla::Variant::Klasik) hud_.toast(variantNote(), ui::pal::Highlight, 6.f);
     }
     void startNextHand() override {
         if (g_.stage() != tavla::Stage::GameOver) return;
@@ -238,8 +239,6 @@ public:
         const tavla::Dice& d = g_.dice();
         if (d.n > 0) board_.setDiceUsed(d.used, d.n, d.isDouble());
         syncCube();
-        { static bool dbgDone = false; // DBGREPLAY
-          if (matchOver() && !dbgDone) { dbgDone = true; std::string t; for (auto& l : scoreLines()) t += l + " | "; std::fprintf(stderr, "[dbg] final%s: %s (%zu actions)\n", replay_ ? " (replay)" : "", t.c_str(), g_.actionLog().size()); } }
         // the mars threat, said once per game when it begins
         const int mt = marsThreat();
         if (mt >= 0 && !marsWarned_) {
@@ -252,7 +251,6 @@ public:
     }
 
     void submit(r3d::Renderer& r) override { board_.submit(r); }
-    // DBGREPLAY
 
 
     void drawHUD(const r3d::Renderer& r, Vector2 mouse, bool aiSeat) override {
@@ -310,6 +308,12 @@ public:
         const int mt = marsThreat();
         if (mt >= 0) {
             parts.push_back({"Mars tehlikesi!", mt == 0 ? Color{240, 96, 80, 255} : Color{246, 200, 90, 255}});
+            parts.push_back({"  \xC2\xB7  ", sep});
+        }
+        if (g_.variant() != tavla::Variant::Klasik) { // Tavla çeşidi, and a Gülbahar ladder being climbed
+            std::string v = tavla::variantName(g_.variant());
+            if (g_.ladder() > 0) v += ": merdiven " + std::to_string(g_.ladder()) + "-" + std::to_string(g_.ladder()) + (g_.ladder() < 6 ? " \xC2\xBB 6-6" : "");
+            parts.push_back({v, Color{246, 200, 90, 255}});
             parts.push_back({"  \xC2\xB7  ", sep});
         }
         if (hints_ && g_.stage() != tavla::Stage::NotStarted && g_.stage() != tavla::Stage::OpeningRoll) {
@@ -542,7 +546,8 @@ public:
 
     std::string scoreTitle() const override {
         if (g_.stage() == tavla::Stage::NotStarted) return "";
-        return "Tavla \xC2\xB7 " + std::to_string(g_.matchPoints()) + " sayı";
+        const std::string name = g_.variant() == tavla::Variant::Klasik ? std::string("Tavla") : tavla::variantName(g_.variant());
+        return name + " \xC2\xB7 " + std::to_string(g_.matchPoints()) + " sayı";
     }
     std::vector<std::string> scoreLines() const override {
         return {names_[0] + " ....... " + std::to_string(g_.score(0)), names_[opp_] + " ....... " + std::to_string(g_.score(1))};
@@ -554,7 +559,8 @@ public:
         m.humanCol = 0;
         const int games = (int)results_.size();
         m.title = std::to_string(games) + ". Oyun";
-        m.corner = "tavla: " + std::to_string(g_.matchPoints()) + " sayı";
+        m.corner = (g_.variant() == tavla::Variant::Klasik ? std::string("tavla") : std::string(tavla::variantName(g_.variant()))) + ": " +
+                   std::to_string(g_.matchPoints()) + " sayı";
         if (!results_.empty()) {
             const tavla::GameResult& r = results_.back();
             const std::string w = r.winner == 0 ? (aiMode ? std::string("Yapay zeka") : std::string("Sen")) : names_[opp_];
@@ -608,6 +614,12 @@ public:
     }
 
 private:
+    // The çeşit in a line, at the start of a Gülbahar / Fevga match.
+    std::string variantNote() const {
+        if (g_.variant() == tavla::Variant::Gulbahar)
+            return "Gülbahar: aynı yöne yürünür, tek pul haneyi tutar; 4. zardan sonra çift düşeşe dek çıkar.";
+        return "Fevga: aynı yöne yürünür, tek pul haneyi tutar; ilk pul rakibin köşesini geçmeli.";
+    }
     // "Mars (2 sayı)", "Mars ×4 = 8 sayı", "Katlama ×2 = 2 sayı", "Pes etti, 4 sayı", "1 sayı"
     static std::string resultText(const tavla::GameResult& r) {
         const std::string pts = std::to_string(r.points) + " sayı";
@@ -653,7 +665,8 @@ private:
             // the whole play for these dice, played out on a copy
             tavla::Game t = g_;
             std::vector<tavla::Step> play;
-            for (int guard = 0; guard < 8 && t.stage() == tavla::Stage::Moving && t.current() == 0; ++guard) {
+            const int rung = t.dice().d1; // (Gülbahar: only this rung of a ladder; the next one is its own decision)
+            for (int guard = 0; guard < 8 && t.stage() == tavla::Stage::Moving && t.current() == 0 && t.dice().d1 == rung; ++guard) {
                 const tavla::BotAction a = kurt.next(t, 0);
                 if (a.kind != tavla::BotAction::Kind::Step) break;
                 const std::vector<tavla::Step> legal = t.legalSteps();
@@ -699,6 +712,7 @@ private:
         if (g_.stage() == tavla::Stage::Moving && g_.dice().n > 0) {
             tavla::TurnRecord t;
             t.player = g_.current();
+            t.variant = g_.variant();
             t.d1 = g_.dice().d1;
             t.d2 = g_.dice().d2;
             t.steps = g_.turnSteps();
@@ -720,6 +734,24 @@ private:
         }
     }
     bool humanToAct() const { return actorPlayer() == 0 && !over(); }
+    // ---- the player's own hand (r3d::PlayerHands via ctx_.handCue / handLead): the dice and the checkers
+    float handLead(r3d::HandCueKind k) const { return ctx_.handLead ? ctx_.handLead(k) : 0.f; }
+    void handCueDice(float lead) {
+        r3d::HandCue c;
+        if (!ctx_.handCue || !board_.diceThrowPoint(c.from, 0)) return;
+        c.kind = r3d::HandCueKind::Dice;
+        c.lead = lead;
+        ctx_.handCue(c);
+    }
+    void handCueChecker(int checker, float lead) {
+        r3d::HandCue c;
+        if (!ctx_.handCue || !board_.checkerMoving(checker, c.from)) return;
+        c.kind = r3d::HandCueKind::Give;
+        c.style = 2;
+        c.lead = lead;
+        c.where = [this, checker](Vector3& out) { return board_.checkerMoving(checker, out); };
+        ctx_.handCue(c);
+    }
     bool canRoll() const {
         return !board_.animating() &&
                (g_.stage() == tavla::Stage::OpeningRoll || (g_.stage() == tavla::Stage::NeedRoll && g_.current() == 0));
@@ -887,25 +919,41 @@ private:
                 if (e.player == 1) say(opp_, kOppDrop[opp_][rng_.range(3)], true);
                 else say(opp_, kOppSeesDrop[opp_][rng_.range(2)], true);
                 break;
-            case E::OpeningRoll:
-                board_.throwDice(0, e.d1, e.d2, true, 0.f);
-                sound(ui::Sfx::DiceThrow);
+            case E::OpeningRoll: {
+                const float hl = handLead(r3d::HandCueKind::Dice); // (the player's own hand throws: PlayerHands)
+                board_.throwDice(0, e.d1, e.d2, true, hl);
+                if (hl > 0.f) sfxAt_.push_back({now_ + hl / speed_, ui::Sfx::DiceThrow});
+                else sound(ui::Sfx::DiceThrow);
+                handCueDice(hl);
                 hud_.toast(e.text, ui::pal::Highlight, 2.6f);
                 break;
+            }
             case E::Roll: {
-                const float delay = e.player == 1 ? w3d::BOT_GIVE_LEAD : 0.f;
+                if (e.amount == 1) { // Gülbahar: the next rung of the ladder; the dice are turned, not thrown
+                    board_.placeDice(e.player, e.d1, e.d2);
+                    sound(ui::Sfx::TileClick);
+                    hud_.toast(e.text, Color{246, 200, 90, 255}, 2.0f);
+                    if (e.player == 1 && e.d1 == 6 && rng_.chance(0.5f)) say(opp_, kOppDouble[opp_][rng_.range(3)]);
+                    break;
+                }
+                const float delay = e.player == 1 ? w3d::BOT_GIVE_LEAD : handLead(r3d::HandCueKind::Dice);
                 board_.throwDice(e.player, e.d1, e.d2, false, delay);
                 if (e.player == 1 && ctx_.characters) ctx_.characters->reach(opp_, board_.toWorld({0.f, w3d::TABLE_Y, 0.f}), 1);
-                sound(ui::Sfx::DiceThrow);
+                if (e.player == 0 && delay > 0.f) sfxAt_.push_back({now_ + delay / speed_, ui::Sfx::DiceThrow});
+                else sound(ui::Sfx::DiceThrow);
+                if (e.player == 0) handCueDice(delay);
                 hud_.toast(e.text, e.player == 0 ? ui::pal::Highlight : ui::pal::TextLight, 2.0f);
                 if (e.player == 1 && e.d1 == e.d2 && e.d1 >= 4 && rng_.chance(0.6f))
                     say(opp_, kOppDouble[opp_][rng_.range(3)]);
+                if (e.player == 0 && e.d1 == 6 && e.d2 == 6 && e.amount != 1) noteAchievement("duses"); // Başarımlar (a real throw)
                 break;
             }
             case E::Step: {
-                const float delay = bot && e.player == 1 ? w3d::BOT_TAKE_LEAD : 0.f;
-                board_.moveChecker(e.player, e.from, e.to, delay);
+                const float delay = bot && e.player == 1 ? w3d::BOT_TAKE_LEAD
+                                  : e.player == 0 ? handLead(r3d::HandCueKind::Give) : 0.f;
+                const int moved = board_.moveChecker(e.player, e.from, e.to, delay);
                 if (e.player == 1 && ctx_.characters) ctx_.characters->reach(opp_, board_.pointWorld(e.from, 1), 0);
+                if (e.player == 0) handCueChecker(moved, delay);
                 sfxAt_.push_back({now_ + (delay + 0.45f) / speed_, ui::Sfx::Checker});
                 break;
             }
@@ -926,6 +974,10 @@ private:
                 const tavla::GameResult& res = g_.lastResult();
                 results_.push_back(res);
                 log_ = e.text + " | " + std::to_string(g_.score(0)) + "-" + std::to_string(g_.score(1));
+                if (res.mars && res.winner == 0) { // Başarımlar
+                    noteAchievement("mars");
+                    if (res.katmerli) noteAchievement("katmerli");
+                }
                 if (res.mars) {
                     // a mars is an event in the kahvehane: the big word, the line, everyone has something to say
                     hud_.banner(res.katmerli ? "KATMERLİ MARS!" : "MARS!", resultText(res), Color{255, 206, 84, 255}, 3.2f);
@@ -938,7 +990,11 @@ private:
                 sound(e.player == 0 ? ui::Sfx::Win : ui::Sfx::Lose);
                 break;
             }
-            case E::MatchEnd: hud_.toast(e.text, ui::pal::Highlight, 5.f); break;
+            case E::MatchEnd:
+                hud_.toast(e.text, ui::pal::Highlight, 5.f);
+                if (e.player == 0 && g_.rules().variant == tavla::Variant::Gulbahar) noteAchievement("gulbahar"); // Başarımlar
+                if (e.player == 0 && g_.rules().variant == tavla::Variant::Fevga) noteAchievement("fevga");
+                break;
             default: break;
             }
             if (e.type == E::Step || e.type == E::Undo || e.type == E::GameStart || e.type == E::Hit) syncBoard(false);
@@ -954,7 +1010,7 @@ private:
         return w[rng_.range(2)];
     }
 
-    int opp_ = 2;  // who plays player 1 at the tavla table (Settings::tavlaRakip)
+    int opp_ = 2;  // who plays player 1 at the tavla table (Settings::rakip, ui::twoPlayerOpponent)
     TableContext ctx_;
     tavla::Game g_;
     std::array<std::unique_ptr<tavla::Bot>, 2> bots_;

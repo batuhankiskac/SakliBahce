@@ -20,6 +20,10 @@
 namespace okey {
 
 enum class Variant { Yuzbir, Okey }; // 101, klasik (düz) okey
+// 101 kuralları — bitiş katları: how the finish multipliers (okeyle, çiftten, elden bitiş: x2 each) combine.
+// Stack ("katlanır", the default): they multiply, up to x8. Single ("tek kat"): any special finish doubles once.
+// None ("katsız"): no finish multipliers (a pair opener's leftover still counts double). docs/kurallar_101.md.
+enum class FinishMult { Stack = 0, Single = 1, None = 2 };
 
 struct RulesConfig {
     Variant variant = Variant::Yuzbir;
@@ -42,6 +46,8 @@ struct RulesConfig {
     // Katlamalı oyun: after a series opening you must open series with at least one more than it (116 ->
     // 117), after a pair opening with at least one more pair (5 -> 6). See seriesOpenNeed / pairsOpenNeed.
     bool katlamali = false;
+    // 101 kuralları: how the finish multipliers combine (see FinishMult; default: they stack, today's rule).
+    FinishMult finishMult = FinishMult::Stack;
     // Klasik okey: everyone starts with okeyStartPoints and counts down; a finish takes okeyFinishPoints from each
     // other player (x2 finishing by discarding the okey, x2 with seven pairs), showing the gösterge takes
     // okeyIndicatorPoints from each other player. The game ends when somebody reaches 0; the highest total wins.
@@ -203,6 +209,11 @@ public:
     int finishKind(int seat, int tile) const;
     // Renkli okey: this hand's points count double (the rule is on and the gösterge is red or black): 2, else 1.
     int colorMultiplier() const;
+    // 101 kuralları: the hand multiplier of a finish with these properties under rules().finishMult (Stack: the
+    // product of x2 per property; Single: x2 if any; None: 1). Bots, the analysis and the sheet use it.
+    int finishMultiplier(bool withJoker, bool withPairs, bool inOneGo) const;
+    // The multiplier of every finished hand of this match, in order (1 = no kat).
+    const std::vector<int>& handMultipliers() const { return handMults_; }
 
     // ---- actions (only valid for seat == current()) ----
     ActionResult drawFromPile(int seat);               // NeedDraw -> Play
@@ -299,6 +310,7 @@ private:
     std::vector<GameEvent> events_;
     uint64_t matchSeed_ = 0;
     std::vector<LoggedAction> log_;
+    std::vector<int> handMults_; // (101 kuralları) multiplier of each finished hand
 };
 
 } // namespace okey
