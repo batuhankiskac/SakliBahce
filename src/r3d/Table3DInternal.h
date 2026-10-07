@@ -365,7 +365,6 @@ struct TableState {
     void pushToast(const std::string& key, const std::string& text, Color c, float dur);
     void error(const std::string& text);
     int slotOfTile(int id) const;
-    bool inHumanHand(int id) const;
     int leftSeat() const { return okey::Game::leftOf(human); }
 
     // state -> targets -> visuals
@@ -394,8 +393,7 @@ struct TableState {
     int pickRackTile(const Ray& ray) const;
     bool pickPile(const Ray& ray) const;
     bool pickLeft(const Ray& ray) const;
-    bool isleFits(int tile, int meld, int jokerIdx, bool* swap) const;  // the tile fits (timing aside)
-    bool isleLegal(int tile, int meld, int jokerIdx, bool* swap) const; // ... and may be played now
+    bool isleFits(int tile, int meld, int jokerIdx, bool* swap) const;  // the tile fits (timing aside; callers check canWorkTable)
     bool isleFront(int tile, int meld, bool wantFront) const; // which end of a run the tile will go to
     void attemptDraw(bool fromLeft, int slot, bool after);
     void attemptDiscard(int tile, bool confirmed);

@@ -14,21 +14,6 @@ namespace {
 
 constexpr float TY = w3d::TABLE_Y;
 
-// As far as the hand can go toward `tL` (character-local) with the body leaning in (as CharactersCards' clampReach).
-Vector3 reachable(const Opponent& o, int arm, Vector3 tL, Vector3 f, Vector3 p, Vector3 off) {
-    const bool left = arm == 1;
-    const float sd = left ? -1.f : 1.f;
-    const Vector3 shMax = shoulderAt(o.L, sd, o.leanBase + kMaxExtraLean);
-    const float reach = (o.L.upperArm + o.L.foreArm) * kReachFrac + kProtract - 0.01f;
-    for (int it = 0; it < 12; ++it) {
-        const float d = Vector3Distance(wristFor(tL, f, p, off, o.L.handScale, left), shMax);
-        if (d <= reach) break;
-        const Vector3 back = vnorm({shMax.x - tL.x, 0.f, shMax.z - tL.z});
-        tL = Vector3Add(tL, Vector3Scale(back, d - reach + 0.005f));
-    }
-    return tL;
-}
-
 // The pinch over a point of the table (character-local): fingers forward and down onto it, the palm facing down.
 struct Grip {
     Vector3 f, p;
@@ -60,7 +45,7 @@ void Cast::carryPiece(Opponent& o, const PieceCarry& c) {
         const Grip g = gripOver(tL, a, c.card);
         f = g.f;
         p = g.p;
-        tL = reachable(o, a, tL, f, p, PINCH_POINT);
+        tL = clampReach(o, a, tL, f, p, PINCH_POINT);
         return wristFor(tL, f, p, PINCH_POINT, hs, left);
     };
     Vector3 f, p;
@@ -130,7 +115,7 @@ void Cast::drawIntoFan(Opponent& o, Vector3 from, float seconds) {
     constexpr float TAKE = w3d::BOT_TAKE_LEAD;
     Vector3 tL = xfPoint(o.rootInv, from);
     const Grip g = gripOver(tL, a, true);
-    tL = reachable(o, a, Vector3Add(tL, {0.f, 0.003f, 0.f}), g.f, g.p, PINCH_POINT);
+    tL = clampReach(o, a, Vector3Add(tL, {0.f, 0.003f, 0.f}), g.f, g.p, PINCH_POINT);
     const Vector3 at = wristFor(tL, g.f, g.p, PINCH_POINT, hs, false);
     const Vector3 over = Vector3Add(at, {0.f, 0.05f, 0.f});
     // into the fan from above on its right (where playCard pulls one out), palm down, the elbow low by the side

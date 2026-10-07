@@ -36,6 +36,25 @@ void Cast::updateSeatOut(Opponent& o, float dt) {
     for (int i = 0; i < 10; ++i) *faceMats(o, i) = mul(so.rel[i], so.w.headW);
 }
 
+// What the seated rig was doing ends when he gets up and is not taken up again when he sits back: no arm track,
+// gesture, chin rest, delayed reaction or card fan left over to replay.
+void Cast::clearSeatedActivity(Opponent& o) {
+    for (int a = 0; a < 2; ++a) {
+        Arm& A = o.arm[a];
+        A.track.on = false;
+        A.track.keys.clear();
+        A.track.kind = TK_None;
+        restPose(o, a, 0, A.hold);
+    }
+    o.gest = G_None;
+    o.gestT = -1.f;
+    o.chinRest = false;
+    o.pendIn = -1.f;
+    o.pendGest = 0;
+    o.cards = false;
+    o.tespih.init = false;
+}
+
 void Cast::submitSeatOut(Renderer& r, const Opponent& o) {
     const SeatOut& so = seatOut[(size_t)o.seat];
     const Watcher& w = so.w;
@@ -80,6 +99,7 @@ void Characters::setSeatOut(int seat, bool out, bool instant) {
     chr::Opponent& o = m.opp[seat];
     if (!out) {  // back to his chair (a new match): the seated rig takes over from where it was
         so.on = false;
+        m.clearSeatedActivity(o);
         o.gaze = o.gazeGoal = m.tableFocus;
         return;
     }
@@ -111,11 +131,12 @@ void Characters::setSeatOut(int seat, bool out, bool instant) {
     // his glass stays on the table, on its saucer
     chr::TeaGlass& g = m.glass[(size_t)seat];
     if (g.holder == seat) {
-        g.holder = -1;
+        chr::setGlassHolder(g, -1, 0, false);
         g.blend = 1.f;
         g.world = chr::mul(chr::RY(g.yaw), chr::T(g.rest));
     }
     so.on = true;
+    m.clearSeatedActivity(o);
     m.updateSeatOut(o, 0.f);
 }
 

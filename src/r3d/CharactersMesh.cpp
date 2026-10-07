@@ -699,7 +699,10 @@ constexpr float kCellTorso = 0.0045f, kCellPatronTorso = 0.0065f;
 const Color kCollarMark{255, 0, 255, 255};  // primitive colour of the collar geometry (always painted over)
 constexpr float kCollarCell = 0.0024f;
 constexpr float kCollarLift = 0.011f;       // collar band centre above the neckline
-constexpr float kColorEdge = 0.005f;        // simplifyMesh: colour steps above this keep their vertices
+constexpr float kColorEdge = 0.005f;
+// MeshJobs cost estimates (only the order the jobs start in): an SDF's raw triangles per (bounding-box area / cell²),
+// and a torso's raw triangles times cell² (measured: ~80k at kCellTorso, ~40k at kCellPatronTorso)
+constexpr float kSdfTrisPerArea = 1.f, kTorsoTrisCell2 = 1.6f, kHandTris = 25000.f;        // simplifyMesh: colour steps above this keep their vertices
 
 struct NeckAxis {
     Vector3 a, b;  // bottom (inside the shoulders) and top (the head pivot)
@@ -1148,7 +1151,12 @@ Mesh buildForeArm(const PersonLook& L, bool rolled) {
 
 // Queues an SDF shape: meshed at `cell`, simplified to `target` triangles.
 void queueSdf(MeshJobs& J, Sdf s, float cell, int target, Mesh* out, Mesh* mirror = nullptr) {
+    Vector3 lo, hi;
+    s.bounds(lo, hi);
+    const Vector3 d = Vector3Subtract(hi, lo);
+    const float area = 2.f * (d.x * d.y + d.y * d.z + d.z * d.x);
     J.add([s = std::move(s), cell]() { return meshSdf(s, cell); }, target, out, mirror);
+    J.jobs.back().cost = kSdfTrisPerArea * area / (cell * cell);  // the surface's cells: what meshing and simplifying cost
 }
 // Queues a torso: modelled on the worker too (its neckline search marches the SDF), the body and the finer
 // collar meshed and merged, then decimated only between the painted edges.
@@ -1167,6 +1175,7 @@ void queueTorso(MeshJobs& J, std::function<TorsoOut()> make, float cell, int tar
         return m;
     }, target, out);
     J.jobs.back().colorEdge = kColorEdge;
+    J.jobs.back().cost = kTorsoTrisCell2 / (cell * cell);  // (the body isn't modelled yet: a torso's typical surface)
 }
 
 } // namespace
@@ -1363,13 +1372,15 @@ void buildPatron(MeshJobs& J, PersonMeshes& pm, int v, Renderer& r) {
 // (Ocakçı) the tea maker's head, torso and apron, built with the helpers above (CharactersOcakci.cpp uses them)
 #include "r3d/CharactersOcakciMesh.inc"
 
-void buildPeople(Meshes& M, Renderer& r);
-void buildPeople(Meshes& M, Renderer& r) {
+void buildPeople(Meshes& M, Renderer& r, const std::function<void(MeshJobs&)>& more);
+void buildPeople(Meshes& M, Renderer& r, const std::function<void(MeshJobs&)>& more) {
     // the SDF shapes are meshed and simplified on all cores, then uploaded here
     MeshJobs J;
-    for (int p = 0; p < HAND_POSES; ++p)
+    for (int p = 0; p < HAND_POSES; ++p) {
         J.add([p]() { return buildHandMesh((HandPose)p); }, 2600, &M.hand[0][p], &M.hand[1][p], 700, &M.handLo[0][p],
               &M.handLo[1][p]);
+        J.jobs.back().cost = kHandTris;
+    }
     for (int i = 0; i < 5; ++i) queueSdf(J, lowerLipSdf((float)(i - 2) * 0.5f), 0.0008f, 700, &M.lowerLip[i]);
     buildOpponent(J, M.person[1], 0, r);
     buildOpponent(J, M.person[2], 1, r);
@@ -1378,6 +1389,7 @@ void buildPeople(Meshes& M, Renderer& r) {
     for (int v = 0; v < Meshes::PATRON_VARIANTS; ++v) buildPatron(J, M.patron[v], v, r);
     const PersonLook cay = lookFor(3);
     queueSdf(J, shinSdf(cay, 0.43f), 0.006f, 1600, &M.walkShin[0], &M.walkShin[1]);
+    if (more) more(J);  // (Ocakçı) his body in the same batch
     J.run();
 
     M.eye[0] = buildEye(rgb(92, 60, 34));

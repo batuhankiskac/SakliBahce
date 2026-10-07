@@ -90,7 +90,7 @@ public:
 
     // ---- file (the path is chosen by App; empty: nothing is read or written)
     void load(const std::string& path);
-    void save(const std::string& path) const;
+    bool save(const std::string& path) const; // atomic (ui/SaveFile.h); false on failure
 };
 
 } // namespace ui

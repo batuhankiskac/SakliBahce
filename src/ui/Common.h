@@ -4,8 +4,11 @@
 //
 // Everything is drawn in a virtual 1600x900 canvas; App sets a Camera2D that letterboxes it into the
 // window. Use ui::virtualMouse() for input — never raw GetMousePosition().
+#include "ui/Utf8.h" // utf8Count
+
 #include <raylib.h>
 #include <string>
+#include <vector>
 
 namespace ui {
 
@@ -35,6 +38,11 @@ void drawTextShadow(FontId f, const std::string& s, Vector2 pos, float size, Col
 // Word-wrapped text inside `box` (left aligned). Returns the used height.
 float drawTextWrapped(FontId f, const std::string& s, Rectangle box, float size, Color c,
                       float lineGap = 4.f);
+// The height drawTextWrapped would return for `s` in a box `width` wide at y = originY, without drawing.
+float measureWrapped(FontId f, const std::string& s, float width, float size, float lineGap = 4.f, float originY = 0.f);
+// The lines drawTextWrapped draws (cached by font, size, width and text; the reference stays valid until the next
+// call to this function, so copy it if you keep it).
+const std::vector<std::string>& wrapLines(FontId f, const std::string& s, float width, float size);
 
 // ---------------------------------------------------------------- virtual canvas
 struct Viewport {

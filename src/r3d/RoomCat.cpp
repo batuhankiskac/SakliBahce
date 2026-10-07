@@ -721,7 +721,7 @@ void Room::Impl::freeCat(Renderer& r) {
         if (m->vertexCount > 0) UnloadMesh(*m);
     for (Mat* m : {&c.mFur, &c.mHead, &c.mEye, &c.mBlob}) r.unloadMat(*m);
     for (Texture2D* t : {&c.fur, &c.blobTex})
-        if (t->id) UnloadTexture(*t);
+        if (t->id) unloadTexture(*t);
     delete cat;
     cat = nullptr;
     catChair = -1;

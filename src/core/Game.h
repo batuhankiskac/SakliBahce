@@ -194,6 +194,9 @@ public:
     int pairsOpenNeed() const;
     OpenCheck checkOpen(int seat, const std::vector<std::vector<int>>& groups) const;
     OpenCheck checkLay(int seat, const std::vector<std::vector<int>>& groups) const;
+    // Would addToMeld / swapJoker succeed? (`out`/`freed` optional: the resulting meld and the okey taken back)
+    ActionResult checkAdd(int seat, int tile, int meldIndex, AddSide side, Meld* out = nullptr) const;
+    ActionResult checkSwap(int seat, int tile, int meldIndex, Meld* out = nullptr, int* freed = nullptr) const;
     int leaderSeat() const;                            // lowest total score (ties: lower seat); klasik okey: highest;
                                                        // eşli: the lower seat of the team with the lower total
     bool classic() const { return cfg_.variant == Variant::Okey; }

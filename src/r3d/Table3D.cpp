@@ -89,11 +89,6 @@ int TableState::slotOfTile(int id) const {
     return -1;
 }
 
-bool TableState::inHumanHand(int id) const {
-    const std::vector<int>& h = game->player(human).hand;
-    return std::find(h.begin(), h.end(), id) != h.end();
-}
-
 // ================================================================ racks & pile bookkeeping
 void TableState::reconcileRack() {
     if (!game) return;
@@ -923,11 +918,6 @@ void TableState::computeAim(Vector2 m) {
 }
 
 // ================================================================ legality preview
-bool TableState::isleLegal(int tile, int meld, int jokerIdx, bool* swap) const {
-    if (swap) *swap = false;
-    return game->canWorkTable(human) && isleFits(tile, meld, jokerIdx, swap);
-}
-
 bool TableState::isleFits(int tile, int meld, int jokerIdx, bool* swap) const {
     if (swap) *swap = false;
     if (meld < 0 || meld >= (int)game->table().size()) return false;
@@ -1984,10 +1974,6 @@ int keyboardTile(Table3D& t) {
     return s ? s->kbTile() : -1;
 }
 
-int selectedTile(Table3D& t) {
-    TableState* s = stateOf(t);
-    return s ? s->selected : -1;
-}
 int hoverTile(Table3D& t) {
     TableState* s = stateOf(t);
     return s ? s->hoverTile : -1;
@@ -2028,10 +2014,6 @@ Vector3 leftTopPoint(Table3D& t) {
     const int top = s->game->topDiscard(s->leftSeat());
     if (top < 0) return w3d::DISCARD_POS[s->leftSeat()];
     return poseToWorld(s->vis[top].pose, {0, 0, TT * 0.5f});
-}
-Vector3 discardPoint(Table3D& t) {
-    TableState* s = stateOf(t);
-    return w3d::DISCARD_POS[s ? s->human : 0];
 }
 
 std::string validate(Table3D& t, bool atRest) {
@@ -2092,14 +2074,6 @@ std::string lastToast(Table3D& t) {
     TableState* s = stateOf(t);
     if (!s || s->toasts.empty()) return "";
     return s->toasts.back().text;
-}
-
-int flyingCount(Table3D& t) {
-    TableState* s = stateOf(t);
-    if (!s) return 0;
-    int n = 0;
-    for (const TileVis& v : s->vis) n += v.flying ? 1 : 0;
-    return n;
 }
 
 int submitCount(Table3D& t) {

@@ -1,5 +1,6 @@
 // King rules engine. Rules: docs/kurallar_king.md, API: King.h.
 #include "core/King.h"
+#include "core/TurkishText.h"
 
 #include <algorithm>
 
@@ -9,7 +10,6 @@ using namespace kart;
 
 namespace {
 
-constexpr size_t MAX_QUEUED_EVENTS = 20000; // safety valve for headless loops that never drain
 constexpr int HAND_SIZE = 13;
 constexpr int NUM_TRICKS = 13;
 
@@ -19,103 +19,8 @@ const char* const kContractNames[NUM_CONTRACTS] = {"El Almaz", "Kupa Almaz", "Er
 const char* const kContractLower[NUM_CONTRACTS] = {"el almaz", "kupa almaz", "erkek almaz", "kız almaz",
                                                    "rıfkı",    "son iki",    "koz"};
 
-const char* suitLower(int s) {
-    switch (s) {
-    case Maca: return "maça";
-    case Kupa: return "kupa";
-    case Karo: return "karo";
-    case Sinek: return "sinek";
-    default: return "?";
-    }
-}
-
-// Minimal UTF-8 decoder (names are short; stray bytes pass through).
-std::vector<unsigned> codePoints(const std::string& s) {
-    std::vector<unsigned> out;
-    for (size_t i = 0; i < s.size();) {
-        const unsigned char c = (unsigned char)s[i];
-        int extra = 0;
-        unsigned cp = c;
-        if (c >= 0xF0) {
-            extra = 3;
-            cp = c & 0x07;
-        } else if (c >= 0xE0) {
-            extra = 2;
-            cp = c & 0x0F;
-        } else if (c >= 0xC0) {
-            extra = 1;
-            cp = c & 0x1F;
-        }
-        if (i + extra >= s.size()) extra = 0;
-        for (int k = 1; k <= extra; ++k) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
-        out.push_back(extra ? cp : c);
-        i += 1 + extra;
-    }
-    return out;
-}
-
-// Turkish locative for a name: "Hacı Rıza'da", "Kel Mahmut'ta", "Emekli Nuri'de".
-std::string locative(const std::string& name) {
-    const std::vector<unsigned> cps = codePoints(name);
-    bool backVowel = true;
-    for (unsigned c : cps) {
-        switch (c) {
-        case 'a': case 'A': case 'o': case 'O': case 'u': case 'U': case 'I': case 0x131:
-            backVowel = true;
-            break;
-        case 'e': case 'E': case 'i': case 0x130: case 0xF6: case 0xD6: case 0xFC: case 0xDC:
-            backVowel = false;
-            break;
-        default:
-            break;
-        }
-    }
-    bool hard = false;
-    if (!cps.empty()) {
-        switch (cps.back()) {
-        case 'f': case 's': case 't': case 'k': case 'h': case 'p':
-        case 'F': case 'S': case 'T': case 'K': case 'H': case 'P':
-        case 0xE7: case 0xC7: case 0x15F: case 0x15E:
-            hard = true;
-            break;
-        default:
-            break;
-        }
-    }
-    return name + "'" + (hard ? "t" : "d") + (backVowel ? "a" : "e");
-}
-
-// Capitalise an ASCII or Turkish first letter of a second-person phrase ("ı" -> "I", "i" -> "İ").
-std::string capitalizeFirst(const std::string& s) {
-    if (s.empty()) return s;
-    const unsigned char c = (unsigned char)s[0];
-    if (c >= 'a' && c <= 'z') {
-        if (c == 'i') return "İ" + s.substr(1);
-        return std::string(1, (char)(c - 'a' + 'A')) + s.substr(1);
-    }
-    static const std::pair<const char*, const char*> tr[] = {
-        {"ı", "I"}, {"ş", "Ş"}, {"ç", "Ç"}, {"ö", "Ö"}, {"ü", "Ü"}, {"ğ", "Ğ"}};
-    for (const auto& p : tr) {
-        const std::string lo = p.first;
-        if (s.compare(0, lo.size(), lo) == 0) return p.second + s.substr(lo.size());
-    }
-    return s;
-}
-
-// Card name as a definite object: "Maça Kızı", "Sinek Valeyi", "Kupa 7'yi", "Karo Ası".
-std::string cardAccusative(int id) {
-    const std::string suit = suitNameTR(suitOf(id));
-    switch (rankOf(id)) {
-    case Vale: return suit + " Valeyi";
-    case Kiz: return suit + " Kızı";
-    case Papaz: return suit + " Papazı";
-    case As: return suit + " Ası";
-    default: break;
-    }
-    static const char* const suf[] = {"", "", "'yi", "'ü", "'ü", "'i", "'yı", "'yi", "'i", "'u", "'u"};
-    const int r = rankOf(id);
-    return suit + " " + std::to_string(r) + suf[r];
-}
+using trtext::capitalizeFirst;
+using trtext::locative;
 
 std::string signedPoints(int v) { return v > 0 ? "+" + std::to_string(v) : std::to_string(v); }
 
@@ -140,22 +45,6 @@ const char* contractNameTR(Contract c) {
 std::string contractLabelTR(Contract c, int trump) {
     if (c == Contract::Koz && trump >= 0 && trump < NUM_SUITS) return std::string("Koz (") + suitNameTR(trump) + ")";
     return contractNameTR(c);
-}
-
-CardMask maskOf(const std::vector<int>& cards) {
-    CardMask m = 0;
-    for (int c : cards)
-        if (isValidCard(c)) m |= cardBit(c);
-    return m;
-}
-
-std::vector<int> cardsOf(CardMask m) {
-    std::vector<int> v;
-    while (m) {
-        v.push_back(__builtin_ctzll(m));
-        m &= m - 1;
-    }
-    return v;
 }
 
 CardMask penaltyCards(Contract c) {
@@ -472,7 +361,7 @@ ActionResult Game::playCardImpl(int seat, int card) {
     const PlayRule why = whyIllegal(rules_, t, hm, card);
     if (why != PlayRule::None) {
         const int led = t.n > 0 ? suitOf(t.cards[0]) : -1;
-        const std::string ledName = led >= 0 ? suitLower(led) : "";
+        const std::string ledName = led >= 0 ? suitLowerTR(led) : "";
         switch (why) {
         case PlayRule::FollowSuit: return ActionResult::fail("Elinde " + ledName + " varken başka renk atamazsın");
         case PlayRule::BeatLed: return ActionResult::fail("Yerdekinden büyük " + ledName + " atmak zorundasın");
@@ -485,7 +374,7 @@ ActionResult Game::playCardImpl(int seat, int card) {
         case PlayRule::DropUnder: {
             const CardMask drop = hm & penaltyCards(contract_) & suitMask(led);
             if (popcount(drop) == 1)
-                return ActionResult::fail("Yerde büyüğü varken " + cardAccusative(lowestCard(drop)) + " atmak zorundasın");
+                return ActionResult::fail("Yerde büyüğü varken " + cardAccusativeTR(lowestCard(drop)) + " atmak zorundasın");
             return ActionResult::fail("Yerde büyüğü varken erkeğini atmak zorundasın");
         }
         case PlayRule::VoidQueen: return ActionResult::fail("Elinde " + ledName + " yok, kız atmak zorundasın");
@@ -563,8 +452,8 @@ void Game::finishTrick() {
                 pc.text = isSen(w) ? "Rıfkıyı sen aldın! " + signedPoints(v)
                                    : seats_[w].name + " rıfkıyı aldı! " + signedPoints(v);
             else
-                pc.text = isSen(w) ? cardAccusative(cards[i]) + " sen aldın " + signedPoints(v)
-                                   : seats_[w].name + " " + cardAccusative(cards[i]) + " aldı " + signedPoints(v);
+                pc.text = isSen(w) ? cardAccusativeTR(cards[i]) + " sen aldın " + signedPoints(v)
+                                   : seats_[w].name + " " + cardAccusativeTR(cards[i]) + " aldı " + signedPoints(v);
             push(std::move(pc));
         }
     }
@@ -683,10 +572,7 @@ std::vector<GameEvent> Game::drainEvents() {
     return out;
 }
 
-void Game::push(GameEvent e) {
-    if (events_.size() >= MAX_QUEUED_EVENTS) events_.erase(events_.begin(), events_.begin() + (long)(MAX_QUEUED_EVENTS / 2));
-    events_.push_back(std::move(e));
-}
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 std::string Game::says(int s, const std::string& third, const std::string& second) const {
     return isSen(s) ? capitalizeFirst(second) : seats_[s].name + " " + third;

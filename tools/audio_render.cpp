@@ -10,8 +10,8 @@
 //      beds and injecting 150 ms frame hitches, while capturing the device mix through a raylib mixed
 //      processor to detect dropouts.
 //
-// Build:
-//   clang++ -std=c++17 -O2 -Wall -Wextra -Isrc -I/opt/homebrew/include src/ui/Audio.cpp \
+// Build: make tools (-> $(BUILD)/audio_render), or standalone:
+//   clang++ -std=c++17 -O2 -Wall -Wextra -Isrc -I/opt/homebrew/include src/ui/Audio*.cpp \
 //       tools/audio_render.cpp /opt/homebrew/lib/libraylib.a -framework Cocoa -framework IOKit \
 //       -framework OpenGL -framework CoreVideo -framework CoreAudio -framework AudioToolbox \
 //       -framework CoreFoundation -o build/audio/audio_render
@@ -34,7 +34,7 @@
 #include <vector>
 
 namespace ui {
-namespace audio_dev { // defined in src/ui/Audio.cpp
+namespace audio_dev { // defined in src/ui/AudioDev.cpp
 int sampleRate();
 const char* sfxName(Sfx s);
 int variationCount(Sfx s);

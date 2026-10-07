@@ -1,6 +1,8 @@
 // Tavla engine implementation. See Tavla.h for the board index convention and docs/kurallar_tavla.md for
 // the rules.
 #include "core/Tavla.h"
+#include "core/Cards.h"
+#include "core/TurkishText.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -9,6 +11,8 @@
 namespace tavla {
 
 namespace {
+
+using detail::mix64;
 
 static_assert(sizeof(Position) == 28, "Position must be 28 packed bytes (hashing)");
 
@@ -119,12 +123,6 @@ inline void applyRaw(Position& pos, int p, const Step& s) {
         }
         pos.pts[s.to] = (int8_t)(pos.pts[s.to] + sg);
     }
-}
-
-inline uint64_t mix64(uint64_t z) {
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    return z ^ (z >> 31);
 }
 
 uint64_t hashPos(const Position& pos) {
@@ -305,65 +303,8 @@ void collect(const Position& pos, int p, int d1, int d2, bool wantSteps, std::ve
 
 // ---- Turkish text helpers ----
 
-std::vector<unsigned> codePoints(const std::string& s) {
-    std::vector<unsigned> out;
-    for (size_t i = 0; i < s.size();) {
-        const unsigned char c = (unsigned char)s[i];
-        unsigned cp;
-        int len;
-        if (c < 0x80) { cp = c; len = 1; }
-        else if ((c >> 5) == 6) { cp = c & 0x1F; len = 2; }
-        else if ((c >> 4) == 14) { cp = c & 0x0F; len = 3; }
-        else { cp = c & 0x07; len = 4; }
-        for (int k = 1; k < len && i + (size_t)k < s.size(); ++k) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
-        out.push_back(cp);
-        i += (size_t)len;
-    }
-    return out;
-}
-
-// "Kel Mahmut'ta", "Hacı Rıza'da", "Emekli Nuri'de"
-std::string locative(const std::string& name) {
-    const std::vector<unsigned> cps = codePoints(name);
-    bool backVowel = true;
-    for (unsigned c : cps) {
-        switch (c) {
-        case 'a': case 'A': case 'o': case 'O': case 'u': case 'U': case 'I': case 0x131:
-            backVowel = true;
-            break;
-        case 'e': case 'E': case 'i': case 0x130: case 0xF6: case 0xD6: case 0xFC: case 0xDC:
-            backVowel = false;
-            break;
-        default:
-            break;
-        }
-    }
-    bool hard = false;
-    if (!cps.empty()) {
-        switch (cps.back()) {
-        case 'f': case 's': case 't': case 'k': case 'h': case 'p':
-        case 'F': case 'S': case 'T': case 'K': case 'H': case 'P':
-        case 0xE7: case 0xC7: case 0x15F: case 0x15E:
-            hard = true;
-            break;
-        default:
-            break;
-        }
-    }
-    return name + "'" + (hard ? "t" : "d") + (backVowel ? "a" : "e");
-}
-
-std::string capitalizeFirst(const std::string& s) {
-    if (s.empty()) return s;
-    if (s[0] == 'i') return "İ" + s.substr(1);
-    if (s[0] >= 'a' && s[0] <= 'z') return std::string(1, (char)(s[0] - 'a' + 'A')) + s.substr(1);
-    static const char* const kPairs[][2] = {{"ı", "I"}, {"ç", "Ç"}, {"ş", "Ş"}, {"ğ", "Ğ"}, {"ö", "Ö"}, {"ü", "Ü"}};
-    for (const auto& pr : kPairs) {
-        const std::string lower = pr[0];
-        if (s.compare(0, lower.size(), lower) == 0) return pr[1] + s.substr(lower.size());
-    }
-    return s;
-}
+using trtext::capitalizeFirst;
+using trtext::locative;
 
 // Point numbers with case suffixes, by the spoken number: 13'ten, 8'e, 6'ya, 10'a, 20'ye.
 std::string ablative(int n) {
@@ -516,7 +457,10 @@ Game::Game(const Rules& r) : rules_(r) {
     pos_ = Position::initial(rules_.variant);
 }
 
-void Game::setRules(const Rules& r) { rules_ = r; }
+void Game::setRules(const Rules& r) {
+    if (stage_ != Stage::NotStarted && stage_ != Stage::MatchOver) return; // (only between matches)
+    rules_ = r;
+}
 
 void Game::setPlayer(int p, const std::string& name, bool human) {
     if (p < 0 || p > 1) return;
@@ -769,13 +713,6 @@ std::vector<Step> Game::legalSteps() const {
     return out;
 }
 
-std::vector<Step> Game::legalStepsFrom(int from) const {
-    std::vector<Step> out;
-    for (const Step& s : legalSteps())
-        if (s.from == from) out.push_back(s);
-    return out;
-}
-
 std::vector<Play> Game::allTurnPlays() const {
     std::vector<Play> out;
     if (stage_ != Stage::Moving) return out;
@@ -805,6 +742,9 @@ std::vector<Play> Game::allTurnPlays() const {
     tmp.rules_.confirmTurn = true;
     tmp.events_.clear();
     tmp.actions_.clear();
+    tmp.log_.clear();     // (the search copies a Game per step: nothing it reads lives in the logs)
+    tmp.history_.clear();
+    tmp.queued_.clear();
     tmp.logActions_ = false;
     std::vector<Step> path;
     SeenSet seen;
@@ -1228,18 +1168,7 @@ std::string LoggedAction::encode() const {
 bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
     out = LoggedAction();
     std::vector<int> v;
-    size_t i = 0;
-    while (i < line.size()) {
-        while (i < line.size() && line[i] == ' ') ++i;
-        if (i >= line.size()) break;
-        size_t j = i;
-        if (line[j] == '-') ++j;
-        const size_t digits = j;
-        while (j < line.size() && line[j] >= '0' && line[j] <= '9') ++j;
-        if (j == digits || (j < line.size() && line[j] != ' ')) return false;
-        v.push_back(std::atoi(line.substr(i, j - i).c_str()));
-        i = j;
-    }
+    if (!kart::parseIntList(line, v, 5)) return false;
     if (v.size() < 2 || v[0] < 0 || v[0] > (int)ActKind::NextGame) return false;
     out.kind = (ActKind)v[0];
     out.player = v[1];
@@ -1260,7 +1189,7 @@ std::vector<GameEvent> Game::drainEvents() {
     return out;
 }
 
-void Game::push(GameEvent e) { events_.push_back(std::move(e)); }
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 std::string Game::says(int p, const std::string& third, const std::string& second) const {
     return players_[p].human ? capitalizeFirst(second) : players_[p].name + " " + third;

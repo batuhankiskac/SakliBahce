@@ -45,8 +45,8 @@ inline bool inDeck(int c) { return kart::isValidCard(c) && kart::rankOf(c) >= 9;
 // The 6 cards of `suit` (9 .. As) as a mask.
 inline CardMask suitMask(int suit) { return 0x1F80ull << (13 * suit); } // ranks 9..14 = bits 7..12 of the suit
 constexpr CardMask DECK_MASK = (0x1F80ull) | (0x1F80ull << 13) | (0x1F80ull << 26) | (0x1F80ull << 39);
-CardMask maskOf(const std::vector<int>& cards);
-std::vector<int> cardsOf(CardMask m); // ascending ids
+using kart::cardsOf; // ascending ids
+using kart::maskOf;
 
 // Card points: As 11, 10 10, Papaz 4, Kız 3, Vale 2, 9 0.
 int cardPoints(int card);

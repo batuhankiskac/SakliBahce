@@ -17,25 +17,6 @@ std::string achievementsPath() {
 
 namespace {
 
-// The games "Hatalarım" judges (analysis::analyzeMatch): only for these does an empty analysis mean "no mistakes".
-bool analysisJudges(int game) {
-    using G = ui::GameKind;
-    switch ((G)game) {
-    case G::Yuzbir:
-    case G::YuzbirEsli:
-    case G::Okey:
-    case G::Tavla:
-    case G::Pisti:
-    case G::Batak:
-    case G::King:
-    case G::Bezik: // Bezik
-    case G::Dama:  // Dama
-    case G::Konken: // Konken
-    case G::Altmisalti: return true; // Altmışaltı
-    default: return false;
-    }
-}
-
 void append(std::vector<int>& to, const std::vector<int>& more) { to.insert(to.end(), more.begin(), more.end()); }
 
 } // namespace
@@ -219,8 +200,8 @@ void App::achievementsAtHandEnd() {
 }
 
 // "Hatalarım" of a match the player played himself is ready (pollAnalysis): no mistake worth telling.
-void App::achievementsAnalysis(int game, int mistakes) {
-    if (!analysisJudges(game) || unattended()) return;
+void App::achievementsAnalysis(int mistakes) {
+    if (unattended()) return; // ("Hatalarım" judges every game: an empty analysis is "no mistakes")
     achievements_.setLive(true, true);
     const std::vector<int> v = achievements_.analysis(mistakes);
     if (v.empty()) return;

@@ -6,10 +6,12 @@
 //   AppBots.cpp      the okey bots' pacing and the Yapay Zeka mode (with its table messages)
 //   AppRecord.cpp    the player's record, save / resume ("Devam Et") and Tekrarlar
 //   AppSettings.cpp  the settings file and the command line's session-only overrides
+//   SettingsIO.cpp   (pure, no App) the settings' lines, a saved match's text and the rules it is resumed with
 //   AppAnalysis.cpp  "Hatalarım" on a worker thread
 //   AppDebug.cpp     snapshots and their extra views, frame statistics, --ai-chaos
 #include "app/App.h"
 #include "app/Analysis.h"
+#include "app/SettingsIO.h"
 #include "app/TableGame.h"
 
 #include "core/Bot.h"
@@ -27,6 +29,7 @@
 #include "ui/Banter.h"
 #include "ui/Common.h"
 #include "ui/Memory.h"
+#include "ui/SaveFile.h"
 #include "ui/CardRender.h"
 #include "ui/TileRender.h"
 #include "ui/Screens.h"
@@ -77,7 +80,6 @@ uint64_t clockSeed();
 const char* actionName(okey::BotAction::Kind k);
 Camera3D fitToCanvas(Camera3D c, float aspect);
 Camera2D windowCamera2D(const ui::Viewport& vp);
-std::string trim(const std::string& s);
 Camera3D viewCamera(const std::string& view, const Camera3D& seat, bool tavla); // AppDebug.cpp
 std::string watchText(const okey::GameEvent& e);                       // AppBots.cpp
 std::string supportDir();                                              // AppSettings.cpp
@@ -86,23 +88,12 @@ std::string memoryPath();
 std::string achievementsPath();                                        // AppAchievements.cpp
 std::string settingsPath();
 std::string legacySettingsPath();
-void applySettingLine(ui::Settings& s, const std::string& k, const std::string& v);
 void loadSettings(ui::Settings& s);
-std::string settingsText(const ui::Settings& s);
 bool ensureDirOf(const std::string& path);
 void saveSettings(const ui::Settings& s);
 
-// ---------------------------------------------------------------- the match left unfinished (kayit.txt)
-struct SavedMatch {
-    int game = -1;
-    uint64_t seed = 0;
-    bool aiTouched = false;
-    std::string label;                 // "101 · 3. el" for the title
-    std::string date, result;          // tekrarlar: when it was played, how it ended
-    std::vector<std::string> settings; // "key=value"
-    std::vector<std::string> actions;  // the engine's own lines
-};
-
+// ---------------------------------------------------------------- the match left unfinished (kayit.txt; SavedMatch,
+// its text and its rules: SettingsIO.h)
 std::string savePath();                                                // AppRecord.cpp
 std::string replayDir();
 bool readSave(SavedMatch& sv, const std::string& from = std::string());
@@ -190,6 +181,9 @@ private:
     void startMatch();
     void startNextHand();
     void startOtherMatch(ui::GameKind kind);
+    uint64_t beginMatch(ui::GameKind kind); // what both share (AppFlow.cpp)
+    void enterMatch();
+    void greetMatch(ui::GameKind kind);
     void toTitle();
     void setTitleMode(bool on);
     // Which table we sit at: 0 our okey table, 1 the tavla table (with `seat` the regular across). The camera, the
@@ -220,7 +214,7 @@ private:
     void drawReplayBadge();
     void crowdAtHandEnd();             // the room reacts to a big finish, a mars, a match lost at the wire
     void drawCrowdShouts();
-    void resumeSaved();
+    void resumeSaved(bool ai = false); // `ai`: the Yapay Zeka plays the resumed match (--resume --ai)
     void deleteSave();
     void refreshResumable();
     void maybeShowGuide(ui::GameKind kind);
@@ -229,6 +223,7 @@ private:
     void recordOkeyHand();
     void recordOtherHand();
     void noteRankUp();
+    void saveBooks();                  // istatistik.txt and hafiza.txt (interactive runs only)
     // Başarımlar (AppAchievements.cpp)
     void initAchievements();
     void saveAchievements();
@@ -249,7 +244,7 @@ private:
     void achievementsOkeyEvent(const okey::GameEvent& e);
     void updateAchievements();
     void achievementsAtHandEnd();
-    void achievementsAnalysis(int game, int mistakes);
+    void achievementsAnalysis(int mistakes);
     void updateAutoScreens(float simDt);
     void pressBetweenHands();
     void pumpEvents();
@@ -336,13 +331,14 @@ private:
     ui::Memory memory_;            // what the regulars remember of the player (hafiza.txt)
     ui::StatsBook record_;         // the player's record (İstatistik screen)
     bool matchAiTouched_ = false;  // the Yapay Zeka mode played in this match (it is not recorded)
+    bool matchAiStarted_ = false;  // ... from its start ("Yapay Zekayı İzle"): the player's save is left alone
+    int shownDifficulty_ = -1;     // the level the settings showed when last applied (a change re-levels the bots)
     // Başarımlar: the badges (basarimlar.txt); the match the Yapay Zeka has played from its first move; the analysis
-    // running belongs to a match the player played himself (and of which game)
+    // running belongs to a match the player played himself
     ui::Achievements achievements_;
     int achMatch_ = -1;
     bool aiWholeMatch_ = false;
     bool anaCounts_ = false;
-    int anaGame_ = -1;
     bool aiMode_ = false;          // Yapay Zeka mode (off at every launch; Title "Yapay Zekayı İzle", --ai)
     int aiSwitches_ = 0;
     double aiBanterAt_ = -1e9;     // when the regulars last remarked on the mode (simClock_)
@@ -356,10 +352,12 @@ private:
     ui::ScreenId autoScreen_ = ui::ScreenId::Title;
     bool lookDrag_ = false;
     bool settingsDirty_ = false;
-    // --hands, --level and --no-audio shape this session only. The settings screen shows the values in force, but
-    // the file keeps the loaded ones for every setting the player has not moved away from its command-line value.
+    // --hands, --level, --game, --no-audio and --set shape this session only. The settings screen shows the values in
+    // force, but the file keeps the loaded ones for every setting the player has not moved away from its command-line
+    // value.
     struct Overridden {
         bool hands = false, level = false, sfx = false, ambient = false, music = false, game = false;
+        std::vector<std::string> sets; // --set keys (settingsText's names)
     } overridden_;
     ui::Settings loadedSettings_;  // as read from disk (or the defaults), before the command line
     ui::Settings cliSettings_;     // the session's starting values: loadedSettings_ plus the command line

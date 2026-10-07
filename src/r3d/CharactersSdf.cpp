@@ -28,16 +28,21 @@ Matrix boneMatrix(Vector3 a, Vector3 b, Vector3 hint) {
     return basisMatrix(X, Y, Z, a);
 }
 
-Matrix handMatrix(Vector3 wrist, Vector3 fingers, Vector3 palm, float scale) {
-    Vector3 Z = vnorm(Vector3Negate(fingers));
-    Vector3 Y = Vector3Negate(palm);
+void handBasis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z) {
+    Z = vnorm(Vector3Negate(fingers));
+    Y = Vector3Negate(palm);
     Y = Vector3Subtract(Y, Vector3Scale(Z, Vector3DotProduct(Y, Z)));
     if (Vector3Length(Y) < 1e-4f) {
-        Vector3 alt = std::fabs(Z.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+        const Vector3 alt = std::fabs(Z.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
         Y = Vector3Subtract(alt, Vector3Scale(Z, Vector3DotProduct(alt, Z)));
     }
-    Y = Vector3Normalize(Y);
-    Vector3 X = Vector3CrossProduct(Y, Z);
+    Y = vnorm(Y);
+    X = Vector3CrossProduct(Y, Z);
+}
+
+Matrix handMatrix(Vector3 wrist, Vector3 fingers, Vector3 palm, float scale) {
+    Vector3 X, Y, Z;
+    handBasis(fingers, palm, X, Y, Z);
     return basisMatrix(Vector3Scale(X, scale), Vector3Scale(Y, scale), Vector3Scale(Z, scale), wrist);
 }
 
@@ -200,10 +205,6 @@ void Sdf::cutEllipsoid(Vector3 c, Vector3 r, Color col, float k, Vector3 rotDeg)
     ellipsoid(c, r, col, k, rotDeg);
     prims_.back().sub = true;
 }
-void Sdf::cutCone(Vector3 a, Vector3 b, float ra, float rb, Color col, float k) {
-    cone(a, b, ra, rb, col, k);
-    prims_.back().sub = true;
-}
 void Sdf::cutBox(Vector3 c, Vector3 half, float round, Color col, float k, Vector3 rotDeg) {
     box(c, half, round, col, k, rotDeg);
     prims_.back().sub = true;
@@ -351,7 +352,15 @@ void MeshJobs::add(std::function<RawMesh()> make, int target, Mesh* out, Mesh* m
 
 void MeshJobs::run() {
     // biggest first keeps the cores busy until the end
-    parallelFor((int)jobs.size(), [&](int i) {
+    std::vector<int> order((size_t)jobs.size());
+    for (int i = 0; i < (int)jobs.size(); ++i) order[(size_t)i] = i;
+    auto cost = [&](int i) {
+        const Job& j = jobs[(size_t)i];
+        return j.cost > 0.f ? j.cost : (float)j.target;
+    };
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return cost(a) > cost(b); });
+    parallelFor((int)jobs.size(), [&](int oi) {
+        const int i = order[(size_t)oi];
         Job& j = jobs[(size_t)i];
         j.raw = j.make();
         if (j.target > 0) simplifyMesh(j.raw, j.target, 10.f, j.colorEdge);

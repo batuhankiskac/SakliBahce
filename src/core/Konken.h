@@ -275,6 +275,9 @@ public:
     bool checkAdd(int seat, int card, int meld, Side side = Side::Auto, std::string* why = nullptr) const;
     bool checkSwap(int seat, int card, int meld, std::string* why = nullptr) const;
     bool canDiscard(int seat, int card, std::string* why = nullptr) const;
+    // A joker may be thrown: it is the last card, or the hand is only jokers and none of them can go on the table
+    // (an opened player could not move otherwise).
+    bool mayDiscardJoker(int seat) const;
     // A card of `seat`'s hand that fits a meld on the table (işlek), any side.
     bool fitsTable(int card) const;
 
@@ -313,7 +316,6 @@ public:
     void debugSetOpened(int seat, bool o) { seats_[seat].opened = o; }
     void debugSetCurrent(int seat) { current_ = seat; }
     void debugSetTotal(int seat, int v) { seats_[seat].total = v; }
-    void debugSetStage(Stage s) { stage_ = s; }
 
 private:
     void dealHand();

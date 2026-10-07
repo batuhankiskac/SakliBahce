@@ -131,3 +131,15 @@ Doğrulama: `make test` 0 hata; `make tablescheck` (tam 3B) 26 koşu, 0 hata.
 - Kare süresi, son commit'le sırayla karşılaştırıldı (okey, içeride; üç çift ölçüm). Önceki sürüm 13.4 / 14.2 / 15.4 ms, yeni sürüm 13.7 / 15.1 / 15.3 ms; aynı seviyede.
 
 **Bekleyen:** radyoya eklenecek kayıtlar. Adaylar listelendi, indirme kullanıcı onayı bekliyor.
+
+## 6. tur — kod denetimi ve düzeltmeler (2026-10-07, yerel oturum)
+
+Yedi alanlı salt-okuma denetimin bulguları altı ajanla düzeltildi (commit yok).
+
+- **Hatalar:** Konken'de yalnız jokerle kalınca kilitlenme; 101 dışı oyunlarda "Devam Et"in el sonunu ikinci kez sayması; Devam Et'in yapay zeka modunu kapatmaması; "Yapay Zekayı İzle"nin oyuncunun kaydını silmesi; Konken'den yarıda çıkınca ayakta kalan müdavimler; kayıt/istatistik/ayar dosyalarının atomik yazılmaması (`src/ui/SaveFile.h`); 2030 sonrası bayram tarihleri (Diyanet'in 2016 birleşik takvim kuralıyla yeniden, 2023–2030 tüm tarihler tutuyor); Tavla zarı ve kart haleleri ortak malzeme hatası; ocakçının bezi, Rıza'nın tespihi, çaycının bardak kapması; Konken/Dama/eşli 101 bot hataları; iki UB; oyun kartı alt kenarı tıklama; radyo çıtı; Türkçe baş harf.
+- **Performans:** klasik okey Kurt kararlarında en kötü süre 90 → 7 ms; Konken/Dama aramaları daha ucuz; açılış ~0.5 s kısa; TV tuvali bahçede çizilmiyor; ahşap dokular önbellekte; menü metin sarma önbelleği.
+- **Temiz kod:** `Bot.cpp`, `Audio.cpp`, `Screens.cpp` bölündü; ortak `TurkishText.h`, `Noise.h`, kart yardımcıları; kopya kurallar ve yardımcılar birleşti; ölü kod silindi; `make tools`, `make rulescheck`; `make asan` tüm testleri çalıştırıyor.
+- **Yeni testler:** `test_settings`, `test_save`; Konken joker, Dama, Türkçe metin, özel gün tarihleri.
+- **Bilerek dokunulmayanlar (kural kararı):** eşli 101'de bitirenin ortağının elindeki okey cezası; soldan alınan taşı geri verme.
+
+Doğrulama: temiz derleme uyarısız; `make test`, `tools`, `rulescheck`, `tablescheck` (0 hata), `basarimcheck`, `catwalk` geçti; 10 oyunun hepsi headless sorunsuz. Perf (içeride, 1500 kare, 3 çift): eski 10.3/11.8/11.2 ms, yeni 11.1/11.2/10.9 ms — aynı seviye. Son `make asan` koşusu kullanıcı isteğiyle atlandı (ajanlar kendi alanlarında sanitizer'la denedi).

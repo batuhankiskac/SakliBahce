@@ -14,6 +14,10 @@
 
 namespace r3d {
 
+// Largest size <= `size` (down to `minSize`) at which `text` fits `maxW`, else shortened with "…" (cached: the HUDs
+// fit the same strings every frame). Also used by Table3DHud.
+std::string hudFitText(ui::FontId f, const std::string& text, float maxW, float& size, float minSize);
+
 class GameHud {
 public:
     struct Badge {

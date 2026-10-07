@@ -1,5 +1,6 @@
 // Table3D geometry: pose math, the table/istaka/stand meshes, 3D tile meshes (faces from the tilegfx 3D
 // atlas), resting poses of every place a tile can be, and per-frame submission to the Renderer.
+#include "r3d/Noise.h"
 #include "r3d/Table3DInternal.h"
 
 #include <algorithm>
@@ -9,15 +10,8 @@ namespace r3d {
 namespace t3d {
 
 // ================================================================ math
-uint32_t hashU(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-float hashF(uint32_t x) { return (float)(hashU(x) & 0xFFFFFF) / 16777215.f; }
+uint32_t hashU(uint32_t x) { return noise::hash32(x); }
+float hashF(uint32_t x) { return noise::hash01(x); }
 float hashS(uint32_t x) { return hashF(x) * 2.f - 1.f; }
 
 float smooth01(float e0, float e1, float x) {
@@ -428,11 +422,8 @@ Texture2D buildHaloTexture(bool ring) {
             }
             px[y * w + x].a = (unsigned char)std::clamp(a * 255.f, 0.f, 255.f);
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadMipmapped(img, true);
     UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
     return t;
 }
 
@@ -447,25 +438,15 @@ Texture2D buildStripTexture() {
             const float a = std::pow(std::clamp((0.5f - std::fabs(v)) / 0.24f, 0.f, 1.f), 1.4f) * std::min(1.f, ex);
             px[y * w + x].a = (unsigned char)std::clamp(a * 255.f, 0.f, 255.f);
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadMipmapped(img, true);
     UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
     return t;
 }
 
 // Felt (çuha) for our table, 1 texel ~ 1 mm over the whole cloth: fine fibres and a slight nap, mottling,
 // darker toward the rim, lighter worn lanes where the tiles are slid about, faint tea-glass rings and a
 // small old cigarette burn near the ashtray.
-float vnoise2(float x, float y, uint32_t seed) {
-    const int xi = (int)std::floor(x), yi = (int)std::floor(y);
-    const float fx = x - (float)xi, fy = y - (float)yi;
-    auto h = [&](int a, int b) { return hashF((uint32_t)a * 73856093u ^ (uint32_t)b * 19349663u ^ seed * 83492791u); };
-    const float u = fx * fx * (3.f - 2.f * fx), v = fy * fy * (3.f - 2.f * fy);
-    const float a = h(xi, yi), b = h(xi + 1, yi), c = h(xi, yi + 1), d = h(xi + 1, yi + 1);
-    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-}
+float vnoise2(float x, float y, uint32_t seed) { return noise::value(x, y, seed); }
 float fbm2(float x, float y, int oct, uint32_t seed) {
     float sum = 0.f, amp = 0.5f, norm = 0.f;
     for (int o = 0; o < oct; ++o) {
@@ -479,6 +460,13 @@ float fbm2(float x, float y, int oct, uint32_t seed) {
 }
 
 Texture2D buildFeltTexture() {
+    // painted once per session (the table is rebuilt on every game switch)
+    static Image cached{};
+    if (cached.data) {
+        Texture2D t = textureFromImage(cached);
+        SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+        return t;
+    }
     const int N = 1024;
     const float H = w3d::FELT_HALF;
     Image img = GenImageColor(N, N, BLACK);
@@ -530,8 +518,8 @@ Texture2D buildFeltTexture() {
             px[y * N + x] = Color{(unsigned char)std::clamp(c.x, 0.f, 255.f), (unsigned char)std::clamp(c.y, 0.f, 255.f),
                                   (unsigned char)std::clamp(c.z, 0.f, 255.f), 255};
         }
+    cached = img;
     Texture2D t = textureFromImage(img);
-    UnloadImage(img);
     SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
     return t;
 }
@@ -545,6 +533,18 @@ void TableState::buildGfx(Renderer& r) {
     if (gfxReady) return;
     ui::tilegfx::init();
     const Texture2D atlas = ui::tilegfx::faceAtlas3D();
+    {   // the 3D face atlas is fully opaque by construction (its cells are padded with their rim colour): checked once,
+        // its tiles then take the depth pre-pass like the rest of the opaque table
+        static bool checked = false, opaque = false;
+        if (!checked && atlas.id) {
+            Image img = LoadImageFromTexture(atlas);
+            opaque = img.data && img.format == PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+            for (int i = 0, n = img.width * img.height; opaque && i < n; ++i) opaque = ((const Color*)img.data)[i].a == 255;
+            UnloadImage(img);
+            checked = true;
+        }
+        setTextureOpaque(atlas, opaque);
+    }
     const Rectangle body = ui::tilegfx::faceUV3D(ui::tilegfx::KEY_BODY);
     const Vector2 side{body.x + body.width * 0.5f, body.y + body.height * 0.5f};
     const Rectangle back = ui::tilegfx::faceUV3D(ui::tilegfx::KEY_BACK);
@@ -590,7 +590,7 @@ void TableState::freeGfx(Renderer& r) {
     for (int k = 0; k <= ui::tilegfx::KEY_BACK; ++k) UnloadMesh(tileMesh[k]);
     for (Mesh* m : {&tableMesh, &feltMesh, &rackHumanMesh, &rackBotMesh, &standMesh, &starQuad, &haloQuad, &ringQuad, &stripQuad})
         UnloadMesh(*m);
-    for (Texture2D* t : {&texWood, &texFelt, &texRack, &texHalo, &texRing, &texStrip}) UnloadTexture(*t);
+    for (Texture2D* t : {&texWood, &texFelt, &texRack, &texHalo, &texRing, &texStrip}) unloadTexture(*t);
     for (Mat* m : {&matTile, &matTileHi, &matWood, &matFelt, &matRack, &matStar}) r.unloadMat(*m);
     for (int c = 0; c < G_COUNT; ++c)
         for (int k = 0; k < 16; ++k) {

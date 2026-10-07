@@ -221,21 +221,13 @@ public:
         }
 
         Color sc = ui::pal::TextLight;
-        std::string st;
         const int a = actor();
-        if (g_.stage() == bezik::Stage::HandOver) st = "El bitti";
-        else if (g_.stage() == bezik::Stage::MatchOver) st = "Maç bitti";
-        else if (now_ < dealUntil_) st = "Kâğıtlar dağıtılıyor…";
-        else if (a == 0 && replay_) st = replaySelfStatus();
-        else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
-        else if (a == 0) {
-            sc = ui::pal::Highlight;
-            if (g_.stage() == bezik::Stage::Declare) st = "Deklarasyonunu seç";
-            else if (!g_.currentTrick().cards.empty()) st = g_.secondStage() ? "Renge uy, geçebiliyorsan geç" : "Üstüne bir kâğıt at";
-            else st = "Bir kâğıt aç";
-        } else if (a > 0) {
-            st = names_[(size_t)a] + (g_.stage() == bezik::Stage::Declare ? " deklarasyon yapıyor…" : " düşünüyor…");
-        }
+        const char* ended = g_.stage() == bezik::Stage::HandOver ? "El bitti" : g_.stage() == bezik::Stage::MatchOver ? "Maç bitti" : nullptr;
+        const std::string st = statusLine(ended, now_ < dealUntil_, "Kâğıtlar dağıtılıyor…", a, aiSeat, sc, [&] {
+            if (g_.stage() == bezik::Stage::Declare) return "Deklarasyonunu seç";
+            if (!g_.currentTrick().cards.empty()) return g_.secondStage() ? "Renge uy, geçebiliyorsan geç" : "Üstüne bir kâğıt at";
+            return "Bir kâğıt aç";
+        }, g_.stage() == bezik::Stage::Declare ? " deklarasyon yapıyor…" : " düşünüyor…");
         std::vector<std::pair<std::string, Color>> parts;
         if (started) {
             parts.push_back({"Bu el: " + std::to_string(g_.handPoints(0)), Color{160, 236, 160, 255}});

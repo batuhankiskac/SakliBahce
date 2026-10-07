@@ -62,6 +62,21 @@ float leanNeeded(const PersonLook& L, float leanBase, float sd, Vector3 w) {
     return hi;
 }
 
+// A hand reaching out to `tL` (character-local) as far as it can with the body leaning in (as Cast::reachTo).
+Vector3 clampReach(const Opponent& o, int arm, Vector3 tL, Vector3 f, Vector3 p, Vector3 off) {
+    const bool left = arm == 1;
+    const float sd = left ? -1.f : 1.f;
+    const Vector3 shMax = shoulderAt(o.L, sd, o.leanBase + kMaxExtraLean);
+    const float reach = (o.L.upperArm + o.L.foreArm) * kReachFrac + kProtract - 0.01f;
+    for (int it = 0; it < 12; ++it) {
+        const float d = Vector3Distance(wristFor(tL, f, p, off, o.L.handScale, left), shMax);
+        if (d <= reach) break;
+        const Vector3 back = vnorm({shMax.x - tL.x, 0.f, shMax.z - tL.z});
+        tL = Vector3Add(tL, Vector3Scale(back, d - reach + 0.005f));
+    }
+    return tL;
+}
+
 // Fingertips of every pose (hand space, right hand, scale 1): [pose][0..3 index..little, 4 thumb].
 const std::array<std::array<Vector3, 5>, HAND_POSES>& handTips() {
     static const std::array<std::array<Vector3, 5>, HAND_POSES> tips = [] {
@@ -71,15 +86,6 @@ const std::array<std::array<Vector3, 5>, HAND_POSES>& handTips() {
         return t;
     }();
     return tips;
-}
-
-void handBasis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z) {
-    Z = vnorm(Vector3Negate(fingers));
-    Y = Vector3Negate(palm);
-    Y = Vector3Subtract(Y, Vector3Scale(Z, Vector3DotProduct(Y, Z)));
-    if (Vector3Length(Y) < 1e-4f) Y = std::fabs(Z.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-    Y = vnorm(Y);
-    X = Vector3CrossProduct(Y, Z);
 }
 
 // Wrist position that puts hand-space point `off` at `point`.
@@ -109,6 +115,12 @@ Key mk(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float
     k.lift = lift;
     k.ease = ease;
     k.event = ev;
+    return k;
+}
+
+Key mkOrtho(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float lift, int ease, int ev) {
+    Key k = mk(t, pos, fingers, palm, pose, lift, ease, ev);
+    k.palm = vnorm(Vector3Subtract(palm, Vector3Scale(k.fingers, Vector3DotProduct(palm, k.fingers))));
     return k;
 }
 
@@ -305,16 +317,15 @@ void Cast::restPose(Opponent& o, int a, int variant, Key& k) {
 void Cast::startTrack(Seated& s, int a, int kind, std::vector<Key> keys) {
     Arm& A = s.arm[a];
     if (keys.empty()) return;
+    if (s.who >= 1 && s.who <= 3 && seatOut[(size_t)s.who].on) return;  // (Konken) up and watching: no seated rig
     // the left hand holding the cards keeps them (no sips, gestures, tespih flips or idles from it)
     if (a == 1 && kind != TK_CardHold && s.who >= 1 && s.who <= 3 && opp[s.who].cards) return;
+    // anything else the right hand starts takes it from under the chin
+    if (a == 0 && kind != TK_Chin && s.who >= 1 && s.who <= 3) opp[s.who].chinRest = false;
     // a sip cut short: the glass goes back onto its saucer instead of staying glued to the hand
     if (s.who >= 1 && s.who <= 3) {
         TeaGlass& g = glass[s.who];
-        if (g.holder == s.who && g.holderArm == a) {
-            g.holder = -1;
-            g.from = g.world;
-            g.blend = 0.f;
-        }
+        if (g.holder == s.who && g.holderArm == a) setGlassHolder(g, -1);
     }
     keys[0] = A.cur;
     keys[0].t = 0.f;
@@ -657,6 +668,7 @@ void Cast::startTespihFlip(Opponent& o) {
 
 // ============================================================================ gestures
 void Cast::startGesture(Opponent& o, int g, float dur) {
+    if (seatOut[(size_t)o.seat].on) return;  // (Konken) up and watching: his seated arms aren't there
     o.gest = g;
     o.gestT = 0.f;
     o.gestDur = dur;
@@ -883,17 +895,12 @@ void Cast::onArmEvent(Seated& s, int a, int ev) {
         switch (ev) {
         case KE_GrabGlass:
             if (g.holder >= 0) break;  // the çaycı has it
-            g.holder = o.seat;
-            g.holderArm = a;
+            setGlassHolder(g, o.seat, a);
             g.inHand = glassInHand(a == 1, o.L.handScale);
-            g.from = g.world;
-            g.blend = 0.f;
             break;
         case KE_ReleaseGlass:
             if (g.holder != o.seat) break;
-            g.holder = -1;
-            g.from = g.world;
-            g.blend = 0.f;
+            setGlassHolder(g, -1);
             sfx(ui::Sfx::GlassSet);
             break;
         case KE_Sip:
@@ -1220,7 +1227,7 @@ void Cast::pickGaze(Opponent& o) {
     case 5: {
         // somewhere in the room: the counter, the çaycı, the windows, the TV side
         const Vector3 spots[4] = {Vector3Add(w3d::COUNTER_POS, {0, 1.2f, 0}), Vector3Add(boy.pos, {0, 1.5f, 0}),
-                                  {w3d::ROOM_X0 + 0.2f, 1.5f, 0.5f}, kTvPos};
+                                  {w3d::ROOM_X0 + 0.2f, 1.5f, 0.5f}, tvPosition()};
         tgt = spots[rng.i(4)];
         hold = rng.f(0.8f, 2.f);
         break;
@@ -1409,8 +1416,7 @@ void Cast::idleOpponent(Opponent& o, float dt) {
         A.idleIn = rng.f(4.f, 11.f);
         if ((o.kind == 0 && a == 1) || (o.kind == 1 && a == 0)) continue;  // tespih / cigarette hand
         if (o.chinRest && a == 0) continue;
-        int variants[5] = {0, 1, 2, 3, 4};
-        int v = variants[rng.i(a == 1 ? 5 : 4)];
+        int v = rng.i(a == 1 ? 5 : 4);
         if (myTurn) v = rng.chance(0.6f) ? 1 : 0;
         Key r;
         restPose(o, a, v, r);
@@ -1472,7 +1478,6 @@ void Cast::poseSeated(Seated& s, float dt, float headOmega) {
     Matrix headT = mul(headRot, T(pivot));
     s.headW = mul(headT, mul(tl, T(L.hipPivot)), s.root);
     s.headLocal = mul(headT, mul(tl, T(L.hipPivot)));
-    s.torsoW = mul(torsoLocal, s.root);
 }
 
 void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
@@ -1554,12 +1559,12 @@ void Cast::resolveArm(Seated& s, int a, float dt, float handScale) {
             Vector3 toIdeal = Vector3Subtract(ideal, A.shoulder);
             toIdeal = Vector3Subtract(toIdeal, Vector3Scale(axis, Vector3DotProduct(toIdeal, axis)));
             if (Vector3Length(toIdeal) > 1e-3f) {
-                Vector3 pw = vnorm(Vector3Add(Vector3Scale(vnorm(poleW), 1.f - wgt), Vector3Scale(vnorm(toIdeal), wgt)));
+                Vector3 pd = vnorm(Vector3Add(Vector3Scale(vnorm(poleW), 1.f - wgt), Vector3Scale(vnorm(toIdeal), wgt)));
                 // ... but never up past the shoulder or back behind the body
                 const Vector3 upW = xfDir(s.root, {0, 1, 0}), backW = xfDir(s.root, {0, 0, 1});
-                if (Vector3DotProduct(pw, upW) > 0.2f) pw = vnorm(Vector3Subtract(pw, Vector3Scale(upW, Vector3DotProduct(pw, upW) - 0.2f)));
-                if (Vector3DotProduct(pw, backW) > 0.6f) pw = vnorm(Vector3Subtract(pw, Vector3Scale(backW, Vector3DotProduct(pw, backW) - 0.6f)));
-                desiredPole = pw;
+                if (Vector3DotProduct(pd, upW) > 0.2f) pd = vnorm(Vector3Subtract(pd, Vector3Scale(upW, Vector3DotProduct(pd, upW) - 0.2f)));
+                if (Vector3DotProduct(pd, backW) > 0.6f) pd = vnorm(Vector3Subtract(pd, Vector3Scale(backW, Vector3DotProduct(pd, backW) - 0.6f)));
+                desiredPole = pd;
             }
         }
     }
@@ -1677,6 +1682,9 @@ void Cast::emitSteam(float dt) {
     }
 }
 
+// The board on the tavla table (Tavla3D.cpp's box frame, local to w3d::tavlaFrame): what the beads lie on there.
+constexpr float kBoardHalfX = 0.345f, kBoardHalfZ = 0.265f, kBoardH = 0.024f;
+
 void Cast::updateTespih(Opponent& o, float dt) {
     Chain& c = o.tespih;
     const int N = 9;
@@ -1698,16 +1706,32 @@ void Cast::updateTespih(Opponent& o, float dt) {
         c.tailPrev = c.tail;
         c.init = true;
     }
-    const int sub = 3;
-    const float h = std::min(dt, 0.05f) / sub;
+    // fixed steps (Verlet wants a constant h): 1/180 s, three a frame at 60 fps as before; a long frame is cut short
+    constexpr float h = 1.f / 180.f;
+    c.acc = std::min(c.acc + dt, 0.05f);
+    const int sub = (int)(c.acc / h + 1e-3f);
+    c.acc = std::max(0.f, c.acc - (float)sub * h);
     // what the beads rest on or slide off: the felt and the raised rim, his own saucer (and the glass standing
     // on it), his istaka, and his belly and chest (spheres in torso space)
     const float r = kBeadR;
     const TeaGlass& g = glass[o.seat];
     const Vector3 belly = xfPoint(o.torsoW, {0.f, 0.14f, -0.05f}), chest = xfPoint(o.torsoW, {0.f, 0.29f, -0.01f});
+    const bool atTavla = tavlaSeat > 0 && o.seat == tavlaSeat;
     auto collide = [&](Vector3& p) {
+        if (atTavla) {  // the tavla table's plain top (its frame), the board's box on it; no istaka there
+            const Vector3 l = w3d::tavlaToLocal(p);
+            const float ax = std::fabs(l.x), az = std::fabs(l.z);
+            if (ax < w3d::TAVLA_HALF_W && az < w3d::TAVLA_HALF_D && p.y > TY - 0.05f) {
+                float floorY = TY + r;
+                if (ax < kBoardHalfX && az < kBoardHalfZ) floorY = TY + kBoardH + r;
+                const float rs = std::hypot(p.x - g.saucer.x, p.z - g.saucer.z);
+                if (rs < 0.067f)
+                    floorY = std::max(floorY, TY + (rs < 0.054f ? 0.0068f : lerpf(0.0068f, 0.013f, (rs - 0.054f) / 0.013f)) + r);
+                if (p.y < floorY) p.y = floorY;
+            }
+        }
         const float ax = std::fabs(p.x), az = std::fabs(p.z);
-        if (ax < w3d::FELT_HALF + w3d::RIM_W && az < w3d::FELT_HALF + w3d::RIM_W && p.y > TY - 0.05f) {
+        if (!atTavla && ax < w3d::FELT_HALF + w3d::RIM_W && az < w3d::FELT_HALF + w3d::RIM_W && p.y > TY - 0.05f) {
             float floorY = TY + r;
             if (ax > w3d::FELT_HALF || az > w3d::FELT_HALF) floorY = TY + w3d::RIM_H + r;
             const float rs = std::hypot(p.x - g.saucer.x, p.z - g.saucer.z);
@@ -1723,7 +1747,7 @@ void Cast::updateTespih(Opponent& o, float dt) {
                 p = Vector3Add(p, Vector3Scale(n, lim - rg));
             }
         }
-        {  // the istaka (a box around the plank, tiles and base board)
+        if (!atTavla) {  // the istaka (a box around the plank, tiles and base board)
             Vector3 l = xfPoint(o.rootInv, p);
             const float hx = w3d::RACK_LEN * 0.5f + 0.005f + r, z0 = rackZ() - 0.035f - r, z1 = rackZ() + 0.030f + r,
                         top = TY + 0.113f + r;
@@ -1772,7 +1796,7 @@ void Cast::updateTespih(Opponent& o, float dt) {
     };
     for (int st = 0; st < sub; ++st) {
         for (int i = 1; i < N - 1; ++i) {
-            Vector3 v = Vector3Scale(Vector3Subtract(c.p[i], c.prev[i]), 0.985f);
+            Vector3 v = Vector3Scale(Vector3Subtract(c.p[i], c.prev[i]), 0.985f);  // per fixed step
             c.prev[i] = c.p[i];
             c.p[i] = Vector3Add(Vector3Add(c.p[i], v), {0, -9.81f * h * h, 0});
         }
@@ -1809,9 +1833,9 @@ void Cast::updateTespih(Opponent& o, float dt) {
                 Vector3 b = vnorm(Vector3Subtract(c.tail[2], c.tail[1]));
                 const float maxBend = 40.f * DEG2RAD, cb = Vector3DotProduct(a, b);
                 if (cb < std::cos(maxBend)) {
-                    Vector3 side = Vector3Subtract(b, Vector3Scale(a, cb));
-                    side = Vector3Length(side) > 1e-5f ? vnorm(side) : Vector3{0, -1, 0};
-                    b = Vector3Add(Vector3Scale(a, std::cos(maxBend)), Vector3Scale(side, std::sin(maxBend)));
+                    Vector3 across = Vector3Subtract(b, Vector3Scale(a, cb));
+                    across = Vector3Length(across) > 1e-5f ? vnorm(across) : Vector3{0, -1, 0};
+                    b = Vector3Add(Vector3Scale(a, std::cos(maxBend)), Vector3Scale(across, std::sin(maxBend)));
                     c.tail[2] = Vector3Add(c.tail[1], Vector3Scale(b, tl[1]));
                 }
             }
@@ -1823,6 +1847,9 @@ void Cast::updateTespih(Opponent& o, float dt) {
             c.p[N - 1] = endB;
         }
     }
+    c.p[0] = endA;  // held at the hand even on a frame without a step
+    c.p[N - 1] = endB;
+    c.tail[0] = grip;
 }
 
 // ============================================================================ the opponent frame

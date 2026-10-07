@@ -12,7 +12,7 @@ struct TeaGlass {
     float yaw = 0.f;          // saucer/glass rotation (radians)
     float level = 0.85f;      // 0..1
     bool oralet = false;
-    int holder = -1;          // -1 on the saucer, 1..3 an opponent, 4 the çaycı
+    int holder = -1;          // -1 on the saucer, 0 the player (PlayerHands), 1..3 an opponent, 4 the çaycı
     int holderArm = 0;
     Matrix inHand = MatrixIdentity(); // glass-local -> hand-local (while held)
     Matrix world = MatrixIdentity();  // current transform (glass-local -> world)
@@ -21,6 +21,17 @@ struct TeaGlass {
     float steamAcc = 0.f;
     float spoonYaw = 0.f;
 };
+
+// Every change of who holds a glass goes through here. `blend`: the glass eases from where it is now into the new
+// holder's hand (or down onto its saucer); without it the caller places it at once (a teleport).
+inline void setGlassHolder(TeaGlass& g, int who, int arm = 0, bool blend = true) {
+    g.holder = who;
+    g.holderArm = arm;
+    if (blend) {
+        g.from = g.world;
+        g.blend = 0.f;
+    }
+}
 
 // ============================================================================ a seated body (opponents + patrons)
 struct Seated {
@@ -56,6 +67,7 @@ struct Chain {
     std::vector<Vector3> p, prev;
     std::vector<Vector3> tail, tailPrev;   // imame + tassel hanging from the grip
     float seg = TESPIH_SEG;
+    float acc = 0.f;   // simulated time not yet stepped (fixed steps of TESPIH_STEP)
     bool init = false;
 };
 
@@ -219,6 +231,7 @@ struct Cayci {
     // tray pendulum (world)
     Vector3 trayP{}, trayPrev{};
     Vector3 trayPivotF{};     // the grip, low-passed: the swing only answers to his smoothed motion
+    float trayAcc = 0.f;      // simulated time not yet stepped (fixed steps)
     bool trayInit = false;
     Matrix trayW = MatrixIdentity();
     // computed
@@ -282,6 +295,8 @@ struct BubbleState {
     float lastStart = -10.f;
 };
 
+struct CayciFrame;  // (CharactersCrowd.cpp)
+
 // Everything the module keeps at runtime ("the cast"). Characters::Impl derives from it.
 struct Cast {
     Characters* owner = nullptr;
@@ -291,6 +306,8 @@ struct Cast {
     uint64_t seed = 1;
     Rng rng{1};
     std::array<std::string, 4> names{{"Sen", "Hacı Rıza", "Kel Mahmut", "Emekli Nuri"}};
+    std::array<std::string, 4> plateName{};  // drawOverlay: the name plates' widths, measured once per name
+    std::array<float, 4> plateW{};
     float animSpeed = 1.f;               // the table's animation speed: tile reaches keep pace with the tiles
     int activeSeat = -1;
     int lastTurnSeat = -1;               // the last real turn (activeSeat is -1 while paused, too)
@@ -328,6 +345,10 @@ struct Cast {
     Special* sp = nullptr;
     int specialDay = 0;
     bool specialGarden = false;
+    // the TV the room watches: high in the back-left corner inside; on a derby night in the garden the portable one
+    // the ocakçı carried out onto a stand by the ocak (RoomSpecial.cpp, Room::Impl::specialTvOut)
+    bool gardenTv() const { return specialGarden && specialDay == 4; }
+    Vector3 tvPosition() const { return gardenTv() ? Vector3{1.42f, 1.15f, -2.95f} : kTvPos; }
     void initSpecial(Renderer& r);
     void freeSpecial(Renderer& r);
     void updateSpecial(float dt);
@@ -339,6 +360,7 @@ struct Cast {
     // --- Konken son kalan (CharactersKonken.cpp): seats 1..3 that burned and left the table
     std::array<SeatOut, 4> seatOut{};
     void updateSeatOut(Opponent& o, float dt);
+    void clearSeatedActivity(Opponent& o);
     void submitSeatOut(Renderer& r, const Opponent& o);
     // --- the player's own hands (CharactersPlayer.cpp): glass[0] held by PlayerHands is TeaGlass::holder 0
     Matrix playerGlassW = MatrixIdentity();
@@ -347,6 +369,7 @@ struct Cast {
     void freePlayerGlass(Renderer& r);
     // --- Ocakçı: the tea maker at the counter (CharactersOcakci.cpp, r3d/CharactersOcakci.h)
     Ocakci* ocak = nullptr;
+    void queueOcakci(MeshJobs& J, Renderer& r);  // his body into buildAll's mesh batch (before initOcakci)
     void initOcakci(Renderer& r);
     void freeOcakci(Renderer& r);
     void updateOcakci(float dt);
@@ -407,7 +430,15 @@ struct Cast {
     void updateCrowd(float dt);
     void updatePatron(Patron& p, BgTable& t, float dt);
     void updateCayci(float dt);
-    void planTrip(bool ours, int bgTable);
+    void cayciDecide(float dt, CayciFrame& F);
+    void cayciWalk(float dt, CayciFrame& F);
+    void cayciServe(float dt, CayciFrame& F);
+    void cayciBody(float dt, CayciFrame& F);
+    void cayciFace(float dt);
+    void cayciGoHome();
+    void planTrip(bool ours, int bgTable, const std::vector<int>* onlyGlasses = nullptr);
+    void finishOurTour();
+    void replanOurTrip();
     void submitCrowd(Renderer& r);
     // --- CharactersLife.cpp
     void initLife(Renderer& r);
@@ -433,18 +464,32 @@ struct Cast {
 // Reaching across the table: the body leans in (up to kMaxExtraLean past its posture) and the shoulder rolls
 // forward (up to kProtract) before the arm is at full stretch.
 constexpr float kMaxExtraLean = 0.62f;
+constexpr float BY = w3d::BG_TABLE_Y;  // the background tables' top (CharactersCrowd.cpp, CharactersLife.cpp)
 constexpr float kProtract = 0.04f;
 constexpr float kReachFrac = 0.97f;  // of the arm's length: the elbow stays a little bent
 Vector3 shoulderAt(const PersonLook& L, float sd, float lean);           // shoulder joint (character-local)
 float leanNeeded(const PersonLook& L, float leanBase, float sd, Vector3 w);
+// `tL` (character-local) pulled back until hand-space point `off` is within reach of the fully leaning body.
+Vector3 clampReach(const Opponent& o, int arm, Vector3 tL, Vector3 f, Vector3 p, Vector3 off);
 const std::array<std::array<Vector3, 5>, HAND_POSES>& handTips();
-void handBasis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z);
 // Wrist position that puts hand-space point `off` at `point`.
 Vector3 wristFor(Vector3 point, Vector3 fingers, Vector3 palm, Vector3 off, float scale, bool left);
 void gripDirs(Vector3 a, Vector3 f, bool left, Vector3& fingers, Vector3& palm);
 Key mk(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float lift = 0.f, int ease = 0, int ev = 0);
+// mk with the palm made perpendicular to the fingers first (the crowd's and the çaycı's keys)
+Key mkOrtho(float t, Vector3 pos, Vector3 fingers, Vector3 palm, HandPose pose, float lift = 0.f, int ease = 0, int ev = 0);
 Key touching(Key k);
 Vector3 mirrorL(Vector3 v, bool left);
+// The standing men's heads (CharactersFace.cpp): the head's yaw/pitch springs toward `gaze` (torso space), a blink
+// now and then (every 2..maxGap s, `dur` long; returns the lids' closure), eyes / lids / brows, mouth and lower lip.
+void headLookSpring(const Matrix& torsoW, const PersonLook& L, Vector3 gaze, float pitchGain, float pitchMin, float omega,
+                    float dt, float& yaw, float& yawV, float& pitch, float& pitchV);
+float blinkStep(Rng& rng, float& blinkIn, float& blinkT, float dt, float maxGap, float dur);
+void standingEyes(const FaceGeo& fg, const Matrix& headW, Vector3 gaze, float lidBase, float lidClose, float browTilt, float dt,
+                  float& eYaw, float& ePitch, Matrix eyeW[2], Matrix lidW[2], Matrix browW[2]);
+void standingMouth(const FaceGeo& fg, const Matrix& headW, float jaw, Matrix& mouthW, Matrix& lipW);
+// Standing / walking legs (CharactersLife.cpp): thigh and shin frames for the gait phase (0..1) and walk (0..1).
+void walkLegs(const Matrix& root, Vector3 hip, float phase, float walk, Matrix thighW[2], Matrix shinW[2]);
 // A hand lying on the felt with its palm centre over (x, z) (character-local).
 Key onFelt(float x, float z, Vector3 f, Vector3 p, HandPose pose, float hs, bool left);
 

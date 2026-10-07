@@ -518,7 +518,7 @@ void Room::Impl::freeSpecial(Renderer& r) {
             *m = Mesh{};
         }
     for (Mat* m : {&S.mDecor, &S.mCanvas, &S.mTvCase, &S.mLit, &S.mScarf}) r.unloadMat(*m);
-    if (S.cv.id) UnloadRenderTexture(S.cv);
+    if (S.cv.id) unloadCanvas(S.cv);
     delete sp;
     sp = nullptr;
 }

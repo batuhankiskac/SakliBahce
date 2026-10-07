@@ -143,19 +143,12 @@ public:
         }
 
         Color sc = ui::pal::TextLight;
-        std::string st;
         const int a = actor();
-        if (g_.stage() == king::Stage::HandOver) st = "El bitti";
-        else if (g_.stage() == king::Stage::MatchOver) st = "Parti bitti";
-        else if (now_ < dealUntil_) st = "Kağıtlar dağıtılıyor…";
-        else if (a == 0 && replay_) st = replaySelfStatus();
-        else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
-        else if (a == 0) {
-            sc = ui::pal::Highlight;
-            st = g_.stage() == king::Stage::Choosing ? "Bu eli sen seçiyorsun" : "Bir kağıt at";
-        } else if (a > 0) {
-            st = names_[(size_t)a] + (g_.stage() == king::Stage::Choosing ? " oyunu seçiyor…" : " düşünüyor…");
-        }
+        const char* ended = g_.stage() == king::Stage::HandOver ? "El bitti" : g_.stage() == king::Stage::MatchOver ? "Parti bitti" : nullptr;
+        const bool choosing = g_.stage() == king::Stage::Choosing;
+        const std::string st = statusLine(ended, now_ < dealUntil_, "Kağıtlar dağıtılıyor…", a, aiSeat, sc,
+                                          [&] { return choosing ? "Bu eli sen seçiyorsun" : "Bir kağıt at"; },
+                                          choosing ? " oyunu seçiyor…" : " düşünüyor…");
         std::vector<std::pair<std::string, Color>> parts;
         if (playing) {
             parts.push_back({g_.contractLabel(), Color{238, 198, 112, 255}});

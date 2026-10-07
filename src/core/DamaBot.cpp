@@ -85,8 +85,8 @@ struct TTEntry {
     uint64_t key = 0;
     int score = 0;
     int8_t depth = -1;
-    int8_t flag = 0; // 0 exact, 1 lower bound, 2 upper bound
-    int8_t best = -1;
+    int8_t flag = 0; // bits 0-1: 0 exact, 1 lower bound, 2 upper bound; bit 2: the position's moves are captures
+    int16_t best = -1; // (an index into the node's moves: more than 127 are possible with many damas)
 };
 
 double nowMs() {
@@ -115,71 +115,84 @@ public:
     void clearTT() { std::fill(tt_.begin(), tt_.end(), TTEntry()); }
 
     int search(Board& b, int p, int depth, int alpha, int beta, int ply) {
+        return search(b, p, depth, alpha, beta, ply, b.hash(p), b.pieces(0), b.pieces(1));
+    }
+
+private:
+    // `key` = b.hash(p); n0 / n1: the pieces of players 0 / 1 (both kept along the path instead of recounted).
+    int search(Board& b, int p, int depth, int alpha, int beta, int ply, uint64_t key, int n0, int n1) {
         if (aborted) return 0;
         if (++nodes >= nodeCap || ((nodes & 1023) == 0 && deadline > 0.0 && nowMs() > deadline)) {
             aborted = true;
             return 0;
         }
-        const uint64_t key = b.hash(p);
         // a repetition on the path (or of the game's positions): a draw
         if (ply > 0) {
             for (int i = (int)stack.size() - 2; i >= 0 && i >= (int)stack.size() - 40; i -= 2)
                 if (stack[(size_t)i] == key) return 0;
         }
+        // the transposition table, before the move generation: an entry means this position went through the move
+        // loop (it has moves, it is not "one piece each"), and it remembers whether its moves are captures, so the
+        // horizon test below gives the same answer without generating them
+        TTEntry& te = tt_[(size_t)(key & mask_)];
+        int ttBest = -1;
+        if (te.key == key) {
+            ttBest = te.best;
+            const bool ttCaptures = (te.flag & 4) != 0;
+            if (te.depth >= depth && ply < 60 && !(depth <= 0 && (!ttCaptures || ply >= 48))) {
+                const int s = fromTT(te.score, ply);
+                const int flag = te.flag & 3;
+                if (flag == 0) return s;
+                if (flag == 1 && s >= beta) return s;
+                if (flag == 2 && s <= alpha) return s;
+            }
+        }
         std::vector<CMove>& moves = buf(ply);
         generateCompact(b, p, moves);
         if (moves.empty()) return -WIN_SCORE + ply;
         const bool captures = moves[0].ncap > 0;
-        if (!captures && b.pieces(0) == 1 && b.pieces(1) == 1) { // one piece each: a draw (or the lone dama wins)
+        if (!captures && n0 == 1 && n1 == 1) { // one piece each: a draw (or the lone dama wins)
             if (loneKingWins && b.kings(0) + b.kings(1) == 1) return (b.kings(p) == 1 ? 1 : -1) * (WIN_SCORE - ply - 1);
             return 0;
         }
         if (depth <= 0 && (!captures || ply >= 48)) return evaluate(b, p, w);
         if (ply >= 60) return evaluate(b, p, w);
-        // the transposition table
-        TTEntry& te = tt_[(size_t)(key & mask_)];
-        int ttBest = -1;
-        if (te.key == key) {
-            ttBest = te.best;
-            if (te.depth >= depth) {
-                const int s = fromTT(te.score, ply);
-                if (te.flag == 0) return s;
-                if (te.flag == 1 && s >= beta) return s;
-                if (te.flag == 2 && s <= alpha) return s;
-            }
-        }
         // order: the table's move, then the most captures, crowning, the history heuristic
         const int n = (int)moves.size();
-        int order[128];
-        int keyv[128];
-        const int cnt = std::min(n, 128);
+        std::vector<int>& order = orderBuf(ply);
+        std::vector<int>& keyv = keyBuf(ply);
+        order.resize((size_t)n);
+        keyv.resize((size_t)n);
+        const int cnt = n;
         for (int i = 0; i < cnt; ++i) {
             const CMove& m = moves[(size_t)i];
-            order[i] = i;
+            order[(size_t)i] = i;
             const int mk = m.from * 64 + m.to();
             const int killer = ply <= kMaxPly && (killers_[(size_t)ply][0] == mk || killers_[(size_t)ply][1] == mk) ? 400000 : 0;
-            keyv[i] = (i == ttBest ? 1 << 28 : 0) + m.ncap * 1000000 + (m.promotes ? 500000 : 0) + killer +
+            keyv[(size_t)i] = (i == ttBest ? 1 << 28 : 0) + m.ncap * 1000000 + (m.promotes ? 500000 : 0) + killer +
                       std::min(hist_[(size_t)m.from][(size_t)m.to()], 300000);
         }
-        std::sort(order, order + cnt, [&](int a, int c) { return keyv[a] > keyv[c] || (keyv[a] == keyv[c] && a < c); });
+        std::sort(order.begin(), order.end(), [&](int a, int c) { return keyv[(size_t)a] > keyv[(size_t)c] || (keyv[(size_t)a] == keyv[(size_t)c] && a < c); });
         // a forced move (one reply) does not cost a ply near the root; captures past the horizon stay at depth 0
         const int childDepth = depth <= 0 ? 0 : (n == 1 && ply < 30 ? depth : depth - 1);
         const int a0 = alpha;
         int best = -WIN_SCORE * 2, bestIdx = order[0];
         for (int k = 0; k < cnt; ++k) {
-            const int i = order[k];
+            const int i = order[(size_t)k];
             const CMove m = moves[(size_t)i]; // (the buffer is reused deeper)
             Board nb = b;
-            applyCompact(nb, p, m);
+            uint64_t nk = key;
+            applyCompact(nb, p, m, nk);
+            const int c0 = n0 - (p == 1 ? m.ncap : 0), c1 = n1 - (p == 0 ? m.ncap : 0);
             stack.push_back(key);
             int s;
             if (k == 0) {
-                s = -search(nb, 1 - p, childDepth, -beta, -alpha, ply + 1);
+                s = -search(nb, 1 - p, childDepth, -beta, -alpha, ply + 1, nk, c0, c1);
             } else { // principal variation search: a null window first (late quiet moves one ply shallower)
                 const bool reduce = lmr && k >= 3 && depth >= 3 && m.ncap == 0 && !m.promotes;
-                s = -search(nb, 1 - p, childDepth - (reduce ? 1 : 0), -alpha - 1, -alpha, ply + 1);
-                if (reduce && !aborted && s > alpha) s = -search(nb, 1 - p, childDepth, -alpha - 1, -alpha, ply + 1);
-                if (!aborted && s > alpha && s < beta) s = -search(nb, 1 - p, childDepth, -beta, -alpha, ply + 1);
+                s = -search(nb, 1 - p, childDepth - (reduce ? 1 : 0), -alpha - 1, -alpha, ply + 1, nk, c0, c1);
+                if (reduce && !aborted && s > alpha) s = -search(nb, 1 - p, childDepth, -alpha - 1, -alpha, ply + 1, nk, c0, c1);
+                if (!aborted && s > alpha && s < beta) s = -search(nb, 1 - p, childDepth, -beta, -alpha, ply + 1, nk, c0, c1);
             }
             stack.pop_back();
             if (aborted) return 0;
@@ -204,18 +217,20 @@ public:
         te.key = key;
         te.score = toTT(best, ply);
         te.depth = (int8_t)std::clamp(depth, -1, 120);
-        te.flag = best <= a0 ? 2 : best >= beta ? 1 : 0;
-        te.best = (int8_t)bestIdx;
+        te.flag = (int8_t)((best <= a0 ? 2 : best >= beta ? 1 : 0) | (captures ? 4 : 0));
+        te.best = (int16_t)bestIdx;
         return best;
     }
 
-private:
     std::vector<TTEntry> tt_;
     uint64_t mask_;
     std::vector<std::vector<CMove>> bufs_;
+    std::vector<std::vector<int>> orderBufs_ = std::vector<std::vector<int>>(kMaxPly + 2), keyBufs_ = orderBufs_;
     int hist_[kSquares][kSquares] = {};
     std::array<std::array<int, 2>, kMaxPly + 1> killers_{};
     std::vector<CMove>& buf(int ply) { return bufs_[(size_t)std::min(ply, kMaxPly)]; }
+    std::vector<int>& orderBuf(int ply) { return orderBufs_[(size_t)std::min(ply, kMaxPly)]; }
+    std::vector<int>& keyBuf(int ply) { return keyBufs_[(size_t)std::min(ply, kMaxPly)]; }
     static int toTT(int s, int ply) { return s > WIN_SCORE / 2 ? s + ply : s < -WIN_SCORE / 2 ? s - ply : s; }
     static int fromTT(int s, int ply) { return s > WIN_SCORE / 2 ? s - ply : s < -WIN_SCORE / 2 ? s + ply : s; }
 };
@@ -326,7 +341,7 @@ Move Bot::choose(const Game& g, int p) {
             Board nb = root;
             applyCompact(nb, p, moves[(size_t)i]);
             S.stack = g.history();
-            const bool irreversible = moves[(size_t)i].ncap > 0 || !root.king(moves[(size_t)i].from);
+            const bool irreversible = isIrreversible(root, moves[(size_t)i]);
             if (irreversible) S.stack.clear();
             // every root move gets an exact score for the noisy levels; the others search the rest with a null window
             int s;

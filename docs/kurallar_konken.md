@@ -30,7 +30,7 @@ Açtıktan sonra (aynı turda da):
 - Masadaki **bütün perlere işleyebilirsin**, başkasınınkiler de dahil: seriyi bir ucundan uzatırsın, eksik rengi gruba eklersin (en çok 4). Jokeri de bir perin ucuna ya da gruba işleyebilirsin.
 - **Joker almak:** masadaki bir perde jokerin yerine geçtiği gerçek kâğıt sendeyse onu jokerin yerine koyup jokeri eline alırsın. Üçlü grupta joker eksik renklerin herhangi biri sayılır.
 
-Joker yere atılmaz (ancak elindeki son kâğıtsa atılabilir).
+Joker yere atılmaz (ancak elindeki son kâğıtsa ya da elinde yalnız joker kalmış ve masadaki hiçbir pere joker işlenemiyorsa atılabilir).
 
 ## Bitirmek ve konken
 

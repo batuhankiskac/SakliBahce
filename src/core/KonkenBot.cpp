@@ -179,10 +179,10 @@ BotAction fallbackAction(const Game& g, int seat) {
         a.kind = BotAction::Kind::ReturnDiscard;
         return a;
     }
-    // the dearest card that may go (a joker only as the last card); only jokers left: put one on the table
+    // the dearest card that may go (a joker only as the last card or when no joker fits the table); only jokers left: put one on the table
     int best = -1;
     for (int c : h)
-        if ((!isJoker(c) || h.size() == 1) && (best < 0 || handPoints(c) > handPoints(best))) best = c;
+        if ((!isJoker(c) || g.mayDiscardJoker(seat)) && (best < 0 || handPoints(c) > handPoints(best))) best = c;
     if (best < 0 && g.opened(seat))
         for (int c : h) {
             const int m = tableFit(g.table(), c);
@@ -288,7 +288,7 @@ struct Bot::Impl {
         const std::vector<int>& h = g.hand(seat);
         for (int c : h) {
             if (c == g.takenCard()) continue;
-            if (isJoker(c) && h.size() > 1) continue;
+            if (isJoker(c) && !g.mayDiscardJoker(seat)) continue;
             if (std::find(v.begin(), v.end(), c) == v.end()) v.push_back(c);
         }
         return v;
@@ -398,7 +398,7 @@ struct Bot::Impl {
             if (best < 0) return mine();
             hand = without(hand, best);
             if (hand.empty()) return 0;
-            if (--stock <= 0) return mine();
+            if (stock <= 0) return mine(); // (the draw above already took this turn's card)
         }
         return mine();
     }

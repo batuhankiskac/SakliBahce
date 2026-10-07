@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace r3d {
 
@@ -22,15 +23,8 @@ Color fadeC(Color c, float a) {
     c.a = (unsigned char)std::clamp(c.a * a + 0.5f, 0.f, 255.f);
     return c;
 }
-std::string fitText(FontId f, std::string text, float maxW, float& size, float minSize) {
-    while (size > minSize && ui::measureText(f, text, size).x > maxW) size -= 1.f;
-    if (ui::measureText(f, text, size).x <= maxW) return text;
-    while (!text.empty() && ui::measureText(f, text + "…", size).x > maxW) {
-        size_t cut = text.size() - 1;
-        while (cut > 0 && ((unsigned char)text[cut] & 0xC0) == 0x80) --cut;
-        text.erase(cut);
-    }
-    return text + "…";
+std::string fitText(FontId f, const std::string& text, float maxW, float& size, float minSize) {
+    return hudFitText(f, text, maxW, size, minSize);
 }
 void pill(Rectangle r, Color fill, Color line) {
     ui::tilegfx::roundedRect({r.x + 1, r.y + 2, r.width, r.height}, r.height * 0.5f, rgba(0, 0, 0, 70));
@@ -49,6 +43,38 @@ float helpY() { return statusY() - 13.f * S() - 17.f * S(); }
 bool enterPressed() { return IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || IsKeyPressed(KEY_SPACE); }
 
 } // namespace
+
+std::string hudFitText(FontId f, const std::string& text0, float maxW, float& size, float minSize) {
+    // the HUD asks the same few questions every frame: the answers are kept (a pure function of the arguments)
+    struct Fit {
+        std::string text;
+        float size;
+    };
+    static std::unordered_map<std::string, Fit> cache;
+    std::string key;
+    key.reserve(text0.size() + 16);
+    const float nums[3] = {maxW, size, minSize};
+    key.append((const char*)nums, sizeof nums);
+    key.push_back((char)f);
+    key += text0;
+    if (const auto it = cache.find(key); it != cache.end()) {
+        size = it->second.size;
+        return it->second.text;
+    }
+    std::string text = text0;
+    while (size > minSize && ui::measureText(f, text, size).x > maxW) size -= 1.f;
+    if (ui::measureText(f, text, size).x > maxW) {
+        while (!text.empty() && ui::measureText(f, text + "…", size).x > maxW) {
+            size_t cut = text.size() - 1;
+            while (cut > 0 && ((unsigned char)text[cut] & 0xC0) == 0x80) --cut;
+            text.erase(cut);
+        }
+        text += "…";
+    }
+    if (cache.size() > 512) cache.clear();
+    cache.emplace(std::move(key), Fit{text, size});
+    return text;
+}
 
 void GameHud::update(float dt) {
     now_ += dt;

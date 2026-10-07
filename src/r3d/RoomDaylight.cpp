@@ -60,7 +60,7 @@ Texture2D genLeafTexture() {
             unsigned char c = (unsigned char)(255.f * rib * (0.85f + 0.15f * rv));
             px[y * N + x] = Color{c, c, c, (unsigned char)(255.f * cover)};
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadTexture(img);
     SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
     UnloadImage(img);
     return t;
@@ -115,7 +115,7 @@ void Room::Impl::freeDaylight(Renderer& r) {
     for (Mat* m : {&mSunShaft, &mSunPatch, &mStoveSlot}) r.unloadMat(*m);
     for (Texture2D* t : {&texFlake, &texLeaf})
         if (t->id) {
-            UnloadTexture(*t);
+            unloadTexture(*t);
             *t = Texture2D{};
         }
     flakes.clear();

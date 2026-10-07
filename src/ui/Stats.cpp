@@ -1,9 +1,9 @@
 #include "ui/Stats.h"
+#include "ui/SaveFile.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <sstream>
 
 namespace ui {
@@ -20,8 +20,9 @@ constexpr Rank kRanks[] = {
 };
 constexpr int kRankCount = (int)(sizeof kRanks / sizeof kRanks[0]);
 
-// File keys: "<game>.<field>"
-const char* kGameKey[STATS_GAMES] = {"101", "esli101", "okey", "tavla", "pisti", "batak", "king", "dama", "altmisalti", "bezik", "konken"};
+// File keys: "<game>.<field>" (ui/SaveFile.h kGameKeys)
+static_assert(STATS_GAMES == SAVE_GAMES, "istatistik.txt keys");
+constexpr long kMaxCount = 10000000; // a count read from the file is clamped to [0, kMaxCount]
 
 } // namespace
 
@@ -102,19 +103,15 @@ const char* StatsBook::bestLabel(int game) {
 }
 
 void StatsBook::load(const std::string& path) {
-    if (path.empty()) return;
-    std::ifstream in(path);
-    if (!in) return;
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t eq = line.find('='), dot = line.find('.');
-        if (eq == std::string::npos || dot == std::string::npos || dot > eq) continue;
-        const std::string g = line.substr(0, dot), k = line.substr(dot + 1, eq - dot - 1);
-        const int v = std::atoi(line.c_str() + eq + 1);
-        int gi = -1;
-        for (int i = 0; i < STATS_GAMES; ++i)
-            if (g == kGameKey[i]) gi = i;
-        if (gi < 0) continue;
+    std::string text;
+    if (!readFileText(path, text)) return;
+    forEachKeyValue(text, [&](const std::string& key, const std::string& val) {
+        const size_t dot = key.find('.');
+        if (dot == std::string::npos) return;
+        const int gi = gameKeyIndex(key.substr(0, dot));
+        if (gi < 0) return;
+        const std::string k = key.substr(dot + 1);
+        const int v = (int)parseLong(val, 0, kMaxCount);
         GameRecord& r = games[gi];
         if (k == "mac") r.matches = v;
         else if (k == "galibiyet") r.wins = v;
@@ -123,7 +120,7 @@ void StatsBook::load(const std::string& path) {
         else if (k == "seri") r.streak = v;
         else if (k == "enuzunseri") r.bestStreak = v;
         else if (k == "rekor") {
-            r.best = v;
+            r.best = (int)parseLong(val, -kMaxCount, kMaxCount); // (a hand score: 101's best is the lowest)
             r.hasBest = true;
         } else {
             for (int l = 0; l < 3; ++l) {
@@ -131,17 +128,25 @@ void StatsBook::load(const std::string& path) {
                 if (k == "mac" + std::to_string(l)) r.playedAt[l] = v;
             }
         }
+    });
+    // a hand-edited (or damaged) book stays consistent: nothing won more often than played
+    for (GameRecord& r : games) {
+        r.wins = std::min(r.wins, r.matches);
+        r.handWins = std::min(r.handWins, r.hands);
+        r.streak = std::min(r.streak, r.matches);
+        r.bestStreak = std::clamp(r.bestStreak, r.streak, std::max(r.streak, r.matches));
+        for (int l = 0; l < 3; ++l) r.winsAt[l] = std::min(r.winsAt[l], r.playedAt[l]);
     }
 }
 
-void StatsBook::save(const std::string& path) const {
-    if (path.empty()) return;
+bool StatsBook::save(const std::string& path) const {
+    if (path.empty()) return false;
     std::ostringstream o;
     o << "# SaklıBahçe istatistikleri\n";
     for (int i = 0; i < STATS_GAMES; ++i) {
         const GameRecord& r = games[i];
         if (!r.matches && !r.hands) continue;
-        const std::string g = kGameKey[i];
+        const std::string g = kGameKeys[i];
         o << g << ".mac=" << r.matches << "\n" << g << ".galibiyet=" << r.wins << "\n" << g << ".el=" << r.hands << "\n"
           << g << ".elkazanc=" << r.handWins << "\n" << g << ".seri=" << r.streak << "\n" << g
           << ".enuzunseri=" << r.bestStreak << "\n";
@@ -149,8 +154,7 @@ void StatsBook::save(const std::string& path) const {
             o << g << ".mac" << l << "=" << r.playedAt[l] << "\n" << g << ".galibiyet" << l << "=" << r.winsAt[l] << "\n";
         if (r.hasBest) o << g << ".rekor=" << r.best << "\n";
     }
-    std::ofstream out(path);
-    out << o.str();
+    return writeFileAtomic(path, o.str());
 }
 
 } // namespace ui

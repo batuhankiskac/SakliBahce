@@ -53,6 +53,9 @@ const char* actionName(ui::ScreenAction a) {
     case ui::ScreenAction::SettingsChanged: return "SettingsChanged";
     case ui::ScreenAction::StartAiMatch: return "StartAiMatch";
     case ui::ScreenAction::ToggleAiMode: return "ToggleAiMode";
+    case ui::ScreenAction::ResumeSaved: return "ResumeSaved";
+    case ui::ScreenAction::WatchReplay: return "WatchReplay";
+    case ui::ScreenAction::AnalyzeReplay: return "AnalyzeReplay";
     }
     return "?";
 }
@@ -959,6 +962,27 @@ int main() {
         H.run(4.5);
         check(!H.screens.achievementBannerUp(), "the banners go away");
         H.screens.setAchievements(nullptr);
+    }
+
+    // ---------------------------------------------------------------- (denetim: ui) the guide card, the cards' edge
+    std::printf("guide\n");
+    {
+        H.screens.setGuide("Pişti", {"Yerdeki son kartla aynı kartı atan ya da vale atan, yerdeki bütün kartları alır.",
+                                     "Yerde tek kart varken aynısını atarsan pişti: 10 puan. Vale ile pişti 20 puan.",
+                                     "En çok kart 3 puan; as, vale, sinek ikilisi ve karo onlusu da puan getirir.",
+                                     "151'e ilk varan maçı alır."});
+        H.screens.show(ui::ScreenId::Guide);
+        H.run(1.0);
+        H.shot("guide" + sfx);
+        H.screens.show(ui::ScreenId::Title);
+        H.run(0.4);
+        H.screens.show(ui::ScreenId::GameSelect);
+        H.run(0.8);
+        H.take();
+        // the bottom rows of a card click too (its hover lift is drawing only)
+        H.clickAt({kCard101.x + kCard101.width * 0.5f, kCard101.y + kCard101.height - 2.f});
+        auto acts2 = H.take();
+        check(has(acts2, ui::ScreenAction::StartMatch), "a game card's bottom edge starts a match (" + list(acts2) + ")");
     }
 
     H.screens.shutdown();

@@ -40,15 +40,6 @@ inline float smoother01(float t) {
     t = clampf(t, 0.f, 1.f);
     return t * t * t * (t * (t * 6.f - 15.f) + 10.f);
 }
-inline float easeOut3(float t) {
-    t = clampf(t, 0.f, 1.f);
-    float u = 1.f - t;
-    return 1.f - u * u * u;
-}
-inline float easeIn2(float t) {
-    t = clampf(t, 0.f, 1.f);
-    return t * t;
-}
 inline Vector3 V3(float x, float y, float z) { return Vector3{x, y, z}; }
 inline Vector3 vlerp(Vector3 a, Vector3 b, float t) { return Vector3Lerp(a, b, t); }
 inline Vector3 vnorm(Vector3 v) {
@@ -119,7 +110,9 @@ inline Matrix RY(float a) { return MatrixRotateY(a); }
 inline Matrix RZ(float a) { return MatrixRotateZ(a); }
 // Bone frame for a limb mesh built along +Y: origin at a, +Y toward b; `hint` picks the twist.
 Matrix boneMatrix(Vector3 a, Vector3 b, Vector3 hint);
-// Hand frame: fingers toward `fingers`, palm facing `palm`, wrist at `wrist`, uniform scale.
+// Hand frame: fingers toward `fingers`, palm facing `palm`, wrist at `wrist`, uniform scale. handBasis: its axes
+// (Z back along the fingers, Y out of the back of the hand, X = Y x Z).
+void handBasis(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z);
 Matrix handMatrix(Vector3 wrist, Vector3 fingers, Vector3 palm, float scale);
 
 // ============================================================================ random
@@ -153,7 +146,6 @@ public:
     void torus(Vector3 c, float R, float r, Color col, float k = 0.f, Vector3 rotDeg = {0, 0, 0});
     // subtractive versions (carve)
     void cutEllipsoid(Vector3 c, Vector3 r, Color col, float k = 0.f, Vector3 rotDeg = {0, 0, 0});
-    void cutCone(Vector3 a, Vector3 b, float ra, float rb, Color col, float k = 0.f);
     void cutBox(Vector3 c, Vector3 half, float round, Color col, float k = 0.f, Vector3 rotDeg = {0, 0, 0});
 
     // Starts a new layer: later primitives (and cuts) form a separate smooth union that is hard-unioned
@@ -209,6 +201,7 @@ struct MeshJobs {
         std::function<RawMesh()> make;
         int target = 0, targetLo = 0;
         float colorEdge = 0.f;  // see simplifyMesh
+        float cost = 0.f;       // estimated work (~ triangles before simplifying; 0: the target) for run()'s order
         Mesh *out = nullptr, *mirror = nullptr, *outLo = nullptr, *mirrorLo = nullptr;
         RawMesh raw, rawLo;
     };
@@ -305,14 +298,14 @@ struct Meshes {
     Mesh cigarette{}, ember{};
     Mesh bead4{}, imame{}, tassel{};   // tespih: a run of 4 beads, the long end piece, tassel
     Mesh spectacles{}, lenses{};
-    Mesh trayHanger{}, trayGlasses{}, trayTea{};
+    Mesh trayHanger{};
     Mesh dice{}, cardFan{}, card{}, newspaper{};
     Mesh walkThigh[2]{}, walkShin[2]{}; // çaycı legs (built per look, see çaycı)
 
     Mat eyeMat{}, mouthMat{}, wood{}, straw{}, glassMat{}, teaMat{}, oraletMat{}, porcelain{},
         cigMat{}, emberMat{}, amber{}, tassleMat{}, lensMat{}, frameMat{}, trayMat{}, diceMat{}, cardMat{},
         paperMat{}, lipMat{};
-    Texture2D woodTex{}, strawTex{}, paperTex{};
+    Texture2D woodTex{}, strawTex{};
     RenderTexture2D paperCanvas{};
     bool paperCanvasOk = false;
 
@@ -324,11 +317,11 @@ struct Meshes {
 
 // Builders (CharactersMesh.cpp)
 PersonLook lookFor(int kind);
-void buildAll(Meshes& M, Renderer& r, uint64_t seed);
+// `morePeople` queues further SDF bodies into the people's mesh batch (the ocakçı).
+void buildAll(Meshes& M, Renderer& r, uint64_t seed, const std::function<void(MeshJobs&)>& morePeople = {});
 void freeAll(Meshes& M, Renderer& r);
 // tea glass geometry helpers
 float glassScale();
-float glassInnerRadius(float y); // inner radius at height y (glass space, scaled)
 constexpr float SAUCER_TOP = 0.0065f;  // glass base height above the table when on its saucer
 constexpr float TESPIH_SEG = 0.046f;   // one tespih chain segment (4 beads)
 
@@ -433,6 +426,7 @@ struct Bubble {
     int who = 1;              // 1..3 opponents, 4 the çaycı
     std::string text;
     std::vector<std::string> lines;
+    std::vector<float> lineW;  // each line's width at kBubbleFont
     float w = 0, h = 0;
     float t = 0, dur = 3.f;
     float queued = 0, maxWait = 4.f;

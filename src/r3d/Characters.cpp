@@ -49,7 +49,7 @@ bool Characters::init(Renderer& r, uint64_t seed) {
     m.renderer = &r;
     m.seed = seed ? seed : 1;
     m.rng = Rng(m.seed * 7919u + 17u);
-    buildAll(m.M, r, m.seed);
+    buildAll(m.M, r, m.seed, [&](MeshJobs& J) { m.queueOcakci(J, r); });
     m.setupOpponents();
     m.setupCrowd();
     m.initLife(r);
@@ -116,7 +116,7 @@ void Characters::onTvGoal() {
     if (!m.titleMode) m.banter.tvGoal();
     // the TV hangs high in the back-left corner; Mahmut cheers, the others glance over
     // (ozelgun) on a derby night in the garden the portable TV stands by the ocak (RoomSpecial.cpp)
-    const Vector3 tv = m.specialGarden && m.specialDay == 4 ? Vector3{1.42f, 1.15f, -2.95f} : chr::kTvPos;
+    const Vector3 tv = m.tvPosition();
     for (int s = 1; s <= 3; ++s) {
         Opponent& o = m.opp[s];
         if (s == 2) {
@@ -251,6 +251,11 @@ void Characters::update(float dt, const Camera3D& viewer) {
 // ============================================================================ bubbles
 void Cast::pushLine(int who, const std::string& text, float seconds, float maxWait, bool teaOrder) {
     if (titleMode || who < 1 || who > 4 || text.empty()) return;
+    // the same line already up or waiting: nothing to wrap and measure
+    auto& q = bubbles.pending[who];
+    if (bubbles.on[who] && bubbles.cur[who].text == text) return;
+    for (const Bubble& o : q)
+        if (o.text == text) return;
     Bubble b;
     b.who = who;
     b.teaOrder = teaOrder;
@@ -278,14 +283,13 @@ void Cast::pushLine(int who, const std::string& text, float seconds, float maxWa
     flush();
     if (!cur.empty()) b.lines.push_back(cur);
     float w = 0.f;
-    for (const std::string& l : b.lines) w = std::max(w, ui::measureText(ui::FontId::Ui, l, kBubbleFont).x);
+    for (const std::string& l : b.lines) {
+        b.lineW.push_back(ui::measureText(ui::FontId::Ui, l, kBubbleFont).x);
+        w = std::max(w, b.lineW.back());
+    }
     w = std::max(w, ui::measureText(ui::FontId::UiBold, who <= 3 ? names[who] : std::string("Çaycı"), kNameFont).x);
     b.w = std::max(90.f, w + 2 * padX);
     b.h = (float)b.lines.size() * (kBubbleFont * 1.12f + 2.f) - 2.f + 22.f + kNameFont + 2.f;
-    auto& q = bubbles.pending[who];
-    if (bubbles.on[who] && bubbles.cur[who].text == text) return;
-    for (const Bubble& o : q)
-        if (o.text == text) return;
     if (q.size() >= 3) q.pop_front();
     q.push_back(std::move(b));
 }
@@ -420,7 +424,8 @@ void Characters::drawOverlay(const Renderer& r) {
     };
     // Table3D floats a name plate beside each opponent's head at eye level; estimate those rectangles so the
     // bubbles (always above the head) never cover them.
-    std::vector<Rectangle> plates;
+    std::array<Rectangle, 3> plates{};
+    int nPlates = 0;
     std::array<Rectangle, 5> faces{};  // projected face rectangles (bubbles keep off the faces too)
     std::array<float, 5> plateSide{};
     for (int s = 1; s <= 4; ++s) {
@@ -432,12 +437,16 @@ void Characters::drawOverlay(const Renderer& r) {
         faces[(size_t)s] = {hc.x - rad * 0.95f, hc.y - rad * 1.25f, rad * 1.9f, rad * 2.2f};
         plateSide[(size_t)s] = hc.x > ui::VW * 0.5f + 150.f ? -1.f : 1.f;
         if (s == 4) continue;
-        const float w = std::max(ui::measureText(ui::FontId::UiBold, m.names[s], 17.f).x + 70.f, 100.f), h = 46.f;
+        if (m.plateName[(size_t)s] != m.names[s]) {  // (measured once per name)
+            m.plateName[(size_t)s] = m.names[s];
+            m.plateW[(size_t)s] = std::max(ui::measureText(ui::FontId::UiBold, m.names[s], 17.f).x + 70.f, 100.f);
+        }
+        const float w = m.plateW[(size_t)s], h = 46.f;
         const float side = hc.x > ui::VW * 0.5f + 150.f ? -1.f : 1.f;
         Vector2 c{hc.x + side * (rad + 14.f + w * 0.5f), hc.y - rad * 0.15f};
         c.x = clampf(c.x, w * 0.5f + 8.f, ui::VW - w * 0.5f - 8.f);
         c.y = clampf(c.y, h * 0.5f + 8.f, ui::VH - 220.f);
-        plates.push_back({c.x - w * 0.5f - 8.f, c.y - h * 0.5f - 8.f, w + 16.f, h + 16.f});
+        plates[(size_t)nPlates++] = {c.x - w * 0.5f - 8.f, c.y - h * 0.5f - 8.f, w + 16.f, h + 16.f};
     }
     // The chalk scoreboard on the back wall (integration): bubbles prefer not to hide the scores either.
     Rectangle board{};
@@ -471,8 +480,9 @@ void Characters::drawOverlay(const Renderer& r) {
     int order[4] = {1, 2, 3, 4};
     std::sort(order, order + 4, [&](int a, int b) { return B.cur[(size_t)a].t > B.cur[(size_t)b].t; });
     const float margin = 14.f;
-    std::vector<Rectangle> taken;
-    std::vector<Placed> placed;
+    std::array<Rectangle, 4> taken{};
+    std::array<Placed, 4> placed{};
+    int nTaken = 0, nPlaced = 0;
     for (int w : order) {
         if (!B.on[(size_t)w]) continue;
         Bubble& b = B.cur[(size_t)w];
@@ -492,22 +502,24 @@ void Characters::drawOverlay(const Renderer& r) {
         bool offscreen = !okTop || !okMouth || mo.x < 0 || mo.x > ui::VW || mo.y < 0 || mo.y > ui::VH;
         const float bw = b.w, bh = b.h;
         Vector2 tail = mo;
-        std::vector<Vector2> cand;
+        std::array<Vector2, 24> candBuf{};  // (at most 1 + 12 + 6 spots)
+        int nCand = 0;
+        auto candPush = [&](Vector2 v) { candBuf[(size_t)nCand++] = v; };
         if (!offscreen) {
             const Rectangle& face = faces[(size_t)w];
             const float bias = clampf((ui::VW * 0.5f - top.x) / (ui::VW * 0.5f), -1.f, 1.f) * bw * 0.3f;
-            cand.push_back({top.x - bw * 0.5f + bias, top.y - bh - 20.f});       // above the head
+            candPush({top.x - bw * 0.5f + bias, top.y - bh - 20.f});       // above the head
             for (int k = -3; k <= 3; ++k)                                        // above, slid sideways
                 for (int j = 0; j < 2; ++j)
-                    if (k != 0) cand.push_back({top.x - bw * 0.5f + (float)k * bw * 0.4f, top.y - bh - 12.f + (float)j * bh * 0.6f});
+                    if (k != 0) candPush({top.x - bw * 0.5f + (float)k * bw * 0.4f, top.y - bh - 12.f + (float)j * bh * 0.6f});
             if (face.width > 0.f) {
                 const float away = -plateSide[(size_t)w];
                 for (int k = 0; k < 2; ++k) {
                     float sd = k == 0 ? away : -away;
                     float x = sd < 0.f ? face.x - 12.f - bw : face.x + face.width + 12.f;
-                    cand.push_back({x, face.y});                                 // beside the face
-                    cand.push_back({x, face.y + face.height * 0.45f});
-                    cand.push_back({x, face.y - bh * 0.6f});
+                    candPush({x, face.y});                                 // beside the face
+                    candPush({x, face.y + face.height * 0.45f});
+                    candPush({x, face.y - bh * 0.6f});
                 }
             }
         } else {
@@ -517,21 +529,22 @@ void Characters::drawOverlay(const Renderer& r) {
             float upv = Vector3DotProduct(d, cam.up);
             float x = right ? ui::VW - bw - margin - 24.f : margin + 24.f;
             float y0 = clampf(ui::VH * 0.30f - upv * 200.f, margin, ui::VH * 0.55f);
-            for (int k = 0; k < 6; ++k) cand.push_back({x, y0 + (k % 2 ? 1.f : -1.f) * (float)((k + 1) / 2) * (bh + 12.f)});
+            for (int k = 0; k < 6; ++k) candPush({x, y0 + (k % 2 ? 1.f : -1.f) * (float)((k + 1) / 2) * (bh + 12.f)});
             tail = {right ? ui::VW - 4.f : 4.f, 0.f};
         }
         Rectangle best{};
         float bestCost = 1e30f;
-        for (Vector2 c : cand) {
+        for (int ci = 0; ci < nCand; ++ci) {
+            const Vector2 c = candBuf[(size_t)ci];
             Rectangle box{clampf(c.x, margin, ui::VW - margin - bw), clampf(c.y, margin, ui::VH - margin - bh), bw, bh};
             const float area = bw * bh;
             float cost = 0.f;
             for (int f = 1; f <= 4; ++f)
                 if (faces[(size_t)f].width > 0.f) cost += 900.f * overlap(box, faces[(size_t)f]) / area;
-            for (const Rectangle& pr : plates) cost += 4000.f * overlap(box, pr) / area;
+            for (int pi = 0; pi < nPlates; ++pi) cost += 4000.f * overlap(box, plates[(size_t)pi]) / area;
             if (board.width > 0.f) cost += 600.f * overlap(box, board) / area;
-            for (const Rectangle& tb : taken)
-                cost += 3000.f * overlap(Rectangle{box.x - 8.f, box.y - 8.f, bw + 16.f, bh + 16.f}, tb) / area;
+            for (int ti = 0; ti < nTaken; ++ti)
+                cost += 3000.f * overlap(Rectangle{box.x - 8.f, box.y - 8.f, bw + 16.f, bh + 16.f}, taken[(size_t)ti]) / area;
             if (!offscreen) {
                 Vector2 anchor{box.x + bw * 0.5f, box.y + bh};
                 cost += 0.35f * std::sqrt((anchor.x - mo.x) * (anchor.x - mo.x) + (anchor.y - mo.y) * (anchor.y - mo.y));
@@ -542,7 +555,7 @@ void Characters::drawOverlay(const Renderer& r) {
                 best = box;
             }
         }
-        taken.push_back(best);
+        taken[(size_t)nTaken++] = best;
         // smooth motion (camera sway, head bobs)
         const float ft = GetFrameTime();
         b.goal = {best.x, best.y};
@@ -558,9 +571,10 @@ void Characters::drawOverlay(const Renderer& r) {
         if (offscreen) tail.y = box.y + bh * 0.5f;
         float aIn = ui::clamp01(b.t / kFadeIn);
         float aOut = ui::clamp01((b.dur + kFadeOut - b.t) / kFadeOut);
-        placed.push_back({w, box, tail, offscreen, std::min(aIn, aOut), 0.86f + 0.14f * ui::easeOutBack(aIn)});
+        placed[(size_t)nPlaced++] = {w, box, tail, offscreen, std::min(aIn, aOut), 0.86f + 0.14f * ui::easeOutBack(aIn)};
     }
-    for (const Placed& P : placed) {
+    for (int pi = 0; pi < nPlaced; ++pi) {
+        const Placed& P = placed[(size_t)pi];
         const Bubble& b = B.cur[P.who];
         float alpha = P.alpha;
         if (alpha <= 0.01f) continue;
@@ -607,7 +621,10 @@ void Characters::drawOverlay(const Renderer& r) {
                 if (t0 <= t1) len = std::min(len, t0);
             };
             clip(faces[(size_t)P.who]);
-            for (const Rectangle& pr : plates) clip({pr.x + 8.f, pr.y + 8.f, pr.width - 16.f, pr.height - 16.f});
+            for (int k = 0; k < nPlates; ++k) {
+                const Rectangle& pr = plates[(size_t)k];
+                clip({pr.x + 8.f, pr.y + 8.f, pr.width - 16.f, pr.height - 16.f});
+            }
         }
         Vector2 tip{base.x + tdir.x * std::max(len, 12.f), base.y + tdir.y * std::max(len, 12.f)};
         // scale around the tail tip (the bubble pops out of the mouth)
@@ -644,8 +661,10 @@ void Characters::drawOverlay(const Renderer& r) {
         float fs = kBubbleFont * sc;
         float lh = (kBubbleFont * 1.12f + 2.f) * sc;
         float y = rr.y + (9.f + kNameFont + 2.f) * sc;
-        for (const std::string& l : b.lines) {
-            Vector2 sz = ui::measureText(ui::FontId::Ui, l, fs);
+        for (size_t li = 0; li < b.lines.size(); ++li) {
+            const std::string& l = b.lines[li];
+            // (the widths measured at the full size by pushLine; only the pop-in's scaled frames measure again)
+            const Vector2 sz{sc == 1.f && li < b.lineW.size() ? b.lineW[li] : ui::measureText(ui::FontId::Ui, l, fs).x, 0.f};
             ui::drawText(ui::FontId::Ui, l, {std::round(rr.x + (rr.width - sz.x) * 0.5f), std::round(y)}, fs,
                          ui::withAlpha(ui::pal::TextDark, alpha));
             y += lh;
@@ -808,13 +827,7 @@ void Cast::submitCrowd(Renderer& r) {
     }
     r.submit(&M.lowerLip[3], &M.lipMat, b.lipW, 0);
     r.submit(&pm.stache, &pm.hairMat, b.headW, 0);
-    if (ocak) {
-        submitTray(r, b.trayW);  // (Ocakçı) the glasses as he filled them; the tray in his hands while he has it
-    } else {
-        r.submit(&M.trayHanger, &M.trayMat, b.trayW, CastShadow);
-        r.submit(&M.trayTea, &M.porcelain, b.trayW, 0);
-        r.submit(&M.trayGlasses, &M.glassMat, b.trayW, Transparent);
-    }
+    submitTray(r, b.trayW);  // (Ocakçı) the glasses as he filled them; the tray in his hands while he has it
     submitCount += 25;
 }
 

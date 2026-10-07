@@ -1,8 +1,10 @@
 // Dama (Türk daması) engine: see Dama.h and docs/kurallar_dama.md.
 #include "core/Dama.h"
+#include "core/Cards.h"
+#include "core/TurkishText.h"
 
 #include <algorithm>
-#include <sstream>
+#include <cctype>
 
 namespace dama {
 
@@ -106,27 +108,7 @@ struct CaptureGen {
 
 } // namespace
 
-// "Kel Mahmut'un", "Hacı Rıza'nın", "Emekli Nuri'nin": the genitive by the last vowel (vowel harmony).
-std::string genitive(const std::string& n) {
-    char last = 0;     // 'a' (a, ı), 'u' (o, u), 'e' (e, i), 'o' (ö, ü)
-    bool endsVowel = false;
-    for (size_t i = 0; i < n.size(); ++i) {
-        const unsigned char ch = (unsigned char)n[i];
-        char v = 0;
-        if (ch == 'a' || ch == 'A') v = 'a';
-        else if (ch == 'o' || ch == 'O' || ch == 'u' || ch == 'U') v = 'u';
-        else if (ch == 'e' || ch == 'E' || ch == 'i') v = 'e';
-        else if (ch == 0xC4 && i + 1 < n.size() && ((unsigned char)n[i + 1] == 0xB1)) v = 'a';            // ı
-        else if (ch == 0xC4 && i + 1 < n.size() && ((unsigned char)n[i + 1] == 0xB0)) v = 'e';            // İ
-        else if (ch == 0xC3 && i + 1 < n.size() && ((unsigned char)n[i + 1] == 0xB6 || (unsigned char)n[i + 1] == 0x96 ||
-                                                     (unsigned char)n[i + 1] == 0xBC || (unsigned char)n[i + 1] == 0x9C))
-            v = 'o';                                                                                       // ö ü
-        if (v) last = v;
-        if ((ch & 0xC0) != 0x80) endsVowel = v != 0;
-    }
-    const char* suf = last == 'u' ? "un" : last == 'e' ? "in" : last == 'o' ? "\xC3\xBCn" : "\xC4\xB1n";
-    return n + "'" + (endsVowel ? "n" : "") + suf;
-}
+std::string genitive(const std::string& n) { return trtext::genitive(n); }
 
 // ---------------------------------------------------------------- board
 
@@ -241,6 +223,15 @@ void applyCompact(Board& b, int p, const CMove& m) {
     b.c[(size_t)m.to()] = piece;
 }
 
+void applyCompact(Board& b, int p, const CMove& m, uint64_t& key) {
+    const Zobrist& z = zobrist();
+    const int8_t piece = b.c[(size_t)m.from];
+    key ^= z.side ^ z.piece[m.from][zIndex(piece)];
+    for (int i = 0; i < m.ncap; ++i) key ^= z.piece[m.cap[(size_t)i]][zIndex(b.c[(size_t)m.cap[(size_t)i]])];
+    applyCompact(b, p, m);
+    key ^= z.piece[m.to()][zIndex(b.c[(size_t)m.to()])];
+}
+
 void applyMoveTo(Board& b, int p, const Move& m) {
     int8_t piece = b.c[(size_t)m.from];
     b.c[(size_t)m.from] = 0;
@@ -285,9 +276,12 @@ std::string LoggedAction::encode() const {
 }
 
 bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
-    std::istringstream in(line);
-    std::string k;
-    if (!(in >> k)) return false;
+    size_t i = 0;
+    while (i < line.size() && std::isspace((unsigned char)line[i])) ++i;
+    size_t j = i;
+    while (j < line.size() && !std::isspace((unsigned char)line[j])) ++j;
+    const std::string k = line.substr(i, j - i);
+    if (k.empty()) return false;
     out = LoggedAction();
     if (k == "n") {
         out.kind = ActKind::NextGame;
@@ -295,11 +289,13 @@ bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
     }
     if (k != "m") return false;
     out.kind = ActKind::Move;
-    if (!(in >> out.player >> out.from)) return false;
-    int v;
-    while (in >> v) {
-        if (v < 0 || v >= kSquares) return false;
-        out.path.push_back(v);
+    std::vector<int> v;
+    if (!kart::parseIntList(line.substr(j), v, 18) || v.size() < 2) return false;
+    out.player = v[0];
+    out.from = v[1];
+    for (size_t q = 2; q < v.size(); ++q) {
+        if (v[q] < 0 || v[q] >= kSquares) return false;
+        out.path.push_back(v[q]);
     }
     return (out.player == 0 || out.player == 1) && out.from >= 0 && out.from < kSquares && !out.path.empty() &&
            out.path.size() <= 16;
@@ -313,7 +309,10 @@ Game::Game(const Rules& r) : rules_(r) {
     players_[1].name = "Kel Mahmut";
 }
 
-void Game::setRules(const Rules& r) { rules_ = r; }
+void Game::setRules(const Rules& r) {
+    if (stage_ != Stage::NotStarted && stage_ != Stage::MatchOver) return; // (only between matches)
+    rules_ = r;
+}
 
 void Game::setPlayer(int p, const std::string& name, bool human) {
     if (p < 0 || p > 1) return;
@@ -326,7 +325,7 @@ std::string Game::says(int p, const std::string& third, const std::string& secon
     return (p >= 0 && p <= 1 ? nameOf(p) + " " : std::string()) + third;
 }
 
-void Game::push(GameEvent e) { events_.push_back(std::move(e)); }
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 std::vector<GameEvent> Game::drainEvents() {
     std::vector<GameEvent> out;
@@ -446,13 +445,11 @@ ActionResult Game::applyMove(int p, const Move& m) {
 }
 
 void Game::afterMove(int p, const Move& m) {
-    // irreversible: a capture or a man's step forward (a man's sideways step can be undone by the next one)
-    const bool forward = !board_.king(m.from) && rowOf(m.to()) != rowOf(m.from);
+    const bool irreversible = isIrreversible(board_, m.from, m.to(), m.isCapture());
     applyMoveTo(board_, p, m);
     ++plies_;
     ++turnNumber_;
     players_[(size_t)p].taken += (int)m.captured.size();
-    const bool irreversible = m.isCapture() || forward;
     quiet_ = irreversible ? 0 : quiet_ + 1;
     log_.push_back({p, m});
     {

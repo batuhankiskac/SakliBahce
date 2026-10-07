@@ -9,6 +9,8 @@ namespace tavla {
 
 namespace {
 
+using detail::mix64;
+
 // ---------------------------------------------------------------------------------------------------------
 // Evaluation weights. Three sets, one per level:
 //   kClassic (Usta): hand-set kahvehane heuristics.
@@ -542,12 +544,6 @@ Chances kurtChances(const Position& pos, int p, Variant v) {
     c.marsWin = c.win * marsTerm(g, pipsMe(f) / kRollPips) / 14.0;
     c.marsLoss = (1.0 - c.win) * marsTerm(f, pipsMe(g) / kRollPips) / 14.0;
     return c;
-}
-
-inline uint64_t mix64(uint64_t z) {
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    return z ^ (z >> 31);
 }
 
 uint64_t stateSig(const Position& pos, const std::vector<int>& left, int p, int turn) {

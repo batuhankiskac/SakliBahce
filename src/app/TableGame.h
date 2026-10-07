@@ -1,5 +1,5 @@
 #pragma once
-// The games that are not okey (tavla, Pişti, Batak, King), as App sees them. Each one owns its engine, bots,
+// The games that are not okey (tavla, dama, Pişti, Batak, King, Altmışaltı, Bezik, Konken), as App sees them. Each one owns its engine, bots,
 // 3D pieces and HUD; App keeps the room, the people, the camera, the screens and the flow (score sheet between
 // hands, final standings) and drives the active game through this interface. The okey games keep their own path
 // (okey::Game + Table3D).

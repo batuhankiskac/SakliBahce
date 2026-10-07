@@ -129,7 +129,7 @@ void Room::Impl::initGardenLife() {
                 const float a = std::clamp((1.f - d) * 4.f, 0.f, 1.f);
                 px[y * N + x] = Color{255, 255, 255, (unsigned char)(a * 255.f)};
             }
-        G.texPetal = LoadTextureFromImage(img);
+        G.texPetal = uploadTexture(img);
         SetTextureFilter(G.texPetal, TEXTURE_FILTER_BILINEAR);
         UnloadImage(img);
     }
@@ -154,7 +154,7 @@ void Room::Impl::freeGardenLife(Renderer& r) {
     for (int k = 0; k < 2; ++k) um(G.birdBody[k]), um(G.birdHead[k]), um(G.birdWing[k]);
     um(G.gullBody);
     um(G.gullWing);
-    if (G.texPetal.id) UnloadTexture(G.texPetal);
+    if (G.texPetal.id) unloadTexture(G.texPetal);
     G.texPetal = Texture2D{};
     G.birds.clear();
     G.gulls.clear();

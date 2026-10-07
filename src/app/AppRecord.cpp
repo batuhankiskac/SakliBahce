@@ -20,28 +20,8 @@ std::string replayDir() {
 
 bool readSave(SavedMatch& sv, const std::string& from) {
     const std::string path = from.empty() ? savePath() : from;
-    if (path.empty() || !FileExists(path.c_str())) return false;
-    char* text = LoadFileText(path.c_str());
-    if (!text) return false;
-    std::istringstream in(text);
-    UnloadFileText(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        if (line.size() < 2 || line[1] != ' ') continue;
-        const std::string v = line.substr(2);
-        switch (line[0]) {
-        case 'g': sv.game = std::atoi(v.c_str()); break;
-        case 's': sv.seed = std::strtoull(v.c_str(), nullptr, 10); break;
-        case 'y': sv.aiTouched = v == "1"; break;
-        case 'l': sv.label = v; break;
-        case 'd': sv.date = v; break;
-        case 'r': sv.result = v; break;
-        case 'k': sv.settings.push_back(v); break;
-        case 'a': sv.actions.push_back(v); break;
-        default: break;
-        }
-    }
-    return sv.game >= 0 && sv.game < (int)ui::GameKind::Count && ui::gameAvailable((ui::GameKind)sv.game);
+    std::string text;
+    return !path.empty() && ui::readFileText(path, text) && parseSave(text, sv);
 }
 
 // ---------------------------------------------------------------- the player's record
@@ -54,8 +34,7 @@ bool App::recording() const {
 
 void App::recordOkeyHand() {
     if (!recording()) return;
-    const ui::Settings& st = screens_.settings();
-    const int kind = std::clamp(st.game, 0, (int)ui::GameKind::Count - 1);
+    const int kind = std::clamp(matchGame_, 0, (int)ui::GameKind::Count - 1);
     const okey::HandResult& r = game_.lastHandResult();
     const bool won = r.winner == HUMAN || (game_.teams() && r.winner == okey::Game::partnerOf(HUMAN));
     record_.hand(kind, won, !game_.classic(), r.score[HUMAN], true);
@@ -63,14 +42,13 @@ void App::recordOkeyHand() {
         for (int s = 1; s <= 3; ++s) memory_.noteMoment(ui::MomentKind::OkeyFinish, 0, s, kind);
     if (game_.handState() == okey::HandState::MatchOver) {
         const int lead = game_.leaderSeat();
-        record_.match(kind, st.difficulty, lead == HUMAN || (game_.teams() && lead == okey::Game::partnerOf(HUMAN)));
+        record_.match(kind, matchSettings_.difficulty, lead == HUMAN || (game_.teams() && lead == okey::Game::partnerOf(HUMAN)));
         std::array<int, 4> tot{};
         for (int s = 0; s < 4; ++s) tot[(size_t)s] = game_.player(s).totalScore;
         memory_.recordMatch(ui::MatchRecord::fromScores(kind, tot, 0xFu, !game_.classic(), game_.teams()));
         noteRankUp();
     }
-    record_.save(statsPath());
-    memory_.save(memoryPath());
+    saveBooks();
 }
 
 void App::recordOtherHand() {
@@ -86,13 +64,21 @@ void App::recordOtherHand() {
         memory_.noteMoment(ui::MomentKind::Mars, sh.starCol == 0 ? 0 : opp, sh.starCol == 0 ? opp : 0, (int)otherKind_);
     }
     if (other_->matchOver()) {
-        record_.match((int)otherKind_, screens_.settings().difficulty, sh.humanWon);
+        record_.match((int)otherKind_, matchSettings_.difficulty, sh.humanWon);
         memory_.recordMatch(ui::MatchRecord::fromStandings((int)otherKind_, other_->seats(), (int)sh.columns.size(),
                                                            sh.ranking, sh.rank, sh.totals));
         noteRankUp();
     }
-    record_.save(statsPath());
-    memory_.save(memoryPath());
+    saveBooks();
+}
+
+// The record and the regulars' memory to disk (never from a run that plays by itself: --achievement-test counts its
+// match for the check, but the player's books stay as they are).
+void App::saveBooks() {
+    if (unattended()) return;
+    const std::string sp = statsPath(), mp = memoryPath();
+    if (!sp.empty() && ensureDirOf(sp)) record_.save(sp);
+    if (!mp.empty() && ensureDirOf(mp)) memory_.save(mp);
 }
 
 // A regular congratulates the player when the match just finished lifted his rank.
@@ -116,7 +102,8 @@ void App::deleteSave() {
 
 // Writes the match in play (called when the player leaves it: to the title, closing the window, between hands).
 void App::saveMatch() {
-    if (unattended() || flow_ == Flow::Title || resuming_ || replayMode_) return;
+    // (a match the Yapay Zeka was asked to play, "Yapay Zekayı İzle", leaves the player's own save alone)
+    if (unattended() || flow_ == Flow::Title || resuming_ || replayMode_ || matchAiStarted_) return;
     const bool over = otherInGame() ? other_->matchOver() : game_.handState() == okey::HandState::MatchOver;
     if (over || (!otherInGame() && game_.handState() == okey::HandState::NotStarted)) {
         deleteSave();
@@ -133,7 +120,7 @@ void App::saveMatch() {
     }
     const std::string path = savePath();
     if (path.empty() || !ensureDirOf(path)) return;
-    SaveFileText(path.c_str(), ("# SaklıBahçe: yarım kalan maç\n" + matchText(label, actions)).c_str());
+    ui::writeFileAtomic(path, "# SaklıBahçe: yarım kalan maç\n" + matchText(label, actions));
     refreshResumable();
 }
 
@@ -165,7 +152,7 @@ void App::archiveMatch(const std::string& result) {
     std::strftime(when, sizeof when, "%d.%m.%Y %H:%M", std::localtime(&now));
     const std::string text = "# SaklıBahçe: maç tekrarı\nd " + std::string(when) + "\nr " + result + "\n" +
                              matchText(ui::gameInfo((ui::GameKind)matchGame_).name, actions);
-    SaveFileText((dir + "/" + stamp + ".txt").c_str(), text.c_str());
+    ui::writeFileAtomic(dir + "/" + stamp + ".txt", text);
     std::vector<std::string> files = listReplays(); // keep the newest 20
     for (size_t i = 20; i < files.size(); ++i) std::remove(files[i].c_str());
     refreshReplays();
@@ -206,20 +193,7 @@ void App::startReplay(int index) {
     if (!readSave(sv, replayFiles_[(size_t)index])) return;
     ui::Settings& st = screens_.settings();
     const ui::Settings mine = st;
-    ui::Settings rules = st;
-    rules.tavlaCesit = 0; // Tavla çeşidi: a save from before the çeşitler has no line for it, it was klasik
-    rules.konkenLastStanding = false; // Konken bitiş: a save from before it has no line for it, it was "ilk yanan"
-    reset101Rules(rules); // 101 kuralları: a save from before them has no lines for them, it was played by the defaults
-    rules.rakip = rules.tavlaRakip = rules.damaRakip = 0; // Rakip: only what the replay says (ui::twoPlayerOpponent)
-    for (const std::string& kv : sv.settings) {
-        const size_t eq = kv.find('=');
-        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
-    }
-    rules.sfx = mine.sfx, rules.ambient = mine.ambient, rules.music = mine.music, rules.animSpeed = mine.animSpeed;
-    rules.hints = mine.hints, rules.playerName = mine.playerName, rules.guide = mine.guide, rules.guideSeen = mine.guideSeen;
-    rules.voices = mine.voices, rules.colorBlind = mine.colorBlind, rules.bigText = mine.bigText;
-    rules.dayTime = mine.dayTime, rules.season = mine.season;
-    rules.game = sv.game;
+    const ui::Settings rules = rulesFromSave(sv, mine);
     if (aiMode_) setAiMode(false);
     st = rules;
     forcedSeed_ = sv.seed;
@@ -234,8 +208,7 @@ void App::startReplay(int index) {
     forcedSeed_.reset();
     st = mine;
     if (otherInGame() && !other_->setReplayMode(true)) {
-        replayMode_ = false;
-        toTitle();
+        toTitle(); // (still in replay mode: nothing of it is saved; toTitle ends the mode)
         screens_.show(ui::ScreenId::Title);
         return;
     }
@@ -298,30 +271,17 @@ void App::drawReplayBadge() {
 }
 
 // "Devam Et": the saved match is started again with its rules and seed, and its actions are replayed.
-void App::resumeSaved() {
+void App::resumeSaved(bool ai) {
     SavedMatch sv;
     if (!readSave(sv)) {
         refreshResumable();
         screens_.show(ui::ScreenId::Title);
         return;
     }
+    setAiMode(ai); // the player's own match ("Devam Et" after "Yapay Zekayı İzle" too); --resume --ai: the AI goes on
     ui::Settings& st = screens_.settings();
     const ui::Settings mine = st;
-    ui::Settings rules = st;
-    rules.tavlaCesit = 0; // Tavla çeşidi: a save from before the çeşitler has no line for it, it was klasik
-    rules.konkenLastStanding = false; // Konken bitiş: a save from before it has no line for it, it was "ilk yanan"
-    reset101Rules(rules); // 101 kuralları: a save from before them has no lines for them, it was played by the defaults
-    rules.rakip = rules.tavlaRakip = rules.damaRakip = 0; // Rakip: only what the save says (ui::twoPlayerOpponent)
-    for (const std::string& kv : sv.settings) {
-        const size_t eq = kv.find('=');
-        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
-    }
-    // the match's rules and level; the player's own preferences stay
-    rules.sfx = mine.sfx, rules.ambient = mine.ambient, rules.music = mine.music, rules.animSpeed = mine.animSpeed;
-    rules.hints = mine.hints, rules.playerName = mine.playerName, rules.guide = mine.guide, rules.guideSeen = mine.guideSeen;
-    rules.voices = mine.voices, rules.colorBlind = mine.colorBlind, rules.bigText = mine.bigText;
-    rules.dayTime = mine.dayTime, rules.season = mine.season;
-    rules.game = sv.game;
+    const ui::Settings rules = rulesFromSave(sv, mine);
     st = rules;
     forcedSeed_ = sv.seed;
     resuming_ = true;
@@ -330,6 +290,10 @@ void App::resumeSaved() {
     if (otherInGame()) {
         ok = other_->restoreState(sv.actions);
         other_->achievementEvents(); // Başarımlar: what the saved part held does not count a second time
+        if (other_->handOver()) { // saved at the end of a hand: it was recorded then; the score sheet comes up
+            flow_ = Flow::HandOver;
+            handOverT_ = SUMMARY_DELAY;
+        }
     } else {
         for (const std::string& line : sv.actions) {
             okey::LoggedAction a;

@@ -632,27 +632,25 @@ void Room::Impl::buildWallDecor(Builders& B, Builders& S) {
     frame(S.woodCast, D_SCORE, 0.055f, 0.035f, Color{112, 72, 44, 255});
     canvasQuad(S.score, decoCenter(D_SCORE, 0.012f), D_SCORE.w, D_SCORE.h, wallN(0), {0, 0, 1024, 696}, 1024, 696);
     {
-        Builders& B = S;
         Vector3 ledge = decoCenter(Deco{0, D_SCORE.a, D_SCORE.y - D_SCORE.h * 0.5f - 0.05f, 0, 0}, 0.05f);
-        rbox(B.woodCast, ledge, {D_SCORE.w * 0.9f, 0.02f, 0.07f}, 0.006f, 2, Color{120, 78, 48, 255});
-        B.paint.capsule({ledge.x - 0.25f, ledge.y + 0.016f, ledge.z + 0.01f}, {ledge.x - 0.17f, ledge.y + 0.016f, ledge.z + 0.015f},
+        rbox(S.woodCast, ledge, {D_SCORE.w * 0.9f, 0.02f, 0.07f}, 0.006f, 2, Color{120, 78, 48, 255});
+        S.paint.capsule({ledge.x - 0.25f, ledge.y + 0.016f, ledge.z + 0.01f}, {ledge.x - 0.17f, ledge.y + 0.016f, ledge.z + 0.015f},
                         0.0055f, 8, Color{240, 238, 228, 255});
-        B.paint.capsule({ledge.x + 0.05f, ledge.y + 0.016f, ledge.z}, {ledge.x + 0.09f, ledge.y + 0.016f, ledge.z + 0.004f}, 0.005f,
+        S.paint.capsule({ledge.x + 0.05f, ledge.y + 0.016f, ledge.z}, {ledge.x + 0.09f, ledge.y + 0.016f, ledge.z + 0.004f}, 0.005f,
                         8, Color{230, 226, 200, 255});
-        rbox(B.cloth, {ledge.x + 0.26f, ledge.y + 0.028f, ledge.z}, {0.12f, 0.035f, 0.05f}, 0.008f, 2, Color{60, 50, 44, 255});
-        rbox(B.woodCast, {ledge.x + 0.26f, ledge.y + 0.052f, ledge.z}, {0.12f, 0.016f, 0.05f}, 0.005f, 2, Color{170, 130, 90, 255});
+        rbox(S.cloth, {ledge.x + 0.26f, ledge.y + 0.028f, ledge.z}, {0.12f, 0.035f, 0.05f}, 0.008f, 2, Color{60, 50, 44, 255});
+        rbox(S.woodCast, {ledge.x + 0.26f, ledge.y + 0.052f, ledge.z}, {0.12f, 0.016f, 0.05f}, 0.005f, 2, Color{170, 130, 90, 255});
     }
     // brass picture light over the scoreboard: wall plate, swan-neck arm, half-round hood with a bulb strip
     {
-        Builders& B = S;
         const float bx = w3d::SCOREBOARD_POS.x, zw = Z0;
         const Color brass{200, 158, 80, 255};
         const float hy = D_SCORE.y + D_SCORE.h * 0.5f + 0.105f, hz = zw + 0.17f;
-        B.brass.roundedBox({bx, hy + 0.05f, zw + 0.008f}, {0.09f, 0.05f, 0.016f}, 0.006f, 2, brass);
-        B.brass.tube({{bx, hy + 0.05f, zw + 0.012f}, {bx, hy + 0.07f, zw + 0.08f}, {bx, hy + 0.045f, hz - 0.03f}, {bx, hy + 0.028f, hz}},
+        S.brass.roundedBox({bx, hy + 0.05f, zw + 0.008f}, {0.09f, 0.05f, 0.016f}, 0.006f, 2, brass);
+        S.brass.tube({{bx, hy + 0.05f, zw + 0.012f}, {bx, hy + 0.07f, zw + 0.08f}, {bx, hy + 0.045f, hz - 0.03f}, {bx, hy + 0.028f, hz}},
                      0.0065f, 6, brass);
         // hood: half cylinder along X, open toward the board and down
-        MeshBuilder& hb = B.brass;
+        MeshBuilder& hb = S.brass;
         const int seg = 10;
         const float r = 0.036f, half = 0.2f;
         for (int k = 0; k <= seg; ++k) {
@@ -672,7 +670,7 @@ void Room::Impl::buildWallDecor(Builders& B, Builders& S) {
             hb.cylinder({0, 0, 0}, r * 1.02f, 0.004f, 12, brass);
             hb.resetTransform();
         }
-        B.bulbs.capsule({bx - half + 0.03f, hy - 0.004f, hz + 0.004f}, {bx + half - 0.03f, hy - 0.004f, hz + 0.004f}, 0.011f, 8,
+        S.bulbs.capsule({bx - half + 0.03f, hy - 0.004f, hz + 0.004f}, {bx + half - 0.03f, hy - 0.004f, hz + 0.004f}, 0.011f, 8,
                         Color{255, 236, 200, 255});
         boardGlowPos = {bx, hy - 0.015f, hz + 0.01f};
         boardLightPos = {bx, hy - 0.1f, zw + 0.36f};
@@ -1526,10 +1524,10 @@ void Room::Impl::buildStreetAndWindows(Builders& B) {
         {
             MeshBuilder cm;
             const float ca0 = o.a0 - 0.02f, ca1 = o.a1 + 0.02f, top = rodY + 0.01f, bot = o.y0 + 0.01f;
-            const int n = std::max(8, (int)((ca1 - ca0) / 0.035f));
+            const int pleats = std::max(8, (int)((ca1 - ca0) / 0.035f));
             Vector3 cc = wallPoint(w, (ca0 + ca1) * 0.5f, (top + bot) * 0.5f, 0.035f);
-            for (int i = 0; i <= n; ++i) {
-                float t = (float)i / n, aa = ca0 + (ca1 - ca0) * t;
+            for (int i = 0; i <= pleats; ++i) {
+                float t = (float)i / pleats, aa = ca0 + (ca1 - ca0) * t;
                 float fold = (i % 2 ? 1.f : -1.f) * 0.012f;                     // gathered pleats
                 Vector3 pt = wallPoint(w, aa, top, 0.035f + fold), pb = wallPoint(w, aa, bot, 0.035f + fold * 0.6f);
                 Vector3 nn = Vector3Normalize(Vector3Add(n0(w), Vector3Scale(wallRight(n0(w)), (i % 2 ? 0.35f : -0.35f))));

@@ -174,12 +174,12 @@ void Room::Impl::freeAll(Renderer& r) {
         r.unloadMat(*m);
     for (Texture2D* t : {&texFloor, &texWall, &texCeil, &texWood, &texWoodDark, &texFelt, &texCondense, &texLace, &texDust, &texVarnish, &texMarble})
         if (t->id) {
-            UnloadTexture(*t);
+            unloadTexture(*t);
             *t = Texture2D{};
         }
     for (RenderTexture2D* c : {&cvArt, &cvStreet, &cvScore, &cvTv, &cvLetter})
         if (c->id) {
-            UnloadRenderTexture(*c);
+            unloadCanvas(*c);
             *c = RenderTexture2D{};
         }
     chairs.clear();
@@ -320,7 +320,8 @@ void Room::Impl::updateProps(float dt) {
         tvGoal = !garden || specialTvOut();  // (the TV is inside; ozelgun: on a derby night one is out in the garden)
     }
     tvRedraw -= dt;
-    if (tvRedraw <= 0.f) {
+    // (only where a TV shows it: inside, or the garden's portable one on a derby night; the canvas is pure drawing)
+    if (tvRedraw <= 0.f && (!garden || specialTvOut())) {
         drawTvCanvas(cvTv, tv, time);
         tvRedraw = 1.f / 24.f;
     }

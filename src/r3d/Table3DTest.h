@@ -19,7 +19,6 @@ void setRackSlots(Table3D& t, const std::vector<int>& slots);
 void pressButton(Table3D& t, int which);
 int draggedTile(Table3D& t);
 bool confirmActive(Table3D& t);
-int selectedTile(Table3D& t);
 int hoverTile(Table3D& t);
 // the keyboard's cursor: put it on a rack slot / the tile it is on now (-1 while the keyboard is not in use)
 void setKeyboardSlot(Table3D& t, int slot);
@@ -31,10 +30,8 @@ Vector3 slotFaceCenter(Table3D& t, int slot);                // resting face cen
 Vector3 meldPoint(Table3D& t, int meld, float along);        // along 0 = front end .. 1 = back end
 Vector3 pileTopPoint(Table3D& t);
 Vector3 leftTopPoint(Table3D& t);
-Vector3 discardPoint(Table3D& t);
 std::string validate(Table3D& t, bool atRest);               // "" if consistent with the game
 std::string lastToast(Table3D& t);
-int flyingCount(Table3D& t);
 int submitCount(Table3D& t);                                 // draw submissions of the last submit()
 
 // pure rack logic

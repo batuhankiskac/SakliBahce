@@ -85,7 +85,7 @@ private:
     std::array<Mesh, CARD_COUNT> meshes_{};
     std::array<Mat, CARD_COUNT> mats_{};
     Mesh halo_{};
-    Mat haloMat_{};
+    std::array<Mat, CARD_COUNT> haloMats_{};
     Mat hintMat_{};
     Texture2D haloTex_{};
     float speed_ = 1.f;

@@ -163,8 +163,8 @@ inline uint64_t aboveMask(int card) { return suitMask(kart::suitOf(card)) & ~((b
 inline int popcount(uint64_t m) { return __builtin_popcountll(m); }
 inline int lowestCard(uint64_t m) { return m ? __builtin_ctzll(m) : -1; }
 inline int highestCard(uint64_t m) { return m ? 63 - __builtin_clzll(m) : -1; }
-uint64_t maskOf(const std::vector<int>& cards);
-std::vector<int> cardsOf(uint64_t mask); // ascending ids (= by suit, then rank)
+using kart::cardsOf; // ascending ids (= by suit, then rank)
+using kart::maskOf;
 
 // What the trick so far demands of the next player.
 struct TrickView {
@@ -187,7 +187,7 @@ public:
     explicit Game(const Rules& r = Rules());
 
     // ---- setup ----
-    void setRules(const Rules& r);                 // only between matches
+    void setRules(const Rules& r);                 // only between matches (ignored while a match is running)
     const Rules& rules() const { return rules_; }
     void setPlayer(int seat, const std::string& name, bool human);
     const std::string& name(int seat) const { return names_[seat]; }

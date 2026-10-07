@@ -62,11 +62,6 @@ Camera2D windowCamera2D(const ui::Viewport& vp) {
     return c;
 }
 
-std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
-    return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
-}
-
 // ---------------------------------------------------------------- setup
 void App::initWindow() {
     SetTraceLogLevel(LOG_WARNING);
@@ -194,9 +189,13 @@ bool App::init() {
         st.game = opt_.game;
         overridden_.game = true;
     }
-    for (const std::string& kv : opt_.sets) { // --set key=value (this run only: never saved when unattended)
+    for (const std::string& kv : opt_.sets) { // --set key=value (this run only, as --hands: see persistSettings)
         const size_t eq = kv.find('=');
-        if (eq != std::string::npos) applySettingLine(st, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
+        if (eq == std::string::npos) continue;
+        const std::string k = trim(kv.substr(0, eq));
+        applySettingLine(st, k, trim(kv.substr(eq + 1)));
+        if (std::find(overridden_.sets.begin(), overridden_.sets.end(), k) == overridden_.sets.end())
+            overridden_.sets.push_back(k);
     }
     if (opt_.noAudio) {
         st.sfx = st.ambient = st.music = false;
@@ -265,8 +264,7 @@ bool App::init() {
     if (opt_.resume && !unattended() && screens_.current() == ui::ScreenId::Title) {
         SavedMatch probe;
         if (readSave(probe)) {
-            if (opt_.ai) setAiMode(true);
-            resumeSaved();
+            resumeSaved(opt_.ai);
             lastFrameT_ = GetTime();
             return true;
         }
@@ -613,7 +611,7 @@ void printUsage(const char* argv0) {
                 "  --level L         rakip seviyesi: 0 Acemi, 1 Usta, 2 Kurt\n"
                 "  --ai              Yapay Zeka modunda başla: senin yerine yapay zeka oynar (oyunda Y ile aç/kapa)\n"
                 "  --katlamali       katlamalı oyun: her açan, öncekinden en az 1 fazlasıyla açar\n"
-                "  --game G          oyun: 101, esli, okey, tavla, pisti, batak, king\n"
+                "  --game G          oyun: 101, esli, okey, tavla, pisti, batak, king, dama, 66, bezik, konken\n"
                 "  --set K=V         bir ayar (ayarlar.txt anahtarları, ör. batakesli=1, pistimasa=2, tavla=3)\n"
                 "  --autoplay        senin yerine de bir Usta bot oynar (izleme modu)\n"
                 "  --speed X         oyunu X kat hızlı oynat (ör. 4)\n"
@@ -626,8 +624,8 @@ void printUsage(const char* argv0) {
                 "  --snapshot DOSYA  gizli pencerede 1600x900 bir kare çizip PNG olarak kaydet ve çık\n"
                 "      --frames N    görüntüden önce simüle edilecek kare sayısı\n"
                 "      --render-last N  3B dünyayı yalnızca son N karede çiz (yazılımsal GL'de hızlı)\n"
-                "      --state S     title | game | summary | matchover | rules | settings | games\n"
-                "      --view V      seat | left | right | back | corner | up | wide\n"
+                "      --state S     title | game | summary | matchover | rules | settings | games | stats | basarimlar\n"
+                "      --view V      seat | left | right | back | corner | up | wide | tv | ocak | ocakci\n"
                 "  --help            bu yardım\n",
                 argv0);
 }
@@ -769,7 +767,7 @@ bool parseArgs(int argc, char** argv, Options& o, std::string& error, bool& want
             o.view = s;
             static const char* const ok[] = {"seat", "left", "right", "back", "corner", "up", "wide", "tv", "ocak", "ocakci"};  // (up, wide: Bahçe; tv, ocak: ozelgun; ocakci: Ocakçı)
             if (std::none_of(std::begin(ok), std::end(ok), [&](const char* k) { return o.view == k; })) {
-                error = "--view: seat, left, right, back, corner, up ya da wide";
+                error = "--view: seat, left, right, back, corner, up, wide, tv, ocak ya da ocakci";
                 return false;
             }
         } else {

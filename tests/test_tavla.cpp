@@ -5,6 +5,7 @@
 //        -o build/tavla/test_tavla
 #include "core/Tavla.h"
 #include "core/TavlaBot.h"
+#include "core/TurkishText.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1943,7 +1944,39 @@ void testVariantFuzzAndReplay() {
 }
 } // namespace
 
+// The shared Turkish text helpers (core/TurkishText.h) the engines' event texts use.
+void testTurkishText() {
+    using namespace trtext;
+    CHECK_EQ(capitalizeFirst("ısmarladın"), std::string("Ismarladın"));
+    CHECK_EQ(capitalizeFirst("iki pul kırdın"), std::string("İki pul kırdın"));
+    CHECK_EQ(capitalizeFirst("çift attın"), std::string("Çift attın"));
+    CHECK_EQ(capitalizeFirst("şeşbeş"), std::string("Şeşbeş"));
+    CHECK_EQ(capitalizeFirst("ğ"), std::string("Ğ"));
+    CHECK_EQ(capitalizeFirst("öndesin"), std::string("Öndesin"));
+    CHECK_EQ(capitalizeFirst("üç"), std::string("Üç"));
+    CHECK_EQ(capitalizeFirst("Kel"), std::string("Kel"));
+    CHECK_EQ(capitalizeFirst("4 kart"), std::string("4 kart"));
+    CHECK_EQ(capitalizeFirst(""), std::string(""));
+    CHECK_EQ(upperTR("istanbul ılık çay, şöyle güzel"), std::string("İSTANBUL ILIK ÇAY, ŞÖYLE GÜZEL"));
+    CHECK_EQ(lowerTR("İSTANBUL IŞIK ÇAĞ ÖĞÜN"), std::string("istanbul ışık çağ öğün"));
+    CHECK_EQ(locative("Kel Mahmut"), std::string("Kel Mahmut'ta"));
+    CHECK_EQ(locative("Hacı Rıza"), std::string("Hacı Rıza'da"));
+    CHECK_EQ(locative("Emekli Nuri"), std::string("Emekli Nuri'de"));
+    CHECK_EQ(locative("Yücel"), std::string("Yücel'de"));
+    CHECK_EQ(locative("Ağaç"), std::string("Ağaç'ta"));
+    CHECK_EQ(dative("Hacı Rıza"), std::string("Hacı Rıza'ya"));
+    CHECK_EQ(dative("Kel Mahmut"), std::string("Kel Mahmut'a"));
+    CHECK_EQ(dative("Emekli Nuri"), std::string("Emekli Nuri'ye"));
+    CHECK_EQ(genitive("Kel Mahmut"), std::string("Kel Mahmut'un"));
+    CHECK_EQ(genitive("Hacı Rıza"), std::string("Hacı Rıza'nın"));
+    CHECK_EQ(genitive("Emekli Nuri"), std::string("Emekli Nuri'nin"));
+    CHECK_EQ(genitive("Ömür"), std::string("Ömür'ün"));
+    CHECK_EQ(genitive("ALİ"), std::string("ALİ'nin"));
+    CHECK_EQ(genitive("ALI"), std::string("ALI'nın"));
+}
+
 int main() {
+    testTurkishText();
     testStartPosition();
     testOpeningRoll();
     testRollAndDiceNames();

@@ -19,19 +19,6 @@ using namespace chr;
 namespace chr {
 namespace {
 
-constexpr float BY = w3d::BG_TABLE_Y;
-
-Key key(float t, Vector3 pos, Vector3 f, Vector3 p, HandPose pose, float lift = 0.f, int ease = 0) {
-    Key k;
-    k.t = t;
-    k.pos = pos;
-    k.fingers = vnorm(f);
-    k.palm = vnorm(Vector3Subtract(p, Vector3Scale(k.fingers, Vector3DotProduct(p, k.fingers))));
-    k.pose = pose;
-    k.lift = lift;
-    k.ease = ease;
-    return k;
-}
 
 const char* const kCheer[] = {"Vay be!", "Helal olsun!", "Oha!", "Maşallah!", "Bravo!", "Vay anasını!", "Ustaya bak, usta!", "Oooo!"};
 const char* const kGroan[] = {"Yazık oldu…", "Tüh!", "Hay aksi!", "Vah vah…", "Olmadı be…", "Eyvah eyvah…"};
@@ -52,8 +39,10 @@ const Vector3 kTavlaWayIn[] = {{-4.75f, 0.f, 2.8f}, {-3.9f, 0.f, 2.75f}, {-3.88f
 const Vector3 kTavlaSpot[2] = {{-1.24f, 0.f, 2.02f}, {-1.30f, 0.f, 2.66f}};
 const int kWatchVariant[2] = {4, 1};
 
-// Standing / walking legs (the çaycı's gait).
-void legs(const Matrix& root, Vector3 hip, float phase, float walk, Matrix thighW[2], Matrix shinW[2]) {
+}  // namespace
+
+// Standing / walking legs (the çaycı's gait; the bystanders' too).
+void walkLegs(const Matrix& root, Vector3 hip, float phase, float walk, Matrix thighW[2], Matrix shinW[2]) {
     const float ph = phase * 2.f * PI_F;
     for (int i = 0; i < 2; ++i) {
         const float sd = i == 0 ? 1.f : -1.f;
@@ -73,8 +62,6 @@ void legs(const Matrix& root, Vector3 hip, float phase, float walk, Matrix thigh
         shinW[i] = boneMatrix(kneeP, ankle, back);
     }
 }
-
-}  // namespace
 
 // ============================================================================ init / look
 void Cast::initLife(Renderer& r) {
@@ -144,14 +131,14 @@ Key Cast::patronRest(const Patron& p, int a, float t) const {
     const bool left = a == 1;
     const float sd = left ? -1.f : 1.f;
     Vector3 f{-sd * 0.4f, 0, -0.92f}, pl{0, -1, 0};
-    Key r = key(t, wristFor({sd * 0.19f, BY + 0.014f, -(w3d::BG_CHAIR_DIST - 0.40f)}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Rest);
+    Key r = mkOrtho(t, wristFor({sd * 0.19f, BY + 0.014f, -(w3d::BG_CHAIR_DIST - 0.40f)}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Rest);
     if (p.prop == 1 && left) {
         Vector3 ff{0.3f, 0.75f, -0.6f}, pp{0.8f, -0.1f, 0.5f};
-        r = key(t, wristFor({-0.10f, 0.93f, -0.30f}, ff, pp, PALM_CENTER, 1.f, true), ff, pp, HandPose::Hold);
+        r = mkOrtho(t, wristFor({-0.10f, 0.93f, -0.30f}, ff, pp, PALM_CENTER, 1.f, true), ff, pp, HandPose::Hold);
     }
     if (p.prop == 2 && !left) {
         Vector3 ff{-0.35f, 0, -0.94f}, pp{-0.94f, 0, 0.35f};
-        r = key(t, wristFor({0.20f, BY + 0.06f, -(w3d::BG_CHAIR_DIST - 0.40f)}, ff, pp, GRIP_CENTER, 1.f, false), ff, pp, HandPose::Grip);
+        r = mkOrtho(t, wristFor({0.20f, BY + 0.06f, -(w3d::BG_CHAIR_DIST - 0.40f)}, ff, pp, GRIP_CENTER, 1.f, false), ff, pp, HandPose::Grip);
     }
     return r;
 }
@@ -189,9 +176,9 @@ void Cast::startPatronReaction(Patron& p) {
                 const float s = a == 0 ? 1.f : -1.f;
                 Vector3 f{0, 1, 0}, pp{0, 0, -1};
                 std::vector<Key> k{Key{}};
-                k.push_back(key(0.3f, {s * 0.30f, 1.47f, -0.12f}, f, pp, HandPose::Fist, 0.f, 1));
-                k.push_back(key(0.65f, {s * 0.33f, 1.52f, -0.10f}, f, pp, HandPose::Fist));
-                k.push_back(key(1.0f, {s * 0.30f, 1.45f, -0.12f}, f, pp, HandPose::Fist));
+                k.push_back(mkOrtho(0.3f, {s * 0.30f, 1.47f, -0.12f}, f, pp, HandPose::Fist, 0.f, 1));
+                k.push_back(mkOrtho(0.65f, {s * 0.33f, 1.52f, -0.10f}, f, pp, HandPose::Fist));
+                k.push_back(mkOrtho(1.0f, {s * 0.30f, 1.45f, -0.12f}, f, pp, HandPose::Fist));
                 k.push_back(patronRest(p, a, p.reactDur));
                 startTrack(p, a, TK_Gesture, k);
             }
@@ -203,8 +190,8 @@ void Cast::startPatronReaction(Patron& p) {
                 std::vector<Key> k{Key{}};
                 float t = 0.3f;
                 for (int i = 0; i < 4; ++i) {
-                    k.push_back(key(t, wristFor({s * 0.10f, 0.97f, -0.36f}, f, pp, PALM_CENTER, 1.f, left), f, pp, HandPose::Open, 0.f, 1));
-                    k.push_back(key(t + 0.15f, wristFor({s * 0.012f, 0.97f, -0.36f}, f, pp, PALM_CENTER, 1.f, left), f, pp, HandPose::Open, 0.f, 2));
+                    k.push_back(mkOrtho(t, wristFor({s * 0.10f, 0.97f, -0.36f}, f, pp, PALM_CENTER, 1.f, left), f, pp, HandPose::Open, 0.f, 1));
+                    k.push_back(mkOrtho(t + 0.15f, wristFor({s * 0.012f, 0.97f, -0.36f}, f, pp, PALM_CENTER, 1.f, left), f, pp, HandPose::Open, 0.f, 2));
                     t += 0.31f;
                 }
                 k.push_back(patronRest(p, a, std::max(t + 0.35f, p.reactDur)));
@@ -213,16 +200,16 @@ void Cast::startPatronReaction(Patron& p) {
         } else {  // half rises, hands pushing on the table edge, one arm thrown up
             Vector3 f{-sd * 0.3f, 0, -0.95f}, pl{0, -1, 0};
             std::vector<Key> k{Key{}};
-            k.push_back(key(0.35f, wristFor({sd * 0.22f, BY + 0.016f, -0.36f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open, 0.02f, 1));
-            k.push_back(key(1.2f, wristFor({sd * 0.22f, BY + 0.016f, -0.37f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open));
+            k.push_back(mkOrtho(0.35f, wristFor({sd * 0.22f, BY + 0.016f, -0.36f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open, 0.02f, 1));
+            k.push_back(mkOrtho(1.2f, wristFor({sd * 0.22f, BY + 0.016f, -0.37f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open));
             k.push_back(patronRest(p, arm, p.reactDur));
             startTrack(p, arm, TK_Gesture, k);
             const int other = 1 - arm;
             if ((other == 0 && freeR) || (other == 1 && freeL)) {
                 const float s = other == 0 ? 1.f : -1.f;
                 std::vector<Key> k2{Key{}};
-                k2.push_back(key(0.45f, {s * 0.26f, 1.55f, -0.22f}, {s * 0.1f, 1, -0.2f}, {0, 0, -1}, HandPose::Open, 0.f, 1));
-                k2.push_back(key(1.1f, {s * 0.28f, 1.52f, -0.2f}, {s * 0.1f, 1, -0.2f}, {0, 0, -1}, HandPose::Open));
+                k2.push_back(mkOrtho(0.45f, {s * 0.26f, 1.55f, -0.22f}, {s * 0.1f, 1, -0.2f}, {0, 0, -1}, HandPose::Open, 0.f, 1));
+                k2.push_back(mkOrtho(1.1f, {s * 0.28f, 1.52f, -0.2f}, {s * 0.1f, 1, -0.2f}, {0, 0, -1}, HandPose::Open));
                 k2.push_back(patronRest(p, other, p.reactDur));
                 startTrack(p, other, TK_Gesture, k2);
             }
@@ -235,7 +222,7 @@ void Cast::startPatronReaction(Patron& p) {
             const bool left = arm == 1;
             Vector3 f = vnorm({-sd * 0.35f, 0.94f, 0.f}), pl{0, -0.2f, 1.f};
             pl = vnorm(Vector3Subtract(pl, Vector3Scale(f, Vector3DotProduct(pl, f))));
-            Key a1 = key(0.45f, wristFor({0.0f, 0.13f, -0.118f}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Open, 0.f, 1);
+            Key a1 = mkOrtho(0.45f, wristFor({0.0f, 0.13f, -0.118f}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Open, 0.f, 1);
             a1.headRel = true;
             a1.pole = {sd * 0.6f, -0.7f, -0.2f};
             Key a2 = a1;
@@ -245,8 +232,8 @@ void Cast::startPatronReaction(Patron& p) {
         } else {  // "boşver": a flick of the open hand down at it
             Vector3 f{sd * 0.2f, 0.2f, -0.95f}, pl{0, -1, 0.1f};
             std::vector<Key> k{Key{}};
-            k.push_back(key(0.35f, wristFor({sd * 0.2f, 1.05f, -0.34f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open, 0.02f, 1));
-            k.push_back(key(0.6f, wristFor({sd * 0.24f, 0.86f, -0.4f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open, 0.f, 2));
+            k.push_back(mkOrtho(0.35f, wristFor({sd * 0.2f, 1.05f, -0.34f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open, 0.02f, 1));
+            k.push_back(mkOrtho(0.6f, wristFor({sd * 0.24f, 0.86f, -0.4f}, f, pl, PALM_CENTER, 1.f, arm == 1), f, pl, HandPose::Open, 0.f, 2));
             k.push_back(patronRest(p, arm, std::min(p.reactDur, 1.5f)));
             startTrack(p, arm, TK_Gesture, k);
         }
@@ -259,15 +246,15 @@ void Cast::startPatronReaction(Patron& p) {
             Vector3 f{-sd * 0.4f, -0.3f, -0.87f}, pl{-sd * 0.6f, -0.8f, 0};
             Vector3 w = wristFor({sd * 0.16f, BY + 0.03f, -0.33f}, f, pl, PALM_CENTER, 1.f, left);
             std::vector<Key> k{Key{}};
-            k.push_back(key(0.35f, Vector3Add(w, {0, 0.1f, 0}), f, pl, HandPose::Open, 0.f, 1));
-            k.push_back(key(0.45f, w, f, pl, HandPose::Open, 0.f, 2));
-            k.push_back(key(0.7f, Vector3Add(w, {0, 0.09f, 0}), f, pl, HandPose::Open, 0.f, 1));
-            k.push_back(key(0.8f, w, f, pl, HandPose::Open, 0.f, 2));
+            k.push_back(mkOrtho(0.35f, Vector3Add(w, {0, 0.1f, 0}), f, pl, HandPose::Open, 0.f, 1));
+            k.push_back(mkOrtho(0.45f, w, f, pl, HandPose::Open, 0.f, 2));
+            k.push_back(mkOrtho(0.7f, Vector3Add(w, {0, 0.09f, 0}), f, pl, HandPose::Open, 0.f, 1));
+            k.push_back(mkOrtho(0.8f, w, f, pl, HandPose::Open, 0.f, 2));
             k.push_back(patronRest(p, arm, p.reactDur));
             startTrack(p, arm, TK_Gesture, k);
         } else {
             Vector3 f{-sd, 0.f, -0.1f}, pl{0, 0, 1};
-            Key a1 = key(0.45f, wristFor({sd * 0.05f, 0.72f, -0.2f}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Open, 0.f, 1);
+            Key a1 = mkOrtho(0.45f, wristFor({sd * 0.05f, 0.72f, -0.2f}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Open, 0.f, 1);
             Key a2 = a1;
             a2.t = 1.4f;
             startTrack(p, arm, TK_Gesture, {Key{}, a1, a2, patronRest(p, arm, p.reactDur)});
@@ -393,23 +380,14 @@ void Cast::updateWatcher(Watcher& w, float dt) {
                        : (r < 0.85f ? headTarget(tavlaSeat > 0 ? tavlaSeat : 2) : viewerPos());
     }
     w.gaze = approachExp(w.gaze, gz, 5.f, dt);
-    {
-        const Matrix inv = MatrixInvert(w.torsoW);
-        const Vector3 tgt = xfPoint(inv, w.gaze);
-        const Vector3 eyes{0, L.spineLen + 0.10f, L.headZ - 0.07f};
-        const Vector3 d = Vector3Subtract(tgt, eyes);
-        const float yawN = clampf(std::atan2(-d.x, -d.z) * 0.8f, -1.1f, 1.1f);
-        const float pitchN = clampf(std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)) * 0.7f, -0.75f, 0.4f);
-        spring(w.hYaw, w.hYawV, yawN, 5.f, dt);
-        spring(w.hPitch, w.hPitchV, pitchN, 5.f, dt);
-    }
+    headLookSpring(w.torsoW, L, w.gaze, 0.7f, -0.75f, 5.f, dt, w.hYaw, w.hYawV, w.hPitch, w.hPitchV);
     float nod = 0.f, shake = 0.f;
     if (laugh) nod = (-0.1f + 0.08f * std::sin(w.reactT * 15.f)) * env;
     if (groan) shake = 0.12f * std::sin(w.reactT * 9.f) * env;
     if (cheer) nod = -0.1f * env;
     const Matrix headT = mul(mul(RX(w.hPitch + nod), RY(w.hYaw + shake)), T({0, L.spineLen, L.headZ}));
     w.headW = mul(headT, w.torsoW);
-    legs(root, hip, w.phase, walk, w.thighW, w.shinW);
+    walkLegs(root, hip, w.phase, walk, w.thighW, w.shinW);
 
     // ---- arms: swinging while walking, hands behind the back while watching, up / on the head / on the belly
     const float hs = L.handScale;

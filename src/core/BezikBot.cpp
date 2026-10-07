@@ -103,7 +103,7 @@ struct Solver {
     }
 };
 
-uint64_t maskOf(const std::vector<int>& v) {
+uint64_t idMaskOf(const std::vector<int>& v) { // (bit = idxOf: the 48-card ids)
     uint64_t r = 0;
     for (int c : v) r |= 1ull << idxOf(c);
     return r;
@@ -306,9 +306,9 @@ void rollout(Game& g, Rng& rng) {
 }
 
 // A deal consistent with what `me` knows: the unseen cards go into the opponent's concealed hand (besides the cards
-// everyone saw go there) and the stock.
-Game determinize(const Game& base, int me, Rng& rng) {
-    Game g = base;
+// everyone saw go there) and the stock. Written into `g` (assigned from `base`: a reused Game keeps its buffers).
+void determinize(Game& g, const Game& base, int me, Rng& rng) {
+    g = base;
     const int opp = 1 - me;
     std::array<bool, NUM_IDS> seen{};
     auto mark = [&](const std::vector<int>& v) {
@@ -334,7 +334,6 @@ Game determinize(const Game& base, int me, Rng& rng) {
     stock.resize(std::min(stock.size(), (size_t)base.stockSize()));
     g.debugSetHand(opp, oh);
     g.debugSetStock(stock);
-    return g;
 }
 
 // Candidate cards: one per (face, where it lies, how it was used).
@@ -391,11 +390,12 @@ struct Bot::Impl {
         const int opp = 1 - seat;
         std::vector<std::vector<double>> vals(cands.size());
         Rng r(seed);
+        Game d, sim; // (reused across the samples)
         for (int k = 0; k < samples; ++k) {
-            const Game d = determinize(base, seat, r);
+            determinize(d, base, seat, r);
             const uint64_t rs = r.next();
             for (size_t i = 0; i < cands.size(); ++i) {
-                Game sim = d;
+                sim = d;
                 Rng rr(rs);
                 if (!sim.playCard(seat, cands[i]).ok) continue;
                 rollout(sim, rr);
@@ -440,8 +440,8 @@ struct Bot::Impl {
             if (!gone[(size_t)c]) oppHand.push_back(c);
         if (oppHand.size() != g.hand(1 - seat).size()) return {}; // (not a whole deal: tests' hand-made ones)
         uint64_t hm[2];
-        hm[seat] = maskOf(g.hand(seat));
-        hm[1 - seat] = maskOf(oppHand);
+        hm[seat] = idMaskOf(g.hand(seat));
+        hm[1 - seat] = idMaskOf(oppHand);
         const Trick& t = g.currentTrick();
         std::vector<CardValue> out;
         for (int c : candidates(g, seat)) {

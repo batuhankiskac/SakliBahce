@@ -29,7 +29,7 @@ float pv(float x, float y, int p, uint32_t s) {
     auto h = [&](int ix, int iy) {
         ix = ((ix % p) + p) % p;
         iy = ((iy % p) + p) % p;
-        return hash1((uint32_t)(ix * 73856093) ^ (uint32_t)(iy * 19349663) ^ (s * 83492791u));
+        return hash1((uint32_t)ix * 73856093u ^ (uint32_t)iy * 19349663u ^ (s * 83492791u));
     };
     int x0 = (int)std::floor(x), y0 = (int)std::floor(y);
     float fx = x - x0, fy = y - y0;

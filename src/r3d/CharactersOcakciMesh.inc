@@ -138,9 +138,8 @@ Mesh buildApronSkirtMesh() {
 
 PersonLook lookOcakci() { return ocakciLookImpl(); }
 
-void buildOcakciPerson(PersonMeshes& pm, Mesh& apronSkirt, Renderer& r) {
+void queueOcakciPerson(MeshJobs& J, PersonMeshes& pm, Mesh& apronSkirt, Renderer& r) {
     const PersonLook L = ocakciLookImpl();
-    MeshJobs J;
     HeadOut h = buildHeadOcakci(L);
     pm.face = h.g;
     pm.hasFace = true;
@@ -149,7 +148,6 @@ void buildOcakciPerson(PersonMeshes& pm, Mesh& apronSkirt, Renderer& r) {
         queueSdf(J, mustacheSdf(h.stacheCol, h.thick, h.span, h.droop, h.y, 204u), 0.0011f, 1800, &pm.stache);
     queueTorso(J, [L]() { return torsoOcakci(L); }, kCellTorso, 22000, &pm.torso);
     queueSdf(J, browSdf(L.browCol, 0.0054f, 1.1f, 104u), 0.0011f, 500, &pm.brow[0], &pm.brow[1]);
-    J.run();
     Mesh up = buildUpperArm(L, false);
     pm.upper[0] = up;
     pm.upper[1] = mirrorMeshX(up);

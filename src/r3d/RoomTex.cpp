@@ -1,5 +1,6 @@
 // Room module: procedural textures (floor, walls, ceiling, glass, dust) and the static canvases (art atlas with
 // pictures/signs/labels, the night street outside, the window lettering). Room owner.
+#include "r3d/Noise.h"
 #include "r3d/RoomInternal.h"
 #include "ui/Common.h"
 
@@ -27,14 +28,7 @@ Color alpha(Color c, float a01) {
     c.a = (unsigned char)std::clamp(a01 * 255.f, 0.f, 255.f);
     return c;
 }
-static inline uint32_t hsh(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
+static inline uint32_t hsh(uint32_t x) { return noise::hash32(x); }
 float hash1(uint32_t x) { return (hsh(x) & 0xffffff) / 16777216.f; }
 static inline float h2(int x, int y, uint32_t s) {
     return (hsh((uint32_t)x * 0x8da6b343u ^ (uint32_t)y * 0xd8163841u ^ s * 0xcb1ab31fu) & 0xffffff) / 16777215.f;
@@ -1297,7 +1291,9 @@ struct StreetMap {  // world (a, y) in metres -> canvas pixels inside a panel re
 void windowLit(const StreetMap& m, float a, float y, float w, float h, int style, okey::Rng& rng) {
     Rectangle r = m.R(a, y, w, h);
     if (m.day()) {  // sky reflected in the glass, lace curtains, a closed shutter here and there
-        const uint32_t hsh = (uint32_t)(a * 131.f) * 2654435761u ^ (uint32_t)(y * 17.f) * 40503u;
+        // (a negative float cast to uint32_t is undefined; clamping at 0 keeps the street exactly as it was drawn on arm64,
+        // where the conversion saturated)
+        const uint32_t hsh = (uint32_t)std::max(0.f, a * 131.f) * 2654435761u ^ (uint32_t)std::max(0.f, y * 17.f) * 40503u;
         DrawRectangleRec({r.x - 4, r.y - 4, r.width + 8, r.height + 8}, Color{150, 142, 132, 255});
         rectGradV(r, Color{168, 190, 212, 255}, Color{88, 104, 124, 255});
         DrawLineEx({r.x + 3, r.y + r.height * 0.8f}, {r.x + r.width * 0.5f, r.y + 3}, 3.f, Color{236, 242, 250, 90});

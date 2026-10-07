@@ -42,8 +42,9 @@ public:
     static const char* bestLabel(int game);  // "En düşük el" (101), "En çok el" (batak), ... or null
 
     // ---- file (the path is chosen by App; empty: nothing is read or written)
+    // load: counts are clamped and kept consistent (wins <= matches, ...); save: atomic (ui/SaveFile.h), false on failure
     void load(const std::string& path);
-    void save(const std::string& path) const;
+    bool save(const std::string& path) const;
 };
 
 } // namespace ui

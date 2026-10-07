@@ -12,23 +12,6 @@ using kart::suitOf;
 // ---------------------------------------------------------------------------------------------------------
 // card-set helpers and the play rules
 
-uint64_t maskOf(const std::vector<int>& cards) {
-    uint64_t m = 0;
-    for (int c : cards)
-        if (kart::isValidCard(c)) m |= bit(c);
-    return m;
-}
-
-std::vector<int> cardsOf(uint64_t mask) {
-    std::vector<int> v;
-    v.reserve((size_t)popcount(mask));
-    while (mask) {
-        v.push_back(__builtin_ctzll(mask));
-        mask &= mask - 1;
-    }
-    return v;
-}
-
 TrickView viewTrick(const std::vector<PlayedCard>& trick, int trump) {
     TrickView v;
     if (trick.empty()) return v;
@@ -98,16 +81,6 @@ int sidePoints(const Rules& r, bool declaring, int tricks, int contract) {
 
 namespace {
 
-std::string suitLower(int suit) {
-    switch (suit) {
-    case kart::Maca: return "maça";
-    case kart::Kupa: return "kupa";
-    case kart::Karo: return "karo";
-    case kart::Sinek: return "sinek";
-    default: return "?";
-    }
-}
-
 std::string signed_(int v) { return (v >= 0 ? "+" : "") + std::to_string(v); }
 
 } // namespace
@@ -118,6 +91,7 @@ std::string signed_(int v) { return (v >= 0 ? "+" : "") + std::to_string(v); }
 Game::Game(const Rules& r) { setRules(r); }
 
 void Game::setRules(const Rules& r) {
+    if (stage_ != Stage::NotStarted && stage_ != Stage::MatchOver) return; // (only between matches)
     rules_ = r;
     rules_.minBid = std::max(1, std::min(13, rules_.minBid));
     rules_.allPassBid = std::max(1, std::min(13, rules_.allPassBid));
@@ -260,7 +234,7 @@ std::string Game::sideSays(int side, const std::string& third, const std::string
     return sideHasHuman(side) ? second : sideName(side) + " " + third;
 }
 
-void Game::push(GameEvent e) { events_.push_back(std::move(e)); }
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 std::vector<GameEvent> Game::drainEvents() {
     std::vector<GameEvent> out;
@@ -420,7 +394,7 @@ ActionResult Game::chooseTrumpImpl(int seat, int suit) {
     e.type = EvType::TrumpChosen;
     e.seat = seat;
     e.suit = suit;
-    e.text = says(seat, "koz " + suitLower(suit) + " dedi", "Koz " + suitLower(suit) + " dedin");
+    e.text = says(seat, "koz " + std::string(kart::suitLowerTR(suit)) + " dedi", "Koz " + std::string(kart::suitLowerTR(suit)) + " dedin");
     push(std::move(e));
 
     if (rules_.esli && rules_.openDummy) {
@@ -455,7 +429,7 @@ ActionResult Game::checkPlay(int seat, int card) const {
     if (v.ledSuit < 0) return ActionResult::fail("Koz henüz açılmadı");
     if (hand & suitMask(v.ledSuit)) {
         if (suitOf(card) != v.ledSuit)
-            return ActionResult::fail("Elinde " + suitLower(v.ledSuit) + " varken başka renk atamazsın");
+            return ActionResult::fail("Elinde " + std::string(kart::suitLowerTR(v.ledSuit)) + " varken başka renk atamazsın");
         return ActionResult::fail("Yükseltmen gerek");
     }
     if (suitOf(card) != trump_) return ActionResult::fail("Koz çakmalısın");

@@ -718,7 +718,21 @@ void testBots() {
 
 } // namespace
 
+// The rules change only between matches.
+void testSetRulesBetweenMatches() {
+    Game g;
+    Rules r;
+    r.winsNeeded = 5;
+    g.setRules(r);
+    CHECK_EQ(g.rules().winsNeeded, 5);
+    g.startMatch(3);
+    r.winsNeeded = 1;
+    g.setRules(r); // (ignored: a match is running)
+    CHECK_EQ(g.rules().winsNeeded, 5);
+}
+
 int main() {
+    testSetRulesBetweenMatches();
     testStart();
     testManMoves();
     testKingMoves();

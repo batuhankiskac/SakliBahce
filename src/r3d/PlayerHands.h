@@ -69,9 +69,6 @@ public:
     bool shown() const;                    // drawn at all this frame
     std::function<void(ui::Sfx)> playSfx;
 
-    // Debug / snapshots: start an idle behaviour now ("sip", "tespih", "smoke"); SAKLI_ELLER does the same at start.
-    void debugIdle(const char* what);
-
 private:
     struct Impl;
     Impl* impl_ = nullptr;

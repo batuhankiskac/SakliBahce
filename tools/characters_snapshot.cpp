@@ -758,10 +758,10 @@ int main(int argc, char** argv) {
                     o1.upper[0].triangleCount, o1.fore[0].triangleCount, o1.brow[0].triangleCount, M.hand[0][0].triangleCount,
                     M.hand[0][1].triangleCount, M.eye[0].triangleCount, M.lidUpper.triangleCount, M.lowerLip[2].triangleCount);
         const chr::PersonMeshes& p0 = M.patron[0];
-        std::printf("  patron: head %d torso %d lower %d | chair %d seat %d glass %d saucer %d tea %d tray %d/%d/%d dice %d\n",
+        std::printf("  patron: head %d torso %d lower %d | chair %d seat %d glass %d saucer %d tea %d tray %d dice %d\n",
                     p0.head.triangleCount, p0.torso.triangleCount, p0.lower.triangleCount, M.chair.triangleCount,
                     M.chairSeat.triangleCount, M.glass.triangleCount, M.saucer.triangleCount, M.tea[10].triangleCount,
-                    M.trayHanger.triangleCount, M.trayGlasses.triangleCount, M.trayTea.triangleCount, M.dice.triangleCount);
+                    M.trayHanger.triangleCount, M.dice.triangleCount);
         auto timeFrames = [&](bool withChars) {
             glFinish();
             auto t0 = std::chrono::steady_clock::now();

@@ -1,6 +1,7 @@
 // Table3D HUD (2D, ui virtual coordinates): name plates over the opponents' heads, pile count and okey
 // preview, istaka hints (işlek marks, group values), status bar with the live meld counter, buttons,
 // toasts, drag hints and the confirm modal. Kept light: the 3D table is the star.
+#include "r3d/GameHud.h"
 #include "r3d/Table3DInternal.h"
 
 #include <algorithm>
@@ -22,15 +23,8 @@ Color fadeC(Color c, float a) {
     return c;
 }
 // Largest size <= `size` (down to `minSize`) at which `text` fits `maxW`, else shortened with "…".
-std::string fitText(FontId f, std::string text, float maxW, float& size, float minSize) {
-    while (size > minSize && ui::measureText(f, text, size).x > maxW) size -= 1.f;
-    if (ui::measureText(f, text, size).x <= maxW) return text;
-    while (!text.empty() && ui::measureText(f, text + "…", size).x > maxW) {
-        size_t cut = text.size() - 1;
-        while (cut > 0 && ((unsigned char)text[cut] & 0xC0) == 0x80) --cut;
-        text.erase(cut);
-    }
-    return text + "…";
+std::string fitText(FontId f, const std::string& text, float maxW, float& size, float minSize) {
+    return hudFitText(f, text, maxW, size, minSize);  // (GameHud.h: cached)
 }
 void pill(Rectangle r, Color fill, Color line) {
     ui::tilegfx::roundedRect({r.x + 1, r.y + 2, r.width, r.height}, r.height * 0.5f, rgba(0, 0, 0, 70));

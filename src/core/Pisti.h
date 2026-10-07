@@ -129,7 +129,7 @@ public:
     explicit Game(const Rules& rules = Rules());
 
     // ---- setup ----
-    void setRules(const Rules& r);                     // only between matches (resets seat set)
+    void setRules(const Rules& r);                     // only between matches (ignored while one is running; resets seat set)
     const Rules& rules() const { return rules_; }
     void setPlayer(int seat, const std::string& name, bool human);
     const std::string& name(int seat) const { return names_[seat]; }

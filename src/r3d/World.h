@@ -88,9 +88,7 @@ inline Vector3 tavlaToWorld(Vector3 l) {
     // yaw 90: local x -> world -z, local z -> world +x
     return {TAVLA_TABLE.x + l.z, l.y, TAVLA_TABLE.z - l.x};
 }
-inline Vector3 tavlaDirToWorld(Vector3 d) { return {d.z, d.y, -d.x}; }
 inline Vector3 tavlaToLocal(Vector3 w) { return {TAVLA_TABLE.z - w.z, w.y, w.x - TAVLA_TABLE.x}; }
-inline Vector3 tavlaDirToLocal(Vector3 d) { return {-d.z, d.y, d.x}; }
 // The tavla table's frame as a matrix (local -> world, raymath "then" order: MatrixMultiply(local, tavlaFrame())).
 inline Matrix tavlaFrame() {
     Matrix m{};

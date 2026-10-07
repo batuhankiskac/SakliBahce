@@ -346,9 +346,9 @@ void Room::Impl::freeGarden(Renderer& r) {
         r.unloadMat(*m);
     for (Texture2D* t : {&G.texGround, &G.texCobble, &G.texRubble, &G.texWhite, &G.texFacade, &G.texBark, &G.texRoof, &G.texAwning,
                          &G.texShutter, &G.texStraw})
-        if (t->id) UnloadTexture(*t);
+        if (t->id) unloadTexture(*t);
     for (RenderTexture2D* c : {&G.cvPano, &G.cvSigns})
-        if (c->id) UnloadRenderTexture(*c);
+        if (c->id) unloadCanvas(*c);
     // (the garden's statics live in `statics` and are freed with the room's)
     delete gd;
     gd = nullptr;

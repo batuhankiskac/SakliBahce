@@ -36,59 +36,55 @@ float pointX(int i) {
 bool bottomRow(int i) { return i < 12; }
 
 Texture2D makeDieTexture() {
-    const int cell = 128;
-    RenderTexture2D rt = LoadRenderTexture(cell * 6, cell);
-    BeginTextureMode(rt);
-    ClearBackground(Color{244, 238, 222, 255});
-    for (int v = 1; v <= 6; ++v) {
-        const float cx = (float)(v - 1) * cell + cell * 0.5f, cy = cell * 0.5f;
-        DrawRectangleLinesEx({(float)(v - 1) * cell + 1.f, 1.f, cell - 2.f, cell - 2.f}, 3.f, Color{214, 204, 184, 255});
-        const float o = cell * 0.27f, pr = cell * 0.085f;
-        const Color pc = v == 1 ? Color{170, 30, 34, 255} : Color{34, 26, 22, 255};
-        auto pip = [&](float x, float y) { DrawCircleV({cx + x, cy + y}, v == 1 ? pr * 1.5f : pr, pc); };
-        if (v % 2 == 1) pip(0, 0);
-        if (v >= 2) { pip(-o, -o); pip(o, o); }
-        if (v >= 4) { pip(o, -o); pip(-o, o); }
-        if (v == 6) { pip(-o, 0); pip(o, 0); }
+    static Image cached{};  // (painted and read back once per session)
+    if (!cached.data) {
+        const int cell = 128;
+        RenderTexture2D rt = LoadRenderTexture(cell * 6, cell);
+        BeginTextureMode(rt);
+        ClearBackground(Color{244, 238, 222, 255});
+        for (int v = 1; v <= 6; ++v) {
+            const float cx = (float)(v - 1) * cell + cell * 0.5f, cy = cell * 0.5f;
+            DrawRectangleLinesEx({(float)(v - 1) * cell + 1.f, 1.f, cell - 2.f, cell - 2.f}, 3.f, Color{214, 204, 184, 255});
+            const float o = cell * 0.27f, pr = cell * 0.085f;
+            const Color pc = v == 1 ? Color{170, 30, 34, 255} : Color{34, 26, 22, 255};
+            auto pip = [&](float x, float y) { DrawCircleV({cx + x, cy + y}, v == 1 ? pr * 1.5f : pr, pc); };
+            if (v % 2 == 1) pip(0, 0);
+            if (v >= 2) { pip(-o, -o); pip(o, o); }
+            if (v >= 4) { pip(o, -o); pip(-o, o); }
+            if (v == 6) { pip(-o, 0); pip(o, 0); }
+        }
+        EndTextureMode();
+        cached = LoadImageFromTexture(rt.texture);
+        ImageFlipVertical(&cached);
+        unloadCanvas(rt);
     }
-    EndTextureMode();
-    Image img = LoadImageFromTexture(rt.texture);
-    ImageFlipVertical(&img);
-    UnloadRenderTexture(rt);
-    Texture2D t = LoadTextureFromImage(img);
-    UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
-    return t;
+    return uploadMipmapped(cached, true);
 }
 
 // The katlama zarı's faces in the die texture's cell order: cell k (1..6) shows 2^k.
 Texture2D makeCubeTexture() {
-    const int cell = 128;
-    RenderTexture2D rt = LoadRenderTexture(cell * 6, cell);
-    BeginTextureMode(rt);
-    ClearBackground(Color{238, 230, 210, 255});
-    const Font& f = ui::font(ui::FontId::Tile);
-    for (int k = 1; k <= 6; ++k) {
-        const float x0 = (float)(k - 1) * cell;
-        DrawRectangleLinesEx({x0 + 2.f, 2.f, cell - 4.f, cell - 4.f}, 4.f, Color{150, 40, 32, 255});
-        DrawRectangleLinesEx({x0 + 10.f, 10.f, cell - 20.f, cell - 20.f}, 1.5f, Color{150, 40, 32, 160});
-        const std::string t = std::to_string(1 << k);
-        const float fs = t.size() > 1 ? 80.f : 100.f;
-        const Vector2 m = MeasureTextEx(f, t.c_str(), fs, 0.f);
-        DrawTextEx(f, t.c_str(), {x0 + (cell - m.x) * 0.5f, (cell - m.y) * 0.5f + 2.f}, fs, 0.f, Color{40, 26, 20, 255});
+    static Image cached{};  // (painted and read back once per session)
+    if (!cached.data) {
+        const int cell = 128;
+        RenderTexture2D rt = LoadRenderTexture(cell * 6, cell);
+        BeginTextureMode(rt);
+        ClearBackground(Color{238, 230, 210, 255});
+        const Font& f = ui::font(ui::FontId::Tile);
+        for (int k = 1; k <= 6; ++k) {
+            const float x0 = (float)(k - 1) * cell;
+            DrawRectangleLinesEx({x0 + 2.f, 2.f, cell - 4.f, cell - 4.f}, 4.f, Color{150, 40, 32, 255});
+            DrawRectangleLinesEx({x0 + 10.f, 10.f, cell - 20.f, cell - 20.f}, 1.5f, Color{150, 40, 32, 160});
+            const std::string t = std::to_string(1 << k);
+            const float fs = t.size() > 1 ? 80.f : 100.f;
+            const Vector2 m = MeasureTextEx(f, t.c_str(), fs, 0.f);
+            DrawTextEx(f, t.c_str(), {x0 + (cell - m.x) * 0.5f, (cell - m.y) * 0.5f + 2.f}, fs, 0.f, Color{40, 26, 20, 255});
+        }
+        EndTextureMode();
+        cached = LoadImageFromTexture(rt.texture);
+        ImageFlipVertical(&cached);
+        unloadCanvas(rt);
     }
-    EndTextureMode();
-    Image img = LoadImageFromTexture(rt.texture);
-    ImageFlipVertical(&img);
-    UnloadRenderTexture(rt);
-    Texture2D t = LoadTextureFromImage(img);
-    UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
-    return t;
+    return uploadMipmapped(cached, true);
 }
 
 // The katlama zarı's faces: normal, the direction the number's top points to, texture cell (2^cell is shown).
@@ -137,10 +133,8 @@ Texture2D makeGlowTexture(bool stripes = false) {
             }
             px[y * n + x] = Color{255, 255, 255, (unsigned char)std::clamp(a * 255.f, 0.f, 255.f)};
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadMipmapped(img, false);
     UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
     return t;
 }
 
@@ -231,6 +225,8 @@ bool Tavla3D::init(Renderer& r) {
     dieTex_ = makeDieTexture();
     dieMesh_ = makeDie();
     matDie_ = r.makeMat(WHITE, dieTex_, 0.4f, 50.f);
+    // a used die greys (its own material: the renderer keeps the pointer until render())
+    matDieUsed_ = r.makeMat(Color{150, 144, 136, 255}, dieTex_, 0.4f, 50.f);
     cubeTex_ = makeCubeTexture();
     cubeMesh_ = makeCube();
     matCube_ = r.makeMat(WHITE, cubeTex_, 0.35f, 40.f, 0.18f); // a little self-lit: the numbers read in the shade
@@ -269,10 +265,10 @@ void Tavla3D::shutdown(Renderer& r) {
     for (Mesh* m : {&boardMesh_, &fieldMesh_, &pointMesh_[0], &pointMesh_[1], &checkerMesh_, &dieMesh_, &glowMesh_, &cubeMesh_})
         UnloadMesh(*m);
     for (Mat* m : {&matWood_, &matField_, &matPoint_[0], &matPoint_[1], &matChecker_[0], &matChecker_[1], &matCheckerHi_, &matCheckerSel_,
-                   &matDie_, &matGlow_, &matGlowSel_, &matGlowTarget_, &matCube_, &matGlowTargetCB_, &matGlowFocus_})
+                   &matDie_, &matDieUsed_, &matGlow_, &matGlowSel_, &matGlowTarget_, &matCube_, &matGlowTargetCB_, &matGlowFocus_})
         r.unloadMat(*m);
     for (Texture2D* t : {&woodTex_, &dieTex_, &glowTex_, &cubeTex_, &stripeTex_})
-        if (t->id) UnloadTexture(*t);
+        if (t->id) unloadTexture(*t);
     ready_ = false;
 }
 
@@ -619,8 +615,7 @@ void Tavla3D::submit(Renderer& r) {
     }
     for (const Die& d : dice_) {
         if (!d.visible) continue;
-        matDie_.material.maps[MATERIAL_MAP_DIFFUSE].color = d.used ? Color{150, 144, 136, 255} : WHITE;
-        r.submit(&dieMesh_, &matDie_,
+        r.submit(&dieMesh_, d.used ? &matDieUsed_ : &matDie_,
                  MatrixMultiply(MatrixMultiply(QuaternionToMatrix(d.qCur), MatrixTranslate(d.cur.x, d.cur.y, d.cur.z)), F), CastShadow);
     }
     if (cube_.visible) {

@@ -596,5 +596,53 @@ void Cast::updateFace(Opponent& o, float dt, float jawGest) {
     }
 }
 
+// ============================================================================ the standing men's heads (the çaycı, the ocakçı, the bystanders)
+void headLookSpring(const Matrix& torsoW, const PersonLook& L, Vector3 gaze, float pitchGain, float pitchMin, float omega,
+                    float dt, float& yaw, float& yawV, float& pitch, float& pitchV) {
+    const Vector3 tgt = xfPoint(MatrixInvert(torsoW), gaze);
+    const Vector3 eyes{0, L.spineLen + 0.10f, L.headZ - 0.07f};
+    const Vector3 d = Vector3Subtract(tgt, eyes);
+    const float yawN = clampf(std::atan2(-d.x, -d.z) * 0.8f, -1.1f, 1.1f);
+    const float pitchN = clampf(std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)) * pitchGain, pitchMin, 0.4f);
+    spring(yaw, yawV, yawN, omega, dt);
+    spring(pitch, pitchV, pitchN, omega, dt);
+}
+
+float blinkStep(Rng& rng, float& blinkIn, float& blinkT, float dt, float maxGap, float dur) {
+    blinkIn -= dt;
+    if (blinkIn <= 0.f && blinkT < 0.f) {
+        blinkT = 0.f;
+        blinkIn = rng.f(2.f, maxGap);
+    }
+    float lidClose = 0.f;
+    if (blinkT >= 0.f) {
+        blinkT += dt;
+        lidClose = std::sin(clampf(blinkT / dur, 0.f, 1.f) * PI_F);
+        if (blinkT > dur) blinkT = -1.f;
+    }
+    return lidClose;
+}
+
+void standingEyes(const FaceGeo& fg, const Matrix& headW, Vector3 gaze, float lidBase, float lidClose, float browTilt, float dt,
+                  float& eYaw, float& ePitch, Matrix eyeW[2], Matrix lidW[2], Matrix browW[2]) {
+    const Vector3 tH = xfPoint(MatrixInvert(headW), gaze);
+    const Vector3 dd = Vector3Subtract(tH, Vector3Lerp(fg.eye[0], fg.eye[1], 0.5f));
+    eYaw = approachExp(eYaw, clampf(std::atan2(-dd.x, -dd.z), -0.5f, 0.5f), 25.f, dt);
+    ePitch = approachExp(ePitch, clampf(std::atan2(dd.y, std::sqrt(dd.x * dd.x + dd.z * dd.z)), -0.45f, 0.35f), 25.f, dt);
+    const float edge = lerpf(lidBase - ePitch * 0.55f, 0.6f, lidClose);
+    const float es = fg.eyeR / 0.0135f;
+    for (int i = 0; i < 2; ++i) {
+        eyeW[i] = mul(mul(S3(es, es, es), RX(ePitch), RY(eYaw)), T(fg.eye[i]), headW);
+        lidW[i] = mul(mul(S3(es, es, es), RX(-edge)), T(fg.eye[i]), headW);
+        browW[i] = mul(RZ((i == 0 ? 1.f : -1.f) * browTilt), T(fg.brow[i]), headW);
+    }
+}
+
+void standingMouth(const FaceGeo& fg, const Matrix& headW, float jaw, Matrix& mouthW, Matrix& lipW) {
+    mouthW = mul(S3(1.1f, 0.06f + 0.9f * jaw, 1.f), T(Vector3Add(fg.mouth, {0, -0.004f * jaw, 0.004f - 0.004f * smooth01(jaw * 4.f)})),
+                 headW);
+    lipW = mul(T(Vector3Add(fg.mouth, {0, -0.0058f - 0.009f * jaw, -0.0015f})), headW);
+}
+
 } // namespace chr
 } // namespace r3d

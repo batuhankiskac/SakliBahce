@@ -75,8 +75,16 @@ struct CMove {
     int to() const { return n > 0 ? path[(size_t)n - 1] : from; }
 };
 void generateCompact(const Board& b, int p, std::vector<CMove>& out); // same set and order as generateMoves
+// A capture or a man's step forward (on `b`, before the move): the positions before it can never come back (a man's
+// sideways step can be undone by the next one). The engine's repetition / no-progress rules and the bots share it.
+inline bool isIrreversible(const Board& b, int from, int to, bool capture) {
+    return capture || (!b.king(from) && rowOf(to) != rowOf(from));
+}
+inline bool isIrreversible(const Board& b, const CMove& m) { return isIrreversible(b, m.from, m.to(), m.ncap > 0); }
 Move toMove(const CMove& m);
 void applyCompact(Board& b, int p, const CMove& m);
+// The same, keeping `key` (b.hash(p) before) the Zobrist key of the new board with 1 - p to move.
+void applyCompact(Board& b, int p, const CMove& m, uint64_t& key);
 // Only whether p has a capture (cheaper than generateMoves).
 bool hasCapture(const Board& b, int p);
 // Applies a move from generateMoves (no legality check) to b.
@@ -178,7 +186,7 @@ public:
     explicit Game(const Rules& r = Rules());
 
     // ---- setup ----
-    void setRules(const Rules& r);                 // only between matches
+    void setRules(const Rules& r);                 // only between matches (ignored while a match is running)
     const Rules& rules() const { return rules_; }
     void setPlayer(int p, const std::string& name, bool human); // p = 0 (bottom) or 1 (across)
     void startMatch(uint64_t seed);                // scores 0, game 0 -> Playing
@@ -202,7 +210,7 @@ public:
     const std::vector<Move>& legalMoves() const { return legal_; }
     // The current game's moves, oldest first.
     const std::vector<MoveRecord>& gameLog() const { return log_; }
-    // Position keys since the last irreversible move (a capture or a man's move), oldest first, the current one last.
+    // Position keys since the last irreversible move (a capture or a man's step forward), oldest first, the current one last.
     const std::vector<uint64_t>& history() const { return hist_; }
 
     // ---- actions ----

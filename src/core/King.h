@@ -86,7 +86,6 @@ struct Rules {
     bool mustOvertrumpWhenRuffing = false;// ruffing over another ruff: must overtrump if you can
     bool mustBeatLedSuit = false;         // plain suit: must beat the highest card (Batak style; off in King)
 
-    int numPlayers() const { return 4; }
     int choicesPerPlayer() const { return kozPerPlayer + cezaPerPlayer; }
     int numHands() const { return 4 * choicesPerPlayer(); }
     int points(Contract c) const { return isCeza(c) ? -unit[(int)c] : unit[(int)c]; }
@@ -108,8 +107,8 @@ inline CardMask suitMask(int s) { return 0x1FFFull << (13 * s); }
 inline int popcount(CardMask m) { return __builtin_popcountll(m); }
 inline int lowestCard(CardMask m) { return m ? __builtin_ctzll(m) : -1; }
 inline int highestCard(CardMask m) { return m ? 63 - __builtin_clzll(m) : -1; }
-CardMask maskOf(const std::vector<int>& cards);
-std::vector<int> cardsOf(CardMask m); // ascending ids
+using kart::cardsOf; // ascending ids
+using kart::maskOf;
 
 // Cards worth points in a card penalty (Kupa: all hearts, Erkek: K+J, Kız: Q, Rıfkı: Kupa Papaz); 0 otherwise.
 CardMask penaltyCards(Contract c);

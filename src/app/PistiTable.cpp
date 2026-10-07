@@ -116,25 +116,18 @@ public:
                          "Yerde " + std::to_string(g_.tableCount()) + "  \xC2\xB7  destede " + std::to_string(g_.deckCount()),
                          Color{226, 216, 196, 255}, 14.f);
         Color sc = ui::pal::TextLight;
-        std::string st;
         const int a = actor();
-        if (g_.stage() == pisti::Stage::HandOver) st = "El bitti";
-        else if (g_.stage() == pisti::Stage::MatchOver) st = "Oyun bitti";
-        else if (now_ < dealUntil_) st = "Kâğıtlar dağıtılıyor…";
-        else if (a == 0 && replay_) st = replaySelfStatus();
-        else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
-        else if (a == 0) {
-            sc = ui::pal::Highlight;
-            st = "Bir kâğıt at";
+        const char* ended = g_.stage() == pisti::Stage::HandOver ? "El bitti" : g_.stage() == pisti::Stage::MatchOver ? "Oyun bitti" : nullptr;
+        const std::string st = statusLine(ended, now_ < dealUntil_, "Kâğıtlar dağıtılıyor…", a, aiSeat, sc, [&] {
+            std::string mine = "Bir kâğıt at";
             const int look = hover_ >= 0 ? hover_ : (ui::keyboardNav() ? kbCard_ : -1); // (the mouse's or the keyboard's)
             if (hints_ && look >= 0) {
                 const int pp = g_.wouldPisti(look);
-                if (pp > 0) st = "Pişti! +" + std::to_string(pp);
-                else if (g_.wouldCapture(look)) st = "Bununla yerdekileri alırsın";
+                if (pp > 0) mine = "Pişti! +" + std::to_string(pp);
+                else if (g_.wouldCapture(look)) mine = "Bununla yerdekileri alırsın";
             }
-        } else if (a > 0) {
-            st = names_[(size_t)a] + " düşünüyor…";
-        }
+            return mine;
+        });
         std::vector<std::pair<std::string, Color>> parts;
         if (g_.stage() != pisti::Stage::NotStarted) {
             const int side = g_.sideOf(0);

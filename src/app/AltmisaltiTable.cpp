@@ -188,26 +188,20 @@ public:
             hud_.label3D(r, layPoint({STOCK_X + 0.01f, w3d::TABLE_Y + 0.01f, 0.085f}), koz + tail, Color{238, 198, 112, 255}, 14.f);
         }
         Color sc = ui::pal::TextLight;
-        std::string st;
         const int a = actor();
-        if (g_.stage() == altmisalti::Stage::HandOver) st = "El bitti";
-        else if (g_.stage() == altmisalti::Stage::MatchOver) st = "Maç bitti";
-        else if (now_ < dealUntil_) st = "Kâğıtlar dağıtılıyor…";
-        else if (a == 0 && replay_) st = replaySelfStatus();
-        else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
-        else if (a == 0) {
-            sc = ui::pal::Highlight;
-            if (g_.ledCard() >= 0) st = g_.strict() ? "Üstüne at: renge uy, eli yükselt" : "Üstüne bir kâğıt at";
-            else st = "Bir kâğıt aç";
+        const char* ended = g_.stage() == altmisalti::Stage::HandOver ? "El bitti"
+                            : g_.stage() == altmisalti::Stage::MatchOver ? "Maç bitti" : nullptr;
+        const std::string st = statusLine(ended, now_ < dealUntil_, "Kâğıtlar dağıtılıyor…", a, aiSeat, sc, [&] {
+            std::string mine = g_.ledCard() >= 0 ? (g_.strict() ? "Üstüne at: renge uy, eli yükselt" : "Üstüne bir kâğıt at")
+                                                 : "Bir kâğıt aç";
             const int look = hover_ >= 0 ? hover_ : (ui::keyboardNav() ? kbCard_ : -1);
             if (hints_ && look >= 0 && g_.ledCard() < 0) {
                 const int m = g_.marriageValue(0, look);
-                if (m > 0) st = "Evlilik: " + std::to_string(m) + (g_.tricks(0) == 0 ? " (ilk elini alınca yazılır)" : "");
-                else if (look == g_.faceUpTrump() && g_.canExchange(0)) st = "Koz dokuzuyla bu kozu al";
+                if (m > 0) mine = "Evlilik: " + std::to_string(m) + (g_.tricks(0) == 0 ? " (ilk elini alınca yazılır)" : "");
+                else if (look == g_.faceUpTrump() && g_.canExchange(0)) mine = "Koz dokuzuyla bu kozu al";
             }
-        } else if (a > 0) {
-            st = names_[(size_t)a] + " düşünüyor…";
-        }
+            return mine;
+        });
         std::vector<std::pair<std::string, Color>> parts;
         if (started) {
             parts.push_back({"Puanın: " + std::to_string(g_.points(0)), Color{160, 236, 160, 255}});

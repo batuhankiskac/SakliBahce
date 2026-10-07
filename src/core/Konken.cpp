@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <unordered_map>
 
 namespace konken {
 
@@ -269,6 +268,74 @@ int swapIndex(const Meld& m, int card) {
 
 namespace {
 
+// The partition DP's memo: (covered, jokers left) -> (best score, choice). An open-addressing table kept per thread
+// and reused by every call (bestPartition runs thousands of times a decision); a generation stamp empties it at once.
+class PartitionMemo {
+public:
+    struct Entry {
+        int score = 0, choice = 0;
+    };
+    void reset() {
+        if (slots_.empty()) slots_.resize(4096);
+        if (++gen_ == 0) { // (the stamp wrapped: clear the stale ones for real)
+            for (Slot& s : slots_) s.gen = 0;
+            gen_ = 1;
+        }
+        count_ = 0;
+    }
+    const Entry* find(uint64_t key) const {
+        const size_t mask = slots_.size() - 1;
+        for (size_t i = hashOf(key) & mask;; i = (i + 1) & mask) {
+            const Slot& s = slots_[i];
+            if (s.gen != gen_) return nullptr;
+            if (s.key == key) return &s.e;
+        }
+    }
+    void put(uint64_t key, Entry e) {
+        if ((count_ + 1) * 2 > slots_.size()) grow();
+        Slot& s = slotFor(key);
+        if (s.gen != gen_) {
+            s.gen = gen_;
+            s.key = key;
+            ++count_;
+        }
+        s.e = e;
+    }
+
+private:
+    struct Slot {
+        uint64_t key = 0;
+        uint32_t gen = 0;
+        Entry e;
+    };
+    std::vector<Slot> slots_;
+    uint32_t gen_ = 0;
+    size_t count_ = 0;
+    static size_t hashOf(uint64_t k) { return (size_t)((k * 0x9E3779B97F4A7C15ull) >> 20); }
+    Slot& slotFor(uint64_t key) {
+        const size_t mask = slots_.size() - 1;
+        for (size_t i = hashOf(key) & mask;; i = (i + 1) & mask) {
+            Slot& s = slots_[i];
+            if (s.gen != gen_ || s.key == key) return s;
+        }
+    }
+    void grow() {
+        std::vector<Slot> old;
+        old.swap(slots_);
+        slots_.assign(old.size() * 2, Slot());
+        const uint32_t g = gen_;
+        gen_ = 1;
+        count_ = 0;
+        for (const Slot& s : old)
+            if (s.gen == g) put(s.key, s.e);
+    }
+};
+
+PartitionMemo& partitionMemo() {
+    thread_local PartitionMemo m;
+    return m;
+}
+
 struct Cand {
     uint32_t mask = 0;           // real cards (indices into the naturals)
     int jokers = 0;
@@ -285,7 +352,7 @@ struct Search {
     int must = -1;                               // natural index that must be laid
     std::vector<std::vector<int>> byLowest;      // candidate indices by their lowest real card
     std::vector<Cand> cands;
-    std::unordered_map<uint64_t, std::pair<int, int>> memo; // (covered, jokers left) -> (best score, choice)
+    PartitionMemo& memo = partitionMemo(); // (covered, jokers left) -> (best score, choice)
     int nodes = 0;
 
     // Ties go to the meld with more real cards: a joker not needed inside a meld is spare, and spare jokers are put on
@@ -341,8 +408,7 @@ struct Search {
         const uint32_t all = nat.empty() ? 0u : (uint32_t)((1ull << nat.size()) - 1);
         if (covered == all) return 0;
         const uint64_t key = (uint64_t)covered | ((uint64_t)j << 32);
-        auto it = memo.find(key);
-        if (it != memo.end()) return it->second.first;
+        if (const PartitionMemo::Entry* e = memo.find(key)) return e->score;
         ++nodes;
         int low = 0;
         while (covered >> low & 1u) ++low;
@@ -362,7 +428,7 @@ struct Search {
                 choice = ci;
             }
         }
-        memo[key] = {bestScore, choice};
+        memo.put(key, {bestScore, choice});
         return bestScore;
     }
 };
@@ -371,6 +437,7 @@ struct Search {
 
 Partition bestPartition(const std::vector<int>& cards, Goal goal, int mustUse, bool attachJokers, int jokerPoints) {
     Partition out;
+    partitionMemo().reset();
     Search s;
     std::vector<int> jk;
     for (int c : cards) {
@@ -497,9 +564,9 @@ Partition bestPartition(const std::vector<int>& cards, Goal goal, int mustUse, b
         uint32_t covered = 0;
         int j = jUse;
         while (covered != all) {
-            const auto it = s.memo.find((uint64_t)covered | ((uint64_t)j << 32));
-            if (it == s.memo.end()) break;
-            const int ch = it->second.second;
+            const PartitionMemo::Entry* e = s.memo.find((uint64_t)covered | ((uint64_t)j << 32));
+            if (!e) break;
+            const int ch = e->choice;
             int low = 0;
             while (covered >> low & 1u) ++low;
             if (ch < 0) {
@@ -655,7 +722,7 @@ std::string Game::says(int s, const std::string& third, const std::string& secon
     return seats_[(size_t)s].human ? second : seats_[(size_t)s].name + " " + third;
 }
 
-void Game::push(GameEvent e) { events_.push_back(std::move(e)); }
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 std::vector<GameEvent> Game::drainEvents() {
     std::vector<GameEvent> v;
@@ -868,8 +935,16 @@ bool Game::canDiscard(int seat, int card, std::string* why) const {
     };
     if (!inHand(seat, card)) return fail("Bu kâğıt elinde değil");
     if (taken_ >= 0) return fail("Yerden aldığın " + cardAccusativeTR(taken_) + " bu tur masada kullanmalısın (ya da geri ver)");
-    if (isJoker(card) && handSize(seat) > 1) return fail("Joker atılmaz");
+    if (isJoker(card) && !mayDiscardJoker(seat)) return fail("Joker atılmaz");
     return true;
+}
+
+bool Game::mayDiscardJoker(int seat) const {
+    const SeatInfo& si = seats_[(size_t)seat];
+    if (si.hand.size() <= 1) return true;
+    for (int c : si.hand)
+        if (!isJoker(c)) return false;
+    return !(si.opened && fitsTable(si.hand.front()));
 }
 
 bool Game::fitsTable(int card) const {

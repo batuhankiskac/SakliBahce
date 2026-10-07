@@ -295,7 +295,9 @@ void ocakSound(Cast& c, ui::Sfx s, float vol, float pitch = 1.f) {
 // ---------------------------------------------------------------- choosing what to do
 // On a derby night in the garden the old portable TV stands where his crate is (RoomSpecial.cpp, ozelgun): the crate
 // has gone inside for the night, and so has his rinsing.
-bool crateAway(const Cast& c) { return c.specialGarden && c.specialDay == 4; }
+bool crateAway(const Cast& c) { return c.gardenTv(); }
+// a TV to watch where he stands: inside, or the derby's portable one in the garden
+bool tvThere(const Cast& c, const Ocakci& o) { return o.venue == 0 || c.gardenTv(); }
 
 int chatPatron(const Cast& c) {
     for (int i = 0; i < (int)c.patrons.size(); ++i) {
@@ -311,6 +313,7 @@ void startAct(Ocakci& o, int act, float dur) {
     o.t = 0.f;
     o.dur = dur;
     o.wait = 0.f;
+    o.bezAt = 0;  // every job starts with the cloth over his shoulder (Rinse and Wipe take it in their own time)
 }
 
 void startFill(Ocakci& o) {
@@ -357,7 +360,7 @@ void chooseNext(Cast& c, Ocakci& o) {
         if (f == "ocak") return startAct(o, OA_Stoke, 4.4f);
         if (f == "sil") return startAct(o, OA_Wipe, 6.4f);
         if (f == "gazete") return startAct(o, OA_Paper, 14.f);
-        if (f == "tv" && o.venue == 0) return startAct(o, OA_Tv, 12.f);
+        if (f == "tv" && tvThere(c, o)) return startAct(o, OA_Tv, 12.f);
         if (f == "sohbet") {
             o.partner = chatPatron(c);
             if (o.partner >= 0) return startAct(o, OA_Chat, 8.f);
@@ -376,7 +379,7 @@ void chooseNext(Cast& c, Ocakci& o) {
     w[OA_Stoke] = 0.9f;
     w[OA_Paper] = 1.1f;
     w[OA_Chat] = (boyHere || pat >= 0) ? 1.5f : 0.f;
-    w[OA_Tv] = o.venue == 0 ? 1.3f : 0.f;
+    w[OA_Tv] = tvThere(c, o) ? 1.3f : 0.f;
     float sum = 0.f;
     for (float x : w) sum += x;
     float r = c.rng.f(0.f, sum);
@@ -759,9 +762,10 @@ void planFrame(Cast& c, Ocakci& o, float t0, float t, Plan& P) {
     // ------------------------------------------------ the match on the TV (inside), arms crossed
     case OA_Tv: {
         const bool watching = t < o.dur - 1.2f;
-        P.yaw = watching ? yawTo(kHome, kTvPos) : kFacingX;
+        const Vector3 tv = c.tvPosition();
+        P.yaw = watching ? yawTo(kHome, tv) : kFacingX;
         P.lean = 0.01f;
-        P.gaze = watching ? kTvPos : o.idleGaze;
+        P.gaze = watching ? tv : o.idleGaze;
         if (t > 0.6f && t < o.dur - 1.0f) {
             P.h[0] = localHT(R, {-0.10f, 1.13f, -0.20f}, {-0.85f, 0.1f, 0.5f}, {0.3f, 0.f, 0.95f}, PALM_CENTER, false, hs, HandPose::Rest);
             P.h[1] = localHT(R, {0.11f, 1.10f, -0.21f}, {0.85f, 0.1f, 0.5f}, {-0.3f, 0.f, 0.95f}, PALM_CENTER, true, hs, HandPose::Rest);
@@ -776,12 +780,21 @@ void planFrame(Cast& c, Ocakci& o, float t0, float t, Plan& P) {
 } // namespace
 
 // ============================================================================ init / shutdown
-void Cast::initOcakci(Renderer& r) {
+void Cast::queueOcakci(MeshJobs& J, Renderer& r) {
     if (ocak) return;
     ocak = new Ocakci();
+    ocak->L = lookOcakci();
+    queueOcakciPerson(J, ocak->pm, ocak->apron, r);
+}
+
+void Cast::initOcakci(Renderer& r) {
+    if (ocak && ocak->built) return;
+    if (!ocak) {  // (not queued with the others)
+        MeshJobs J;
+        queueOcakci(J, r);
+        J.run();
+    }
     Ocakci& o = *ocak;
-    o.L = lookOcakci();
-    buildOcakciPerson(o.pm, o.apron, r);
     o.kettle.world = o.kettle.rest = T(kKettleRest);
     o.demlik.world = o.demlik.rest = T(kDemlikRest);
     o.glass.world = o.glass.rest = glassRestW();
@@ -851,17 +864,22 @@ void Cast::updateOcakci(float dt) {
             break;
         case OA_Wipe:
             if (o.t < 0.6f) startFill(o);
-            else if (o.t < 5.0f) o.t = 5.0f;
+            else if (o.t < 5.0f) o.t = 5.0f - 1e-3f;
             break;
         case OA_Rinse:  // the glass goes back on the crate first
             if (o.t < 0.9f) startFill(o);
-            else if (o.t < 6.6f) o.t = 6.6f;
+            else if (o.t < 6.6f) o.t = 6.6f - 1e-3f;  // just before: crossed() is strict, the cloth goes back at 6.6
             break;
         case OA_Brew:
             if (o.t < 0.7f) startFill(o);
             break;  // else: the pots go back first (a few seconds)
         }
     }
+    // the place changed under a job that needs it: no TV out here any more, the man he talked to gone
+    if (o.act == OA_Tv && !tvThere(*this, o) && o.t < o.dur - 1.2f) o.t = o.dur - 1.2f;
+    if (o.act == OA_Chat && o.partner >= 0 &&
+        (o.partner >= (int)patrons.size() || !patrons[(size_t)o.partner].present) && o.t < o.dur - 0.6f)
+        o.t = o.dur - 0.6f;
     if (o.t >= o.dur) chooseNext(*this, o);
     const float t0 = o.t;
     float t1 = o.t + dt;
@@ -925,15 +943,7 @@ void Cast::updateOcakci(float dt) {
     o.torsoW = mul(mul(RY(0.04f * std::cos(ph) * walk), RX(-o.lean - breath)), mul(T(hip), root));
     o.apronW = mul(mul(T(Vector3Negate(hip)), RX(-o.lean * 0.5f)), mul(T(hip), root));
     o.gaze = approachExp(o.gaze, P.gaze, 5.f, dt);
-    {
-        const Vector3 tgt = xfPoint(MatrixInvert(o.torsoW), o.gaze);
-        const Vector3 eyes{0, L.spineLen + 0.10f, L.headZ - 0.07f};
-        const Vector3 d = Vector3Subtract(tgt, eyes);
-        const float yawN = clampf(std::atan2(-d.x, -d.z) * 0.8f, -1.1f, 1.1f);
-        const float pitchN = clampf(std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)) * 0.75f, -0.75f, 0.4f);
-        spring(o.hYaw, o.hYawV, yawN, 5.f, dt);
-        spring(o.hPitch, o.hPitchV, pitchN, 5.f, dt);
-    }
+    headLookSpring(o.torsoW, L, o.gaze, 0.75f, -0.75f, 5.f, dt, o.hYaw, o.hYawV, o.hPitch, o.hPitchV);
     const float nod = P.talk > 0.f ? 0.03f * std::sin(time * 7.f) : 0.f;
     o.headW = mul(mul(RX(o.hPitch + nod), RY(o.hYaw)), mul(T({0, L.spineLen, L.headZ}), o.torsoW));
 
@@ -996,34 +1006,13 @@ void Cast::updateOcakci(float dt) {
     if (o.trayOwner == 1) follow(o.tray, trayInHand(hs));
 
     // ---- face
-    o.blinkIn -= dt;
-    if (o.blinkIn <= 0.f && o.blinkT < 0.f) {
-        o.blinkT = 0.f;
-        o.blinkIn = rng.f(2.f, 5.5f);
-    }
-    float lidClose = 0.f;
-    if (o.blinkT >= 0.f) {
-        o.blinkT += dt;
-        lidClose = std::sin(clampf(o.blinkT / 0.16f, 0.f, 1.f) * PI_F);
-        if (o.blinkT > 0.16f) o.blinkT = -1.f;
-    }
+    const float lidClose = blinkStep(rng, o.blinkIn, o.blinkT, dt, 5.5f, 0.16f);
     const FaceGeo& fg = o.pm.face;
-    const Vector3 tH = xfPoint(MatrixInvert(o.headW), o.gaze);
-    const Vector3 dd = Vector3Subtract(tH, Vector3Lerp(fg.eye[0], fg.eye[1], 0.5f));
-    o.eYaw = approachExp(o.eYaw, clampf(std::atan2(-dd.x, -dd.z), -0.5f, 0.5f), 25.f, dt);
-    o.ePitch = approachExp(o.ePitch, clampf(std::atan2(dd.y, std::sqrt(dd.x * dd.x + dd.z * dd.z)), -0.45f, 0.35f), 25.f, dt);
-    const float edge = lerpf(-0.30f - o.ePitch * 0.55f, 0.6f, lidClose);  // heavier lids than the çaycı's
-    const float es = fg.eyeR / 0.0135f;
-    for (int i = 0; i < 2; ++i) {
-        o.eyeW[i] = mul(mul(S3(es, es, es), RX(o.ePitch), RY(o.eYaw)), T(fg.eye[i]), o.headW);
-        o.lidW[i] = mul(mul(S3(es, es, es), RX(-edge)), T(fg.eye[i]), o.headW);
-        o.browW[i] = mul(RZ((i == 0 ? 1.f : -1.f) * 0.04f), T(fg.brow[i]), o.headW);
-    }
+    // (heavier lids than the çaycı's)
+    standingEyes(fg, o.headW, o.gaze, -0.30f, lidClose, 0.04f, dt, o.eYaw, o.ePitch, o.eyeW, o.lidW, o.browW);
     const float jawGoal = P.talk > 0.f ? clampf(0.22f + 0.22f * std::sin(time * 15.f) + 0.18f * std::sin(time * 6.3f), 0.f, 1.f) : 0.f;
     o.jaw = approachExp(o.jaw, jawGoal, 18.f, dt);
-    o.mouthW = mul(S3(1.1f, 0.06f + 0.9f * o.jaw, 1.f),
-                   T(Vector3Add(fg.mouth, {0, -0.004f * o.jaw, 0.004f - 0.004f * smooth01(o.jaw * 4.f)})), o.headW);
-    o.lipW = mul(T(Vector3Add(fg.mouth, {0, -0.0058f - 0.009f * o.jaw, -0.0015f})), o.headW);
+    standingMouth(fg, o.headW, o.jaw, o.mouthW, o.lipW);
 
     // ---- steam: the open kettle, the pouring spouts, the fresh glasses on the counter
     if (renderer) {

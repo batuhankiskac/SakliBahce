@@ -5,8 +5,8 @@
 // machine, peak, RMS, and a pitch track summary. With --speak it also opens the audio device, initialises ui::Audio as
 // the game does and times Audio::speak() itself (the main thread's cost per line).
 //
-// Build (from the repo root):
-//   clang++ -std=c++17 -O2 -Isrc -isystem /opt/homebrew/include src/ui/Audio.cpp tools/voice_render.cpp \
+// Build: make tools (-> $(BUILD)/voice_render), or standalone from the repo root:
+//   clang++ -std=c++17 -O2 -Isrc -isystem /opt/homebrew/include src/ui/Audio*.cpp tools/voice_render.cpp \
 //       /opt/homebrew/lib/libraylib.a -framework Cocoa -framework IOKit -framework OpenGL -framework CoreVideo \
 //       -framework CoreAudio -framework AudioToolbox -framework CoreFoundation -o build/voice_render
 // Run:   build/voice_render OUT_DIR [--speak] [--plan] [--voices 1,2,3,4,5,6] [--line "Hah, işte şimdi oldu!"]
@@ -27,7 +27,7 @@
 #include <vector>
 
 namespace ui {
-namespace audio_dev { // defined in src/ui/Audio.cpp
+namespace audio_dev { // defined in src/ui/AudioDev.cpp
 double renderVoice(int sampleRate, int voice, const std::string& text, unsigned long long seed, bool chunked,
                    std::vector<float>& stereoOut);
 bool timeVoice(int sampleRate, int voice, const std::string& text, unsigned long long seed, double out[3]);

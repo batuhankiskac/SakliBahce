@@ -150,21 +150,13 @@ public:
         }
         // status
         Color sc = ui::pal::TextLight;
-        std::string st;
         const int a = actor();
-        if (g_.stage() == batak::Stage::HandOver) st = "El bitti";
-        else if (g_.stage() == batak::Stage::MatchOver) st = "Oyun bitti";
-        else if (now_ < dealUntil_) st = "Kağıtlar dağıtılıyor…";
-        else if (a == 0 && replay_) st = replaySelfStatus();
-        else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
-        else if (a == 0) {
-            sc = ui::pal::Highlight;
-            if (g_.stage() == batak::Stage::Bidding) st = "İhale sırası sende";
-            else if (g_.stage() == batak::Stage::ChoosingTrump) st = "Kozu seç";
-            else st = g_.current() != 0 ? "Açık elden bir kağıt at" : "Bir kağıt at";
-        } else if (a > 0) {
-            st = names_[(size_t)a] + " düşünüyor…";
-        }
+        const char* ended = g_.stage() == batak::Stage::HandOver ? "El bitti" : g_.stage() == batak::Stage::MatchOver ? "Oyun bitti" : nullptr;
+        const std::string st = statusLine(ended, now_ < dealUntil_, "Kağıtlar dağıtılıyor…", a, aiSeat, sc, [&] {
+            if (g_.stage() == batak::Stage::Bidding) return "İhale sırası sende";
+            if (g_.stage() == batak::Stage::ChoosingTrump) return "Kozu seç";
+            return g_.current() != 0 ? "Açık elden bir kağıt at" : "Bir kağıt at";
+        });
         std::vector<std::pair<std::string, Color>> parts;
         if (g_.stage() == batak::Stage::Playing || g_.stage() == batak::Stage::HandOver) {
             const int side = g_.sideOf(0);

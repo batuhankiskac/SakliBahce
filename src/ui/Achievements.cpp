@@ -1,11 +1,11 @@
 // Başarımlar (see Achievements.h).
 #include "ui/Achievements.h"
+#include "ui/SaveFile.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
-#include <fstream>
 #include <sstream>
 
 namespace ui {
@@ -198,14 +198,10 @@ std::string Achievements::text() const {
 }
 
 void Achievements::parse(const std::string& text) {
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t eq = line.find('=');
-        if (line.empty() || line[0] == '#' || eq == std::string::npos) continue;
-        const std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-        const long n = std::strtol(v.c_str(), nullptr, 10);
-        const unsigned u = (unsigned)std::strtoul(v.c_str(), nullptr, 10);
+    constexpr long kBig = 1000000000;
+    forEachKeyValue(text, [&](const std::string& k, const std::string& v) {
+        const long n = parseLong(v, -kBig, kBig);
+        const unsigned u = (unsigned)parseLong(v, 0, 0xFFFFFFFFL);
         if (k == "durum.galibiyetserisi") winStreak_ = (int)std::max(0L, n);
         else if (k == "durum.yenilgiserisi") loseStreak_ = (int)std::max(0L, n);
         else if (k == "durum.songun") lastDay_ = (int)n;
@@ -216,43 +212,22 @@ void Achievements::parse(const std::string& text) {
         else if (k == "durum.mevsimler") seasons_ = u & 15u;
         else {
             const int i = find(k);
-            if (i < 0) continue;
+            if (i < 0) return;
             const size_t comma = v.find(',');
-            progress_[(size_t)i] = std::clamp((int)n, 0, 1000000);
-            day_[(size_t)i] = comma == std::string::npos ? -1 : std::max(-1, std::atoi(v.c_str() + comma + 1));
+            progress_[(size_t)i] = (int)parseLong(v, 0, 1000000);
+            day_[(size_t)i] = comma == std::string::npos ? -1 : (int)parseLong(v.substr(comma + 1), -1, kBig);
         }
-    }
+    });
 }
 
 void Achievements::load(const std::string& path) {
-    if (path.empty()) return;
-    std::ifstream in(path);
-    if (!in) return;
-    std::ostringstream all;
-    all << in.rdbuf();
-    parse(all.str());
+    std::string text;
+    if (readFileText(path, text)) parse(text);
 }
 
-void Achievements::save(const std::string& path) const {
-    if (path.empty()) return;
-    std::ofstream out(path);
-    out << text();
-}
+bool Achievements::save(const std::string& path) const { return writeFileAtomic(path, text()); }
 
-int Achievements::today() {
-    const std::time_t t = std::time(nullptr);
-    std::tm lt{};
-    localtime_r(&t, &lt);
-    // days from the civil date (Howard Hinnant's days_from_civil), as Memory::today()
-    int y = lt.tm_year + 1900;
-    const unsigned mo = (unsigned)lt.tm_mon + 1, d = (unsigned)lt.tm_mday;
-    y -= mo <= 2;
-    const int era = (y >= 0 ? y : y - 399) / 400;
-    const unsigned yoe = (unsigned)(y - era * 400);
-    const unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + (int)doe - 719468;
-}
+int Achievements::today() { return todayDays(); }
 
 std::string Achievements::dateText(int day) {
     if (day < 0) return {};

@@ -12,7 +12,9 @@
 // only ever the human's victim (kHumanTook*).
 #include "ui/Banter.h"
 
+#include "core/TurkishText.h"
 #include "ui/Memory.h"
+#include "ui/Utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -824,8 +826,9 @@ int dialogueLen(const Dialogue& d) {
 constexpr float kGlobalGap = 2.4f;
 constexpr float kSeatCooldown = 7.5f;
 
+// (characters, not bytes: a line full of ç ş ğ stays up as long as its ASCII twin)
 float bubbleSeconds(const std::string& text) {
-    return std::clamp(1.9f + 0.045f * (float)text.size(), 2.4f, 4.6f);
+    return std::clamp(1.9f + 0.045f * (float)utf8Count(text), 2.4f, 4.6f);
 }
 
 std::string lastWord(const std::string& s) {
@@ -835,18 +838,8 @@ std::string lastWord(const std::string& s) {
     return s.substr(b == std::string::npos ? 0 : b + 1, e - (b == std::string::npos ? 0 : b + 1) + 1);
 }
 
-// Upper-case the first letter (ASCII + Turkish i -> İ); the rest stays as is.
-std::string capitalizeFirst(const std::string& s) {
-    if (s.empty()) return s;
-    unsigned char c = (unsigned char)s[0];
-    if (c == 'i') return std::string("\xC4\xB0") + s.substr(1);
-    if (c >= 'a' && c <= 'z') {
-        std::string r = s;
-        r[0] = (char)(c - 32);
-        return r;
-    }
-    return s;
-}
+// Upper-case the first letter, Turkish-aware: ASCII (i -> İ) and ç ğ ı ö ş ü -> Ç Ğ I Ö Ş Ü; the rest stays as is.
+std::string capitalizeFirst(const std::string& s) { return trtext::capitalizeFirst(s); }
 
 } // namespace
 
@@ -1065,7 +1058,7 @@ bool Banter::external(int seat, const std::string& text, bool important) {
     p.line.seat = seat;
     p.line.text = text;
     p.line.delay = important ? 0.3f : 0.6f;
-    p.line.seconds = std::clamp(1.6f + 0.045f * (float)text.size(), 2.2f, 4.2f);
+    p.line.seconds = std::clamp(1.6f + 0.045f * (float)utf8Count(text), 2.2f, 4.2f);
     p.line.maxWait = important ? 4.f : 3.f;
     queue_.push_back(p);
     remember(text);

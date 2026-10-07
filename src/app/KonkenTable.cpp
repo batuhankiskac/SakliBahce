@@ -98,6 +98,14 @@ int sortKey(int c) {
 
 class KonkenTable final : public CardTableBase {
 public:
+    // (son kalan) A match left part way: the burned regulars come back to the table and the room leaves the fast
+    // watching speed, before the base puts the cards away.
+    void shutdown() override {
+        for (int s = 1; s < 4; ++s)
+            if (ctx_.characters) ctx_.characters->setSeatOut(s, false, true);
+        if (fast_) setFast(false);
+        CardTableBase::shutdown();
+    }
     void startMatch(const ui::Settings& st, const std::array<std::string, 4>& names, uint64_t seed) override {
         kk::Rules rules;
         rules.openMin = std::clamp(st.konkenOpen, 30, 120);
@@ -225,26 +233,18 @@ public:
         }
 
         Color sc = ui::pal::TextLight;
-        std::string st;
         const int a = actor();
-        if (g_.stage() == kk::Stage::HandOver) st = "El bitti";
-        else if (g_.stage() == kk::Stage::MatchOver) st = "Parti bitti";
-        else if (dealing()) st = "Kâğıtlar dağıtılıyor…";
-        else if (g_.isOut(0)) st = "Yandın: kalanları izliyorsun" + std::string(fast_ ? " (hızlı)" : "") +
-                                   (a > 0 ? "  \xC2\xB7  " + names_[(size_t)a] + " düşünüyor…" : std::string());
-        else if (a == 0 && replay_) st = replaySelfStatus();
-        else if (a == 0 && aiSeat) st = "Yapay zeka düşünüyor…";
-        else if (a == 0) {
-            sc = ui::pal::Highlight;
-            if (g_.stage() == kk::Stage::Draw)
-                st = g_.mustDrawStock() ? "Desteden çek" : "Desteden ya da yerden bir kâğıt çek";
-            else if (g_.takenCard() >= 0)
-                st = "Yerden aldığın " + kk::cardAccusativeTR(g_.takenCard()) + " masada kullan ya da geri ver";
-            else
-                st = g_.opened(0) ? "Per indir, işle ya da bir kâğıt at" : "Aç ya da bir kâğıt at";
-        } else if (a > 0) {
-            st = names_[(size_t)a] + " düşünüyor…";
-        }
+        const char* ended = g_.stage() == kk::Stage::HandOver ? "El bitti" : g_.stage() == kk::Stage::MatchOver ? "Parti bitti" : nullptr;
+        std::string st;
+        if (!ended && !dealing() && g_.isOut(0)) // (son kalan) burned: he watches the rest
+            st = "Yandın: kalanları izliyorsun" + std::string(fast_ ? " (hızlı)" : "") +
+                 (a > 0 ? "  \xC2\xB7  " + names_[(size_t)a] + " düşünüyor…" : std::string());
+        else
+            st = statusLine(ended, dealing(), "Kâğıtlar dağıtılıyor…", a, aiSeat, sc, [&]() -> std::string {
+                if (g_.stage() == kk::Stage::Draw) return g_.mustDrawStock() ? "Desteden çek" : "Desteden ya da yerden bir kâğıt çek";
+                if (g_.takenCard() >= 0) return "Yerden aldığın " + kk::cardAccusativeTR(g_.takenCard()) + " masada kullan ya da geri ver";
+                return g_.opened(0) ? "Per indir, işle ya da bir kâğıt at" : "Aç ya da bir kâğıt at";
+            });
         std::vector<std::pair<std::string, Color>> parts;
         if (inHand && !g_.isOut(0)) {
             if (!g_.opened(0)) {
@@ -301,81 +301,49 @@ public:
         return ok;
     }
 
-    ui::SheetModel sheet(bool aiMode) const override {
-        ui::SheetModel m;
-        const auto& rows = g_.sheet();
-        for (int s = 0; s < 4; ++s)
-            m.columns.push_back(s == 0 && aiMode ? std::string("Yapay Zeka (") + names_[0] + ")" : names_[(size_t)s]);
-        m.humanCol = 0;
-        m.title = std::to_string((int)rows.size()) + ". El Sonucu";
-        const bool elim = g_.rules().lastStanding;
-        m.corner = "konken: " + std::to_string(g_.rules().limit) + " olan yanar" + (elim ? ", son kalan kazanır" : "");
-        if (!rows.empty()) {
-            const kk::HandRecord& r = rows.back();
-            const std::string who = r.finisher == 0 ? std::string(aiMode ? "Yapay zeka" : "Sen")
-                                                    : r.finisher > 0 ? names_[(size_t)r.finisher] : std::string();
-            if (r.finisher < 0) m.headline = "Deste bitti, kimse bitiremedi";
-            else if (r.konken) m.headline = "Konken! " + who + (r.finisher == 0 && !aiMode ? " elden bitirdin" : " elden bitirdi");
-            else m.headline = who + (r.finisher == 0 && !aiMode ? " eli bitirdin" : " eli bitirdi");
-            m.tagline = r.konken ? "elden bitiş: herkesin yazdığı iki kat" : "açmayan " + std::to_string(g_.rules().unopenedPoints) + " yazar";
-            m.taglineRed = r.konken;
-            { // (son kalan) who burned with this hand
-                std::string burnt;
-                for (int s = 0; s < 4; ++s)
-                    if (r.burned[(size_t)s]) burnt += (burnt.empty() ? "" : ", ") + (s == 0 && !aiMode ? std::string("sen") : names_[(size_t)s]);
-                if (!burnt.empty()) {
-                    m.tagline = burnt + " yandı" + (elim && g_.stage() != kk::Stage::MatchOver ? ", masadan kalkıyor" : "");
-                    if (r.burned[0] && elim && !aiMode && g_.stage() != kk::Stage::MatchOver) m.tagline = "Yandın! Kalanları izleyebilirsin";
-                    m.taglineRed = true;
-                }
-            }
-            m.starCol = r.finisher;
-            m.rowLabels = {"Elde", "Bu el"};
-            m.cells.assign(2, std::vector<std::string>(4));
-            m.red.assign(2, std::vector<bool>(4, false));
-            for (int s = 0; s < 4; ++s) {
-                m.cells[0][(size_t)s] = s == r.finisher ? std::string("bitti")
-                                        : !r.opened[(size_t)s] ? std::string("açmadı")
-                                                               : std::to_string(r.cardsLeft[(size_t)s]) + " kâğıt";
-                m.cells[1][(size_t)s] = std::to_string(r.points[(size_t)s]);
-                m.red[0][(size_t)s] = !r.opened[(size_t)s];
-                m.red[1][(size_t)s] = r.points[(size_t)s] >= 50;
-                if (!r.playing[(size_t)s]) { // (son kalan) burned earlier: not at the table
-                    m.cells[0][(size_t)s] = "masada yok";
-                    m.cells[1][(size_t)s] = "—";
-                    m.red[0][(size_t)s] = m.red[1][(size_t)s] = false;
-                } else if (r.burned[(size_t)s]) {
-                    m.cells[0][(size_t)s] = "yandı";
-                    m.red[0][(size_t)s] = true;
-                }
-            }
-        }
-        for (const kk::HandRecord& r : rows) {
-            m.historyLabels.push_back(std::to_string(r.index + 1) + ". el" + (r.konken ? " (konken)" : ""));
-            std::vector<std::string> row;
+    // ---- sheet()'s parts: the hand that just ended (headline, who burned, the two rows) ...
+    void sheetLastHand(ui::SheetModel& m, const kk::HandRecord& r, bool aiMode, bool elim) const {
+        const std::string who = r.finisher == 0 ? std::string(aiMode ? "Yapay zeka" : "Sen")
+                                                : r.finisher > 0 ? names_[(size_t)r.finisher] : std::string();
+        if (r.finisher < 0) m.headline = "Deste bitti, kimse bitiremedi";
+        else if (r.konken) m.headline = "Konken! " + who + (r.finisher == 0 && !aiMode ? " elden bitirdin" : " elden bitirdi");
+        else m.headline = who + (r.finisher == 0 && !aiMode ? " eli bitirdin" : " eli bitirdi");
+        m.tagline = r.konken ? "elden bitiş: herkesin yazdığı iki kat" : "açmayan " + std::to_string(g_.rules().unopenedPoints) + " yazar";
+        m.taglineRed = r.konken;
+        { // (son kalan) who burned with this hand
+            std::string burnt;
             for (int s = 0; s < 4; ++s)
-                row.push_back(!r.playing[(size_t)s] ? std::string("") : r.finisher == s ? std::string("—") : std::to_string(r.points[(size_t)s]));
-            m.history.push_back(row);
+                if (r.burned[(size_t)s]) burnt += (burnt.empty() ? "" : ", ") + (s == 0 && !aiMode ? std::string("sen") : names_[(size_t)s]);
+            if (!burnt.empty()) {
+                m.tagline = burnt + " yandı" + (elim && g_.stage() != kk::Stage::MatchOver ? ", masadan kalkıyor" : "");
+                if (r.burned[0] && elim && !aiMode && g_.stage() != kk::Stage::MatchOver) m.tagline = "Yandın! Kalanları izleyebilirsin";
+                m.taglineRed = true;
+            }
         }
-        int best = 1 << 30;
-        for (int s = 0; s < 4; ++s)
-            if (g_.active(s)) best = std::min(best, g_.total(s)); // (son kalan: among the ones still playing)
+        m.starCol = r.finisher;
+        m.rowLabels = {"Elde", "Bu el"};
+        m.cells.assign(2, std::vector<std::string>(4));
+        m.red.assign(2, std::vector<bool>(4, false));
         for (int s = 0; s < 4; ++s) {
-            m.totals.push_back(std::to_string(g_.total(s)));
-            if (g_.active(s) && g_.total(s) == best) m.leaders.push_back(s);
+            m.cells[0][(size_t)s] = s == r.finisher ? std::string("bitti")
+                                    : !r.opened[(size_t)s] ? std::string("açmadı")
+                                                           : std::to_string(r.cardsLeft[(size_t)s]) + " kâğıt";
+            m.cells[1][(size_t)s] = std::to_string(r.points[(size_t)s]);
+            m.red[0][(size_t)s] = !r.opened[(size_t)s];
+            m.red[1][(size_t)s] = r.points[(size_t)s] >= 50;
+            if (!r.playing[(size_t)s]) { // (son kalan) burned earlier: not at the table
+                m.cells[0][(size_t)s] = "masada yok";
+                m.cells[1][(size_t)s] = "—";
+                m.red[0][(size_t)s] = m.red[1][(size_t)s] = false;
+            } else if (r.burned[(size_t)s]) {
+                m.cells[0][(size_t)s] = "yandı";
+                m.red[0][(size_t)s] = true;
+            }
         }
-        m.last = g_.stage() == kk::Stage::MatchOver;
-        int top = 0;
-        for (int s = 0; s < 4; ++s) top = std::max(top, g_.total(s));
-        m.note = m.last ? "" : "Düşük puan iyidir  \xC2\xB7  " + std::to_string(g_.rules().limit) + " olan yanar (en yüksek " +
-                                   std::to_string(top) + ")";
-        if (!m.last && elim && g_.activeCount() < 4) { // (son kalan)
-            int topIn = 0;
-            for (int s = 0; s < 4; ++s)
-                if (g_.active(s)) topIn = std::max(topIn, g_.total(s));
-            m.note = "Masada " + std::to_string(g_.activeCount()) + " kişi kaldı  \xC2\xB7  " + std::to_string(g_.rules().limit) +
-                     " olan yanar (kalanlarda en yüksek " + std::to_string(topIn) + ")";
-        }
+    }
+    // ... and the final standings (places, ties, each one's line, the result)
+    void sheetStandings(ui::SheetModel& m, bool aiMode, bool elim) const {
+        const auto& rows = g_.sheet();
         m.matchHeader = "Parti Bitti";
         m.playedLine = std::to_string(rows.size()) + " el oynandı";
         const std::array<int, 4> rk = g_.ranking();
@@ -407,6 +375,45 @@ public:
             m.resultTitle = "Bu sefer olmadı, bir parti daha?";
             m.resultSub = (elim ? "Son kalan: " : "Kazanan: ") + names_[(size_t)lead] + " (" + std::to_string(g_.total(lead)) + ")";
         }
+    }
+
+    ui::SheetModel sheet(bool aiMode) const override {
+        ui::SheetModel m;
+        const auto& rows = g_.sheet();
+        for (int s = 0; s < 4; ++s)
+            m.columns.push_back(s == 0 && aiMode ? std::string("Yapay Zeka (") + names_[0] + ")" : names_[(size_t)s]);
+        m.humanCol = 0;
+        m.title = std::to_string((int)rows.size()) + ". El Sonucu";
+        const bool elim = g_.rules().lastStanding;
+        m.corner = "konken: " + std::to_string(g_.rules().limit) + " olan yanar" + (elim ? ", son kalan kazanır" : "");
+        if (!rows.empty()) sheetLastHand(m, rows.back(), aiMode, elim);
+        for (const kk::HandRecord& r : rows) {
+            m.historyLabels.push_back(std::to_string(r.index + 1) + ". el" + (r.konken ? " (konken)" : ""));
+            std::vector<std::string> row;
+            for (int s = 0; s < 4; ++s)
+                row.push_back(!r.playing[(size_t)s] ? std::string("") : r.finisher == s ? std::string("—") : std::to_string(r.points[(size_t)s]));
+            m.history.push_back(row);
+        }
+        int best = 1 << 30;
+        for (int s = 0; s < 4; ++s)
+            if (g_.active(s)) best = std::min(best, g_.total(s)); // (son kalan: among the ones still playing)
+        for (int s = 0; s < 4; ++s) {
+            m.totals.push_back(std::to_string(g_.total(s)));
+            if (g_.active(s) && g_.total(s) == best) m.leaders.push_back(s);
+        }
+        m.last = g_.stage() == kk::Stage::MatchOver;
+        int top = 0;
+        for (int s = 0; s < 4; ++s) top = std::max(top, g_.total(s));
+        m.note = m.last ? "" : "Düşük puan iyidir  \xC2\xB7  " + std::to_string(g_.rules().limit) + " olan yanar (en yüksek " +
+                                   std::to_string(top) + ")";
+        if (!m.last && elim && g_.activeCount() < 4) { // (son kalan)
+            int topIn = 0;
+            for (int s = 0; s < 4; ++s)
+                if (g_.active(s)) topIn = std::max(topIn, g_.total(s));
+            m.note = "Masada " + std::to_string(g_.activeCount()) + " kişi kaldı  \xC2\xB7  " + std::to_string(g_.rules().limit) +
+                     " olan yanar (kalanlarda en yüksek " + std::to_string(topIn) + ")";
+        }
+        sheetStandings(m, aiMode, elim);
         return m;
     }
 

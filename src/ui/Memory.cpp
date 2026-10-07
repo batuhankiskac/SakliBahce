@@ -1,17 +1,18 @@
 #include "ui/Memory.h"
+#include "ui/SaveFile.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
-#include <fstream>
 #include <sstream>
 
 namespace ui {
 
 namespace {
 
-// File keys (the same as the record's, istatistik.txt)
-const char* const kGameKey[MEMORY_GAMES] = {"101", "esli101", "okey", "tavla", "pisti", "batak", "king", "dama", "altmisalti", "bezik", "konken"};
+// File keys: the same as the record's, istatistik.txt (ui/SaveFile.h kGameKeys)
+static_assert(MEMORY_GAMES == SAVE_GAMES, "hafiza.txt keys");
+constexpr long kBig = 1000000000; // a number read from the file is clamped to [-kBig, kBig]
 const char* const kGameName[MEMORY_GAMES] = {"101", "eşli 101", "okey", "tavla", "pişti", "batak", "king", "dama", "altmışaltı", "bezik", "konken"};
 
 bool validSeat(int s) { return s >= 1 && s <= 3; }
@@ -183,20 +184,7 @@ int Memory::favouriteGame() const {
     return best;
 }
 
-int Memory::today() {
-    const std::time_t t = std::time(nullptr);
-    std::tm lt{};
-    localtime_r(&t, &lt);
-    // days from the civil date (Howard Hinnant's days_from_civil), independent of the time zone's offset
-    int y = lt.tm_year + 1900;
-    const unsigned mo = (unsigned)lt.tm_mon + 1, d = (unsigned)lt.tm_mday;
-    y -= mo <= 2;
-    const int era = (y >= 0 ? y : y - 399) / 400;
-    const unsigned yoe = (unsigned)(y - era * 400);
-    const unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + (int)doe - 719468;
-}
+int Memory::today() { return todayDays(); }
 
 const char* Memory::gameName(int game) { return validGame(game) ? kGameName[game] : ""; }
 
@@ -204,27 +192,16 @@ const char* Memory::gameName(int game) { return validGame(game) ? kGameName[game
 // Lines: "ilkgun=…", "songun=…", "ziyaret=…", "rutbe=…", "<game>.mac=…", "s<seat>.<game>.<field>=…",
 // "s<seat>.an=<kind>,<byPlayer>,<game>,<day>,<value>".
 void Memory::load(const std::string& path) {
-    if (path.empty()) return;
-    std::ifstream in(path);
-    if (!in) return;
-    std::string line;
-    auto gameIndex = [](const std::string& g) {
-        for (int i = 0; i < MEMORY_GAMES; ++i)
-            if (g == kGameKey[i]) return i;
-        return -1;
-    };
-    while (std::getline(in, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-        const int iv = std::atoi(v.c_str());
+    std::string text;
+    if (!readFileText(path, text)) return;
+    forEachKeyValue(text, [&](const std::string& k, const std::string& v) {
+        const int iv = (int)parseLong(v, -kBig, kBig);
         if (k == "ilkgun") firstDay = iv;
         else if (k == "songun") lastVisit = iv;
         else if (k == "ziyaret") visits = std::max(0, iv);
         else if (k == "rutbe") rank = iv;
         else if (k.size() > 4 && k.compare(k.size() - 4, 4, ".mac") == 0 && k[0] != 's') {
-            const int g = gameIndex(k.substr(0, k.size() - 4));
+            const int g = gameKeyIndex(k.substr(0, k.size() - 4));
             if (g >= 0) gameMatches[g] = std::max(0, iv);
         } else if (k.size() > 3 && k[0] == 's' && k[1] >= '1' && k[1] <= '3' && k[2] == '.') {
             const int seat = k[1] - '0';
@@ -233,15 +210,15 @@ void Memory::load(const std::string& path) {
                 int f[5] = {0, 1, -1, -1, 0};
                 std::istringstream ss(v);
                 std::string part;
-                for (int i = 0; i < 5 && std::getline(ss, part, ','); ++i) f[i] = std::atoi(part.c_str());
+                for (int i = 0; i < 5 && std::getline(ss, part, ','); ++i) f[i] = (int)parseLong(part, -kBig, kBig);
                 if (f[0] >= 1 && f[0] <= 2 && validGame(f[2]))
                     moment[seat] = Moment{(MomentKind)f[0], f[1] != 0, f[2], f[3], f[4]};
-                continue;
+                return;
             }
             const size_t dot = rest.find('.');
-            if (dot == std::string::npos) continue;
-            const int g = gameIndex(rest.substr(0, dot));
-            if (g < 0) continue;
+            if (dot == std::string::npos) return;
+            const int g = gameKeyIndex(rest.substr(0, dot));
+            if (g < 0) return;
             const std::string fld = rest.substr(dot + 1);
             VsRecord& r = vs[seat][g];
             if (fld == "mac") r.played = std::max(0, iv);
@@ -254,21 +231,21 @@ void Memory::load(const std::string& path) {
             else if (fld == "enbuyukfark") r.bestWin = std::max(0, iv);
             else if (fld == "enagirfark") r.worstLoss = std::max(0, iv);
         }
-    }
+    });
 }
 
-void Memory::save(const std::string& path) const {
-    if (path.empty()) return;
+bool Memory::save(const std::string& path) const {
+    if (path.empty()) return false;
     std::ostringstream o;
     o << "# SaklıBahçe: müdavimlerin hafızası\n";
     o << "ilkgun=" << firstDay << "\nsongun=" << lastVisit << "\nziyaret=" << visits << "\nrutbe=" << rank << "\n";
     for (int g = 0; g < MEMORY_GAMES; ++g)
-        if (gameMatches[g]) o << kGameKey[g] << ".mac=" << gameMatches[g] << "\n";
+        if (gameMatches[g]) o << kGameKeys[g] << ".mac=" << gameMatches[g] << "\n";
     for (int s = 1; s <= 3; ++s) {
         for (int g = 0; g < MEMORY_GAMES; ++g) {
             const VsRecord& r = vs[s][g];
             if (!r.played && !r.together) continue;
-            const std::string p = "s" + std::to_string(s) + "." + kGameKey[g] + ".";
+            const std::string p = "s" + std::to_string(s) + "." + kGameKeys[g] + ".";
             o << p << "mac=" << r.played << "\n" << p << "kazandi=" << r.playerWins << "\n" << p << "kaybetti=" << r.theirWins
               << "\n" << p << "ortak=" << r.together << "\n" << p << "ortakkazanc=" << r.togetherWins << "\n" << p
               << "son=" << (int)r.last << "\n" << p << "songun=" << r.lastDay << "\n" << p << "enbuyukfark=" << r.bestWin
@@ -279,8 +256,7 @@ void Memory::save(const std::string& path) const {
             o << "s" << s << ".an=" << (int)mo.kind << "," << (mo.byPlayer ? 1 : 0) << "," << mo.game << "," << mo.day << ","
               << mo.value << "\n";
     }
-    std::ofstream out(path);
-    out << o.str();
+    return writeFileAtomic(path, o.str());
 }
 
 } // namespace ui

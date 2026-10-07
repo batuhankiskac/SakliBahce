@@ -94,12 +94,8 @@ public:
         bots_[1]->setStyle(okey::BotStyle::forSeat(opp_)); // Kel Mahmut bold, Emekli Nuri careful
         rng_.reseed(seed ^ 0xDA7Aull);
         replay_ = false;
-        hud_.clearToasts();
-        hud_.clearBanner();
+        resetTransient();
         results_.clear();
-        clearSelection();
-        hint_ = Hint();
-        sfxAt_.clear();
         g_.startMatch(seed);
         syncBoard(true);
         pump();
@@ -349,12 +345,7 @@ public:
                 }
             }
         }
-        hud_.clearToasts();
-        hud_.clearBanner();
-        sfxAt_.clear();
-        clearSelection();
-        hint_ = Hint();
-        botStage_ = -1;
+        resetTransient();
         syncBoard(true);
         hud_.toast(std::to_string(g_.gameIndex() + 1) + ". oyundan devam: " + std::to_string(g_.score(0)) + " - " +
                        std::to_string(g_.score(1)),
@@ -476,6 +467,17 @@ private:
     // ---- the player's choice on the board ----
     // selected_: the chosen disc; prefix_: intermediate stops clicked along a capture that is not yet decided (two
     // capture routes ending on the same square); kbMove_: the keyboard's move among the chosen disc's moves.
+    // A new match or a restored one (the table may be reused from the last match; call after joinThink): nothing
+    // selected, hovered, sounding or shown from before, and the bots' pacing starts afresh.
+    void resetTransient() {
+        hud_.clearToasts();
+        hud_.clearBanner();
+        sfxAt_.clear();
+        clearSelection();
+        hover_ = -1;
+        botPlayer_ = botTurn_ = botStage_ = -1;
+        hint_ = Hint();
+    }
     void clearSelection() {
         selected_ = -1;
         prefix_.clear();

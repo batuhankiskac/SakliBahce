@@ -541,6 +541,55 @@ void testJokerRules() {
     CHECK(!g.fitsTable(C(Ku, 9)));
 }
 
+// An opened player left with only jokers and no table meld that takes one may throw a joker (the game used to lock).
+void testOnlyJokersLeft() {
+    std::array<std::vector<int>, 4> hands;
+    hands[0] = {JK(0)};
+    hands[1] = {C(Si, 3), C(Si, 4)};
+    hands[2] = {C(Si, 8), C(Si, 9)};
+    hands[3] = {C(Ma, 11), C(Ma, 12)};
+    Meld sevens;
+    makeMeld({C(Ma, 7), C(Ku, 7), C(Ka, 7), C(Si, 7)}, sevens);
+    sevens.owner = 1;
+    const std::vector<int> used = {JK(0), JK(1), C(Si, 3), C(Si, 4), C(Si, 8), C(Si, 9), C(Ma, 11), C(Ma, 12),
+                                   C(Ku, 9), C(Ma, 7), C(Ku, 7), C(Ka, 7), C(Si, 7)};
+    std::vector<int> stock = restOf(used);
+    stock.push_back(JK(1)); // (the top: seat 0 draws the second joker)
+    for (int lv = -1; lv <= 2; ++lv) {
+        Game g = setupGame(hands, {C(Ku, 9)});
+        g.debugSetup(hands, stock, {C(Ku, 9)}, {sevens});
+        g.debugSetOpened(0, true);
+        CHECK(g.drawStock(0).ok);
+        CHECK_EQ(g.handSize(0), 2);
+        CHECK(!g.fitsTable(JK(0)));
+        CHECK(g.mayDiscardJoker(0));
+        CHECK(g.canDiscard(0, JK(0)));
+        if (lv < 0) {
+            CHECK(applyBotAction(g, 0, fallbackAction(g, 0)).ok);
+        } else {
+            Bot b((BotLevel)lv, 5);
+            int guard = 0;
+            while (g.current() == 0 && g.stage() == Stage::Play && ++guard < 10) CHECK(applyBotAction(g, 0, b.next(g, 0)).ok);
+        }
+        CHECK_EQ(g.current(), 1);
+        CHECK_EQ(g.handSize(0), 1);
+        CHECK(isJoker(g.discardTop()));
+    }
+    // a meld that takes a joker: the joker goes there, not to the discard
+    {
+        Meld run;
+        makeMeld({C(Ka, 5), C(Ka, 6), C(Ka, 7, 1)}, run);
+        run.owner = 1;
+        Game g = setupGame(hands, {C(Ku, 9)});
+        g.debugSetup(hands, stock, {C(Ku, 9)}, {sevens, run});
+        g.debugSetOpened(0, true);
+        CHECK(g.drawStock(0).ok);
+        CHECK(!g.canDiscard(0, JK(0)));
+        g.debugSetOpened(0, false); // (not opened: nothing can go on the table, a joker may be thrown)
+        CHECK(g.canDiscard(0, JK(0)));
+    }
+}
+
 void testStockOut() {
     std::array<std::vector<int>, 4> hands;
     hands[0] = {C(Ma, 2), C(Ka, 6)};
@@ -967,6 +1016,7 @@ int main() {
     testFinishAndScore();
     testKonken();
     testJokerRules();
+    testOnlyJokersLeft();
     testStockOut();
     testMatchEnd();
     testElimination();

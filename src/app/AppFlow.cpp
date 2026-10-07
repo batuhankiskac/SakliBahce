@@ -55,6 +55,52 @@ void App::handleScreenAction(ui::ScreenAction a) {
     }
 }
 
+// What every match start shares (startMatch, startOtherMatch): its seed (a resumed match's own, --seed's, or a fresh
+// one), game and rules for the save; the analysis of the last match goes; a new match the player starts drops the
+// old save (not one the Yapay Zeka was asked to play: the player's save stays for "Devam Et"); the room leaves the
+// title. Returns the seed.
+uint64_t App::beginMatch(ui::GameKind kind) {
+    const ui::Settings& st = screens_.settings();
+    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
+                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
+                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
+    matchSeed_ = matchSeed;
+    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
+    screens_.setAnalysis(false, true, "", {});
+    matchGame_ = (int)kind;
+    matchSettings_ = st;
+    matchAiStarted_ = aiMode_ && !resuming_;
+    if (!resuming_) {
+        if (!matchAiStarted_) deleteSave();
+        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
+    }
+    ++matchCount_;
+    characters_.setNames(names());
+    setTitleMode(false);
+    return matchSeed;
+}
+
+// ... and just before the engine deals: the flow is in play, nothing of the last match is pending.
+void App::enterMatch() {
+    delayed_.clear();
+    think_ = Think{};
+    handOverT_ = screenT_ = 0.f;
+    flow_ = Flow::Playing;
+    matchAiTouched_ = aiMode_;
+}
+
+// ... and once it is dealt: the regulars greet it, the rehber's card, the Yapay Zeka's note.
+void App::greetMatch(ui::GameKind kind) {
+    if (!unattended() && !resuming_ && !replayMode_)
+        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
+    maybeShowGuide(kind);
+    if (aiMode_ && !snapshot_) {
+        const std::string note = "Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y";
+        if (other_ && !ui::isOkeyFamily(kind)) other_->toast(note, ui::pal::Highlight, 4.f);
+        else table_.toast(note, ui::pal::Highlight, 4.f);
+    }
+}
+
 void App::startMatch() {
     cancelThink();
     const ui::Settings& st = screens_.settings();
@@ -82,19 +128,7 @@ void App::startMatch() {
     game_.setRules(cfg);
     const std::array<std::string, 4> nm = names();
     for (int s = 0; s < 4; ++s) game_.setPlayer(s, nm[s], s == HUMAN);
-    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
-                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
-                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
-    matchSeed_ = matchSeed;
-    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
-    screens_.setAnalysis(false, true, "", {});
-    matchGame_ = (int)kind;
-    matchSettings_ = st;
-    if (!resuming_) {
-        deleteSave();
-        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
-    }
-    ++matchCount_;
+    const uint64_t matchSeed = beginMatch(kind);
     for (int s = 0; s < 4; ++s) {
         // the human's seat always has one too, ready for the Yapay Zeka mode at any moment: a Kurt (--autoplay: an Usta)
         const okey::BotLevel lvl = s != HUMAN     ? (okey::BotLevel)std::clamp(st.difficulty, 0, 2)
@@ -104,23 +138,13 @@ void App::startMatch() {
         // the regulars' own ways: Kel Mahmut bold, Emekli Nuri careful (the AI in the player's seat stays neutral)
         bots_[s]->setStyle(s == HUMAN ? okey::BotStyle{} : okey::BotStyle::forSeat(s));
     }
-    characters_.setNames(nm);
-    setTitleMode(false);
     table_.setAnimationSpeed(st.animSpeed);
     characters_.setAnimationSpeed(st.animSpeed);
     table_.setHints(st.hints);
-    delayed_.clear();
-    think_ = Think{};
-    handOverT_ = screenT_ = 0.f;
-    flow_ = Flow::Playing;
-    matchAiTouched_ = aiMode_;
+    enterMatch();
     game_.startMatch(matchSeed);
     pumpEvents();
-    if (!unattended() && !resuming_ && !replayMode_)
-        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
-    maybeShowGuide(kind);
-    if (aiMode_ && !snapshot_)
-        table_.toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
+    greetMatch(kind);
     if (opt_.autoplay || opt_.aiChaos)
         std::printf("[%s] match %d (%s): seed %llu, %d hands (frame %ld)%s\n", opt_.autoplay ? "autoplay" : "aichaos",
                     matchCount_, ui::gameInfo(kind).name, (unsigned long long)matchSeed, cfg.numHands, frame_,
@@ -163,39 +187,18 @@ void App::startOtherMatch(ui::GameKind kind) {
     table_.setFurnitureOnly(true);
     screens_.clearSheet();
     const std::array<std::string, 4> nm = names();
-    const uint64_t matchSeed = forcedSeed_ ? *forcedSeed_
-                               : opt_.hasSeed ? opt_.seed + (uint64_t)matchCount_
-                                              : mix64(baseSeed_ + (uint64_t)matchCount_);
-    matchSeed_ = matchSeed;
-    stopAnalysis();  // "Hatalarım" belongs to the match that just ended
-    screens_.setAnalysis(false, true, "", {});
-    matchGame_ = (int)kind;
-    matchSettings_ = st;
-    if (!resuming_) {
-        deleteSave();
-        replayMode_ = false; // "Yeni Oyun" after a replay is a real match
-    }
-    ++matchCount_;
-    characters_.setNames(nm);
-    setTitleMode(false);
+    const uint64_t matchSeed = beginMatch(kind);
     other_->setLevel(std::clamp(st.difficulty, 0, 2));
     other_->setAnimationSpeed(st.animSpeed);
     other_->setHints(st.hints);
     characters_.setAnimationSpeed(st.animSpeed);
-    delayed_.clear();
-    think_ = Think{};
-    handOverT_ = screenT_ = 0.f;
-    flow_ = Flow::Playing;
-    matchAiTouched_ = aiMode_;
+    enterMatch();
     other_->startMatch(st, nm, matchSeed);
     {
         const std::vector<int> seats = other_->seats();
         setLocation(other_->location(), seats.size() > 1 ? seats[1] : 0);
     }
-    if (!unattended() && !resuming_ && !replayMode_)
-        characters_.banter().matchStart((int)kind, record_.games[(size_t)kind].streak);
-    maybeShowGuide(kind);
-    if (aiMode_ && !snapshot_) other_->toast("Yapay zeka senin yerine oynuyor  \xC2\xB7  geri almak için Y", ui::pal::Highlight, 4.f);
+    greetMatch(kind);
     if (opt_.autoplay)
         std::printf("[autoplay] match %d (%s): seed %llu (frame %ld)\n", matchCount_, ui::gameInfo(kind).name,
                     (unsigned long long)matchSeed, frame_);

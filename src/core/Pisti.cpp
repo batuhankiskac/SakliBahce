@@ -1,5 +1,6 @@
 // Pişti rules engine. Rules: docs/kurallar_pisti.md, semantics: Pisti.h.
 #include "core/Pisti.h"
+#include "core/TurkishText.h"
 
 #include <algorithm>
 
@@ -9,98 +10,11 @@ using namespace kart;
 
 namespace {
 
-constexpr size_t MAX_QUEUED_EVENTS = 20000; // safety valve for headless loops that never drain
 constexpr int CARDS_PER_DEAL = 4;
 
-// Minimal UTF-8 decoder for the vowel harmony of player names.
-std::vector<unsigned> codePoints(const std::string& s) {
-    std::vector<unsigned> out;
-    for (size_t i = 0; i < s.size();) {
-        const unsigned char c = (unsigned char)s[i];
-        int extra = 0;
-        unsigned cp = c;
-        if (c >= 0xF0) {
-            extra = 3;
-            cp = c & 0x07;
-        } else if (c >= 0xE0) {
-            extra = 2;
-            cp = c & 0x0F;
-        } else if (c >= 0xC0) {
-            extra = 1;
-            cp = c & 0x1F;
-        }
-        if (i + extra >= s.size()) extra = 0;
-        for (int k = 1; k <= extra; ++k) cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
-        out.push_back(extra ? cp : c);
-        i += 1 + extra;
-    }
-    return out;
-}
-
-bool isVowel(unsigned c) {
-    switch (c) {
-    case 'a': case 'A': case 'o': case 'O': case 'u': case 'U': case 'I': case 0x131:
-    case 'e': case 'E': case 'i': case 0x130: case 0xF6: case 0xD6: case 0xFC: case 0xDC:
-        return true;
-    default:
-        return false;
-    }
-}
-
-// true: the last vowel is a back vowel (a ı o u) -> suffixes with "a"; false -> "e".
-bool backHarmony(const std::vector<unsigned>& cps) {
-    bool back = true;
-    for (unsigned c : cps) {
-        switch (c) {
-        case 'a': case 'A': case 'o': case 'O': case 'u': case 'U': case 'I': case 0x131:
-            back = true;
-            break;
-        case 'e': case 'E': case 'i': case 0x130: case 0xF6: case 0xD6: case 0xFC: case 0xDC:
-            back = false;
-            break;
-        default:
-            break;
-        }
-    }
-    return back;
-}
-
-// "Hacı Rıza'da", "Kel Mahmut'ta", "Emekli Nuri'de".
-std::string locative(const std::string& name) {
-    const std::vector<unsigned> cps = codePoints(name);
-    bool hard = false;
-    if (!cps.empty()) {
-        switch (cps.back()) {
-        case 'f': case 's': case 't': case 'k': case 'h': case 'p':
-        case 'F': case 'S': case 'T': case 'K': case 'H': case 'P':
-        case 0xE7: case 0xC7: case 0x15F: case 0x15E:
-            hard = true;
-            break;
-        default:
-            break;
-        }
-    }
-    return name + "'" + (hard ? "t" : "d") + (backHarmony(cps) ? "a" : "e");
-}
-
-// "Hacı Rıza'ya", "Kel Mahmut'a", "Emekli Nuri'ye".
-std::string dative(const std::string& name) {
-    const std::vector<unsigned> cps = codePoints(name);
-    const bool vowelEnd = !cps.empty() && isVowel(cps.back());
-    return name + "'" + (vowelEnd ? "y" : "") + (backHarmony(cps) ? "a" : "e");
-}
-
-std::string capitalizeFirst(const std::string& s) {
-    if (s.empty()) return s;
-    if (s[0] == 'i') return "İ" + s.substr(1);
-    if (s[0] >= 'a' && s[0] <= 'z') return std::string(1, (char)(s[0] - 'a' + 'A')) + s.substr(1);
-    static const char* const kPairs[][2] = {{"ı", "I"}, {"ç", "Ç"}, {"ş", "Ş"}, {"ğ", "Ğ"}, {"ö", "Ö"}, {"ü", "Ü"}};
-    for (const auto& p : kPairs) {
-        const std::string lower = p[0];
-        if (s.compare(0, lower.size(), lower) == 0) return p[1] + s.substr(lower.size());
-    }
-    return s;
-}
+using trtext::capitalizeFirst;
+using trtext::dative;
+using trtext::locative;
 
 std::string cardList(const std::vector<int>& cards) {
     std::string s;
@@ -138,6 +52,7 @@ Game::Game(const Rules& rules) {
 }
 
 void Game::setRules(const Rules& r) {
+    if (stage_ != Stage::NotStarted && stage_ != Stage::MatchOver) return; // (only between matches)
     rules_ = r;
     if (rules_.targetScore < 1) rules_.targetScore = 1;
     setupSeats();
@@ -596,10 +511,7 @@ std::vector<GameEvent> Game::drainEvents() {
     return out;
 }
 
-void Game::push(GameEvent e) {
-    if (events_.size() >= MAX_QUEUED_EVENTS) events_.erase(events_.begin(), events_.begin() + MAX_QUEUED_EVENTS / 2);
-    events_.push_back(std::move(e));
-}
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 // Turkish drops the pronoun: the human reads "Pişti yaptın! +10", the others "Hacı Rıza pişti yaptı! +10".
 std::string Game::says(int seat, const std::string& third, const std::string& second) const {

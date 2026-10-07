@@ -48,7 +48,7 @@ void App::pollAnalysis() {
     std::vector<ui::MistakeView> rows;
     for (const analysis::Mistake& m : anaResult_) rows.push_back({m.when, m.played, m.better, m.why, costText(m)});
     screens_.setAnalysis(true, true, anaTitle_, rows);
-    if (anaCounts_) achievementsAnalysis(anaGame_, (int)anaResult_.size()); // Başarımlar: "Kusursuz"
+    if (anaCounts_) achievementsAnalysis((int)anaResult_.size()); // Başarımlar: "Kusursuz"
     anaCounts_ = false;
 }
 
@@ -64,7 +64,6 @@ void App::analyzeFinishedMatch() {
     startAnalysis(matchGame_, matchSettings_, matchSeed_, std::move(actions),
                   std::string(ui::gameInfo((ui::GameKind)matchGame_).name) + " \xC2\xB7 bu maç");
     anaCounts_ = recording(); // Başarımlar: the player's own match
-    anaGame_ = matchGame_;
 }
 
 void App::analyzeReplay(int index) {
@@ -73,15 +72,7 @@ void App::analyzeReplay(int index) {
         screens_.setAnalysis(false, true, "", {});
         return;
     }
-    ui::Settings rules = screens_.settings();
-    rules.tavlaCesit = 0; // Tavla çeşidi: a replay from before the çeşitler has no line for it, it was klasik
-    rules.konkenLastStanding = false; // Konken bitiş: a save from before it has no line for it, it was "ilk yanan"
-    rules.rakip = rules.tavlaRakip = rules.damaRakip = 0; // Rakip: only what the replay says (ui::twoPlayerOpponent)
-    for (const std::string& kv : sv.settings) {
-        const size_t eq = kv.find('=');
-        if (eq != std::string::npos) applySettingLine(rules, trim(kv.substr(0, eq)), trim(kv.substr(eq + 1)));
-    }
-    rules.game = sv.game;
+    const ui::Settings rules = rulesFromSave(sv, screens_.settings());
     anaCounts_ = false; // (a replay's analysis opens no badge)
     startAnalysis(sv.game, rules, sv.seed, sv.actions,
                   std::string(ui::gameInfo((ui::GameKind)sv.game).name) + " \xC2\xB7 " + sv.date);

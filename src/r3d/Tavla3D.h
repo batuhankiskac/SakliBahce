@@ -112,7 +112,7 @@ private:
     Mesh boardMesh_{}, fieldMesh_{}, pointMesh_[2]{}, checkerMesh_{}, dieMesh_{}, glowMesh_{}, cubeMesh_{};
     Mat matWood_{}, matField_{}, matPoint_[2]{}, matChecker_[2]{}, matCheckerHi_{}, matCheckerSel_{}, matDie_{}, matGlow_{},
         matGlowSel_{}, matGlowTarget_{};
-    Mat matCube_{};
+    Mat matCube_{}, matDieUsed_{};
     Mat matGlowTargetCB_{}, matGlowFocus_{};
     Texture2D woodTex_{}, dieTex_{}, glowTex_{}, cubeTex_{}, stripeTex_{};
 };

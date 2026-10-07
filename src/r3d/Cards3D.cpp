@@ -108,10 +108,8 @@ Texture2D buildHalo() {
             const float a = std::clamp(1.f - (d - 0.55f) / 0.45f, 0.f, 1.f);
             px[y * n + x] = Color{255, 255, 255, (unsigned char)(a * a * 255.f)};
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadMipmapped(img, false);
     UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
     return t;
 }
 
@@ -139,6 +137,7 @@ bool Cards3D::init(Renderer& r) {
     if (ready_) return true;
     ui::cardgfx::init();
     if (!ui::cardgfx::ready()) return false;
+    setTextureOpaque(ui::cardgfx::atlas(), false);  // (the faces' rounded corners are transparent: no depth pre-pass)
     for (int i = 0; i < CARD_COUNT; ++i) {
         meshes_[i] = buildCard(cardFace(i)); // (the second deck shows the same faces)
         mats_[i] = r.makeMat(WHITE, ui::cardgfx::atlas(), 0.18f, 30.f);
@@ -148,7 +147,8 @@ bool Cards3D::init(Renderer& r) {
         mb.plane({0, 0, 0}, {1.f, 1.f}, {0, 1, 0});
         halo_ = mb.build();
         haloTex_ = buildHalo();
-        haloMat_ = r.makeMat(Color{255, 210, 120, 255}, haloTex_, 0.f, 4.f, 1.f);
+        // one halo material per card: each glowing card has its own alpha (the renderer keeps the pointer until render())
+        for (Mat& hm : haloMats_) hm = r.makeMat(Color{255, 210, 120, 255}, haloTex_, 0.f, 4.f, 1.f);
         hintMat_ = r.makeMat(Color{110, 255, 130, 255}, haloTex_, 0.f, 4.f, 1.f);
     }
     hideAll();
@@ -163,9 +163,9 @@ void Cards3D::shutdown(Renderer& r) {
         r.unloadMat(mats_[i]);
     }
     UnloadMesh(halo_);
-    r.unloadMat(haloMat_);
+    for (Mat& hm : haloMats_) r.unloadMat(hm);
     r.unloadMat(hintMat_);
-    if (haloTex_.id) UnloadTexture(haloTex_);
+    if (haloTex_.id) unloadTexture(haloTex_);
     ui::cardgfx::shutdown();
     ready_ = false;
 }
@@ -303,7 +303,7 @@ void Cards3D::submit(Renderer& r) {
             CardPose h = p;
             const Vector3 n = Vector3RotateByQuaternion({0, 1, 0}, p.rot);
             h.pos = Vector3Subtract(h.pos, Vector3Scale(n, CARD_T));
-            Mat& hm = haloMat_;
+            Mat& hm = haloMats_[(size_t)i];
             hm.material.maps[MATERIAL_MAP_DIFFUSE].color =
                 Color{255, 214, 130, (unsigned char)std::clamp(c.glowCur * 200.f, 0.f, 255.f)};
             r.submit(&halo_, &hm, MatrixMultiply(s, cardMatrix(h)), Transparent | Additive | DoubleSided | NoFog);

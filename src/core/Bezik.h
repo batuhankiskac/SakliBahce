@@ -85,7 +85,6 @@ enum class MeldKind : int {
 };
 constexpr int NUM_MELDS = (int)MeldKind::Count;
 const char* meldNameTR(MeldKind k);        // "Bezik", "Çift bezik", "Koz serisi", "Dört as", ..., "Koz evliliği"
-int meldBasePoints(MeldKind k);
 constexpr int BEZIK_QUEEN = kart::Maca * 13 + (kart::Kiz - 2);  // Maça Kız (first copy)
 constexpr int BEZIK_JACK = kart::Karo * 13 + (kart::Vale - 2);  // Karo Vale (first copy)
 
@@ -201,9 +200,8 @@ public:
     void setPlayer(int seat, const std::string& name, bool human);
     void startMatch(uint64_t seed);
     void startNextHand();
-    // No events and no texts (the bots' rollouts): much faster.
-    void setSilent(bool on) { silent_ = on; }
-    // A private copy for the bots: silent, without the match's history (log, sheet, events).
+    // A private copy for the bots: silent (no events, no texts: much faster), without the match's history (log,
+    // sheet, events).
     void stripForSimulation() {
         silent_ = true;
         log_.clear();
@@ -245,7 +243,6 @@ public:
     int bestMeldPoints(int seat) const;                   // the biggest of them (0: none), cheap
     bool canKoz7(int seat) const;
     bool kozSevenSwaps() const;                           // the next koz 7 would be exchanged (else shown)
-    bool declaredThisTurn() const { return declaredNow_; }
     // A combination's validity (cards present, not used in the same kind before, one new card at least).
     bool meldValid(int seat, const Meld& m, std::string* why = nullptr) const;
     // Every combination declared this deal (seat, meld), in order.
@@ -285,7 +282,6 @@ public:
     void debugSetCurrent(int seat) { current_ = seat; trick_.leader = seat; }
 
 private:
-    ActionResult playImpl(int seat, int card);
     void dealHand();
     void beginTurn(int seat);
     void finishTrick();

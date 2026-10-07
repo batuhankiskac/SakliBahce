@@ -11,36 +11,7 @@ namespace chr {
 
 namespace {
 
-constexpr float BY = w3d::BG_TABLE_Y;
-
-void handBasisC(Vector3 fingers, Vector3 palm, Vector3& X, Vector3& Y, Vector3& Z) {
-    Z = vnorm(Vector3Negate(fingers));
-    Y = Vector3Negate(palm);
-    Y = Vector3Subtract(Y, Vector3Scale(Z, Vector3DotProduct(Y, Z)));
-    if (Vector3Length(Y) < 1e-4f) Y = std::fabs(Z.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-    Y = vnorm(Y);
-    X = Vector3CrossProduct(Y, Z);
-}
-Vector3 wristAt(Vector3 point, Vector3 fingers, Vector3 palm, Vector3 off, float scale, bool left) {
-    Vector3 X, Y, Z;
-    handBasisC(fingers, palm, X, Y, Z);
-    if (left) off.x = -off.x;
-    Vector3 w = Vector3Add(Vector3Add(Vector3Scale(X, off.x), Vector3Scale(Y, off.y)), Vector3Scale(Z, off.z));
-    return Vector3Subtract(point, Vector3Scale(w, scale));
-}
-Vector3 mirrorX3(Vector3 v) { return Vector3{-v.x, v.y, v.z}; }
-Key kk(float t, Vector3 pos, Vector3 f, Vector3 p, HandPose pose, float lift = 0.f, int ease = 0, int ev = 0) {
-    Key k;
-    k.t = t;
-    k.pos = pos;
-    k.fingers = vnorm(f);
-    k.palm = vnorm(Vector3Subtract(p, Vector3Scale(k.fingers, Vector3DotProduct(p, k.fingers))));
-    k.pose = pose;
-    k.lift = lift;
-    k.ease = ease;
-    k.event = ev;
-    return k;
-}
+// (wristFor, mkOrtho, mirrorL, BY: CharactersState.h)
 
 // ---------------------------------------------------------------------------- the çaycı's walkable graph
 struct Node {
@@ -165,14 +136,14 @@ void Cast::setupCrowd() {
                 const float sd = left ? -1.f : 1.f;
                 Vector3 f{-sd * 0.4f, 0, -0.92f}, pl{0, -1, 0};
                 Vector3 palm{sd * 0.19f, BY + 0.014f, -(w3d::BG_CHAIR_DIST - 0.40f)};
-                Key k = kk(0, wristAt(palm, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Rest);
+                Key k = mkOrtho(0, wristFor(palm, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Rest);
                 if (p.prop == 1 && left) {  // card fan held up in front of the chest
                     Vector3 ff{0.3f, 0.75f, -0.6f}, pp{0.8f, -0.1f, 0.5f};
-                    k = kk(0, wristAt({-0.10f, 0.93f, -0.30f}, ff, pp, PALM_CENTER, 1.f, true), ff, pp, HandPose::Hold);
+                    k = mkOrtho(0, wristFor({-0.10f, 0.93f, -0.30f}, ff, pp, PALM_CENTER, 1.f, true), ff, pp, HandPose::Hold);
                 }
                 if (p.prop == 2 && !left) {  // tea glass in hand, resting on the table edge
                     Vector3 ff{-0.35f, 0, -0.94f}, pp{-0.94f, 0, 0.35f};
-                    k = kk(0, wristAt({0.20f, BY + 0.06f, -(w3d::BG_CHAIR_DIST - 0.40f)}, ff, pp, GRIP_CENTER, 1.f, false), ff, pp,
+                    k = mkOrtho(0, wristFor({0.20f, BY + 0.06f, -(w3d::BG_CHAIR_DIST - 0.40f)}, ff, pp, GRIP_CENTER, 1.f, false), ff, pp,
                            HandPose::Grip);
                 }
                 p.arm[a].hold = k;
@@ -243,21 +214,19 @@ void Cast::updateCrowd(float dt) {
         const Vector3 c{T.c.x, BY, T.c.z};
         auto P = [&](int i) -> Patron& { return patrons[T.patrons[(size_t)i % T.patrons.size()]]; };
         auto restKey = [&](Patron& p, int a, float t) {
-            Key r = p.arm[a].hold;
-            if (p.arm[a].track.on) r = p.arm[a].track.keys.front();
             // canonical rest (table edge)
             const bool left = a == 1;
             const float sd = left ? -1.f : 1.f;
             Vector3 f{-sd * 0.4f, 0, -0.92f}, pl{0, -1, 0};
-            r = kk(t, wristAt({sd * 0.19f, BY + 0.014f, -(w3d::BG_CHAIR_DIST - 0.40f)}, f, pl, PALM_CENTER, 1.f, left), f, pl,
+            Key r = mkOrtho(t, wristFor({sd * 0.19f, BY + 0.014f, -(w3d::BG_CHAIR_DIST - 0.40f)}, f, pl, PALM_CENTER, 1.f, left), f, pl,
                    HandPose::Rest);
             if (p.prop == 1 && left) {
                 Vector3 ff{0.3f, 0.75f, -0.6f}, pp{0.8f, -0.1f, 0.5f};
-                r = kk(t, wristAt({-0.10f, 0.93f, -0.30f}, ff, pp, PALM_CENTER, 1.f, true), ff, pp, HandPose::Hold);
+                r = mkOrtho(t, wristFor({-0.10f, 0.93f, -0.30f}, ff, pp, PALM_CENTER, 1.f, true), ff, pp, HandPose::Hold);
             }
             if (p.prop == 2 && !left) {
                 Vector3 ff{-0.35f, 0, -0.94f}, pp{-0.94f, 0, 0.35f};
-                r = kk(t, wristAt({0.20f, BY + 0.06f, -(w3d::BG_CHAIR_DIST - 0.40f)}, ff, pp, GRIP_CENTER, 1.f, false), ff, pp,
+                r = mkOrtho(t, wristFor({0.20f, BY + 0.06f, -(w3d::BG_CHAIR_DIST - 0.40f)}, ff, pp, GRIP_CENTER, 1.f, false), ff, pp,
                        HandPose::Grip);
             }
             return r;
@@ -267,9 +236,9 @@ void Cast::updateCrowd(float dt) {
             Vector3 tL = xfPoint(p.rootInv, world);
             Vector3 f = vnorm({tL.x * 0.6f, -0.5f, -0.86f}), pl{0, -1, 0};
             std::vector<Key> k{Key{}};
-            k.push_back(kk(tr * 0.75f, wristAt(Vector3Add(tL, {0, 0.05f, 0}), f, pl, PINCH_POINT, 1.f, left), f, pl, pose, 0.04f, 1));
-            k.push_back(kk(tr, wristAt(Vector3Add(tL, {0, 0.015f, 0}), f, pl, PINCH_POINT, 1.f, left), f, pl, pose));
-            if (back) k.push_back(kk(tr + 0.35f, wristAt({left ? -0.1f : 0.1f, BY + 0.06f, -0.4f}, f, pl, PINCH_POINT, 1.f, left), f, pl, pose, 0.03f));
+            k.push_back(mkOrtho(tr * 0.75f, wristFor(Vector3Add(tL, {0, 0.05f, 0}), f, pl, PINCH_POINT, 1.f, left), f, pl, pose, 0.04f, 1));
+            k.push_back(mkOrtho(tr, wristFor(Vector3Add(tL, {0, 0.015f, 0}), f, pl, PINCH_POINT, 1.f, left), f, pl, pose));
+            if (back) k.push_back(mkOrtho(tr + 0.35f, wristFor({left ? -0.1f : 0.1f, BY + 0.06f, -0.4f}, f, pl, PINCH_POINT, 1.f, left), f, pl, pose, 0.03f));
             k.push_back(restKey(p, a, (back ? tr + 0.35f : tr) + 0.45f));
             startTrack(p, a, TK_Reach, k);
             p.gazeGoal = world;
@@ -281,12 +250,12 @@ void Cast::updateCrowd(float dt) {
             if (T.timer > 0.f) break;
             if (T.step == 0) {  // shake the dice in the fist
                 Vector3 f{-0.2f, 0.2f, -0.95f}, pl{-0.9f, -0.3f, 0.1f};
-                Vector3 base = wristAt({0.08f, BY + 0.16f, -0.42f}, f, pl, PALM_CENTER, 1.f, false);
+                Vector3 base = wristFor({0.08f, BY + 0.16f, -0.42f}, f, pl, PALM_CENTER, 1.f, false);
                 std::vector<Key> k{Key{}};
-                k.push_back(kk(0.35f, base, f, pl, HandPose::Fist, 0.f, 1));
+                k.push_back(mkOrtho(0.35f, base, f, pl, HandPose::Fist, 0.f, 1));
                 for (int i = 0; i < 4; ++i) {
-                    k.push_back(kk(0.45f + 0.16f * i, Vector3Add(base, {0.01f, 0.035f, -0.01f}), f, pl, HandPose::Fist, 0.f, 3));
-                    k.push_back(kk(0.53f + 0.16f * i, base, f, pl, HandPose::Fist, 0.f, 3));
+                    k.push_back(mkOrtho(0.45f + 0.16f * i, Vector3Add(base, {0.01f, 0.035f, -0.01f}), f, pl, HandPose::Fist, 0.f, 3));
+                    k.push_back(mkOrtho(0.53f + 0.16f * i, base, f, pl, HandPose::Fist, 0.f, 3));
                 }
                 startTrack(p, 0, TK_Gesture, k);
                 p.gazeGoal = c;
@@ -297,7 +266,7 @@ void Cast::updateCrowd(float dt) {
                 Vector3 f{0.1f, -0.3f, -0.95f}, pl{0, -1, 0.2f};
                 Vector3 relL = xfPoint(p.rootInv, Vector3Add(c, {0, 0.12f, 0}));
                 std::vector<Key> k{Key{}};
-                k.push_back(kk(0.28f, wristAt(relL, f, pl, PALM_CENTER, 1.f, false), f, pl, HandPose::Open, 0.02f, 1));
+                k.push_back(mkOrtho(0.28f, wristFor(relL, f, pl, PALM_CENTER, 1.f, false), f, pl, HandPose::Open, 0.02f, 1));
                 k.push_back(restKey(p, 0, 0.9f));
                 startTrack(p, 0, TK_Gesture, k);
                 Vector3 hand = mPos(p.arm[0].hand);
@@ -349,9 +318,9 @@ void Cast::updateCrowd(float dt) {
             Vector3 fan = xfPoint(p.rootInv, mPos(p.arm[1].hand));
             Vector3 dst = xfPoint(p.rootInv, Vector3Add(c, {0, 0.03f, 0}));
             std::vector<Key> k{Key{}};
-            k.push_back(kk(0.35f, wristAt(Vector3Add(fan, {0.02f, 0.06f, -0.02f}), f, pl, PINCH_POINT, 1.f, false), f, pl, HandPose::Pinch, 0.02f));
-            k.push_back(kk(0.62f, wristAt(Vector3Add(dst, {0, 0.07f, 0}), f, pl, PALM_CENTER, 1.f, false), f, pl, HandPose::Open, 0.05f, 1));
-            k.push_back(kk(0.70f, wristAt(Vector3Add(dst, {0, 0.012f, 0}), f, pl, PALM_CENTER, 1.f, false), f, pl, HandPose::Open, 0.f, 2));
+            k.push_back(mkOrtho(0.35f, wristFor(Vector3Add(fan, {0.02f, 0.06f, -0.02f}), f, pl, PINCH_POINT, 1.f, false), f, pl, HandPose::Pinch, 0.02f));
+            k.push_back(mkOrtho(0.62f, wristFor(Vector3Add(dst, {0, 0.07f, 0}), f, pl, PALM_CENTER, 1.f, false), f, pl, HandPose::Open, 0.05f, 1));
+            k.push_back(mkOrtho(0.70f, wristFor(Vector3Add(dst, {0, 0.012f, 0}), f, pl, PALM_CENTER, 1.f, false), f, pl, HandPose::Open, 0.f, 2));
             k.push_back(restKey(p, 0, 1.25f));
             startTrack(p, 0, TK_Reach, k);
             float rot = rng.f(-40.f, 40.f) * DEG2RAD;
@@ -383,13 +352,13 @@ void Cast::updateCrowd(float dt) {
                     const float sd = left ? -1.f : 1.f;
                     Vector3 f{sd * 0.2f, 0.35f, -0.9f}, pl{0, 1, 0.2f};
                     std::vector<Key> k{Key{}};
-                    Vector3 base = wristAt({sd * 0.16f, 0.93f, -0.33f}, f, pl, PALM_CENTER, 1.f, left);
-                    k.push_back(kk(0.5f, base, f, pl, HandPose::Open, 0.02f));
+                    Vector3 base = wristFor({sd * 0.16f, 0.93f, -0.33f}, f, pl, PALM_CENTER, 1.f, left);
+                    k.push_back(mkOrtho(0.5f, base, f, pl, HandPose::Open, 0.02f));
                     float tt = 0.5f;
                     int beats = 2 + rng.i(3);
                     for (int b = 0; b < beats; ++b) {
                         tt += rng.f(0.3f, 0.5f);
-                        k.push_back(kk(tt, Vector3Add(base, {sd * rng.f(-0.03f, 0.05f), rng.f(-0.03f, 0.04f), rng.f(-0.03f, 0.02f)}), f, pl,
+                        k.push_back(mkOrtho(tt, Vector3Add(base, {sd * rng.f(-0.03f, 0.05f), rng.f(-0.03f, 0.04f), rng.f(-0.03f, 0.02f)}), f, pl,
                                        b % 2 ? HandPose::Open : HandPose::Point));
                     }
                     k.push_back(restKey(sp, a, tt + 0.6f));
@@ -404,7 +373,7 @@ void Cast::updateCrowd(float dt) {
                     Vector3 gp = Vector3Add(b, Vector3Scale(ax, 0.055f));
                     Vector3 f = vnorm({0.f, std::sin(th), -std::cos(th)});
                     Vector3 pl = Vector3CrossProduct(ax, f);
-                    Key m1 = kk(0.9f, wristAt(gp, f, pl, GRIP_CENTER, 1.f, false), f, pl, HandPose::Grip, 0.f, 0);
+                    Key m1 = mkOrtho(0.9f, wristFor(gp, f, pl, GRIP_CENTER, 1.f, false), f, pl, HandPose::Grip, 0.f, 0);
                     m1.headRel = true;
                     m1.pole = {0.6f, -0.8f, 0.1f};
                     Key m2 = m1;
@@ -426,7 +395,7 @@ void Cast::updateCrowd(float dt) {
                     Key k;
                     if (p.reading) {
                         Vector3 f{-sd * 0.15f, 0.9f, -0.3f}, pl{-sd * 0.2f, 0.f, 1.f};
-                        k = kk(0.9f, wristAt({sd * 0.25f, 1.02f, -0.36f}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Hold, 0.03f);
+                        k = mkOrtho(0.9f, wristFor({sd * 0.25f, 1.02f, -0.36f}, f, pl, PALM_CENTER, 1.f, left), f, pl, HandPose::Hold, 0.03f);
                     } else {
                         k = restKey(p, a, 0.9f);
                     }
@@ -458,7 +427,7 @@ static int serveNode(int gi, int tavlaSeat) {
     return kServeNode[gi];
 }
 
-void Cast::planTrip(bool ours, int bg) {
+void Cast::planTrip(bool ours, int bg, const std::vector<int>* onlyGlasses) {
     Cayci& b = boy;
     int from = nearestNode(b.pos);
     std::vector<int> nodes;
@@ -474,6 +443,7 @@ void Cast::planTrip(bool ours, int bg) {
         }
         int cur = from;
         for (int gi : order) {
+            if (onlyGlasses && std::find(onlyGlasses->begin(), onlyGlasses->end(), gi) == onlyGlasses->end()) continue;
             std::vector<int> seg = shortestPath(cur, serveNode(gi, tavlaSeat));
             if (!nodes.empty() && !seg.empty()) seg.erase(seg.begin());
             nodes.insert(nodes.end(), seg.begin(), seg.end());
@@ -494,40 +464,112 @@ void Cast::planTrip(bool ours, int bg) {
     b.called = false;
 }
 
-void Cast::updateCayci(float dt) {
+// Every glass of our table served: on to the other tables of a round for everyone, or back to the counter.
+void Cast::finishOurTour() {
     Cayci& b = boy;
-    const PersonLook& L = b.L;
+    banter.teaServed();
+    sfx(ui::Sfx::TeaClink);
+    if (!b.roundBg.empty()) {  // the round goes on to the other tables
+        const int next = b.roundBg.front();
+        b.roundBg.erase(b.roundBg.begin());
+        b.roundReply = true;
+        planTrip(false, next);
+        return;
+    }
+    cayciGoHome();
+}
+
+// The tavla table came or went (Characters::setTavlaTable) while he was on a round of our table: the glasses moved
+// and his serve stops with them. The round is planned again from where he stands, for the glasses not yet poured;
+// a glass in his hand goes back onto its saucer and what his arm was about to do to it is forgotten.
+void Cast::replanOurTrip() {
+    Cayci& b = boy;
+    if (b.plan != 1 || (b.state != 1 && b.state != 2)) return;
+    std::vector<int> left;
+    for (int i = b.serveIdx; i < (int)b.tour.size(); ++i) {
+        const bool poured = i == b.serveIdx && b.state == 2 && b.serveStep == 2 && b.serveT > 0.58f;
+        if (!poured) left.push_back(b.tour[(size_t)i]);
+    }
+    for (TeaGlass& g : glass)
+        if (g.holder == 4) setGlassHolder(g, -1);
+    for (Arm& A : b.arm)
+        for (Key& k : A.track.keys) k.event = 0;
+    if (left.empty()) {
+        finishOurTour();
+        return;
+    }
+    planTrip(true, -1, &left);
+}
+
+// One frame of the çaycı: what his serving and his body share.
+struct CayciFrame {
+    bool atStop = false;          // standing at a glass or a table, serving
+    bool hasFaceTarget = false;
+    Vector3 faceTarget{};         // what he turns to while standing
+    Vector3 fwd{};                // his heading
+    Matrix root = MatrixIdentity(), rootInv = MatrixIdentity();
+    float walk = 0.f, ph = 0.f;   // 0..1 how much he walks; the gait phase (radians)
+    Vector3 hip{};
+    Vector3 trayHold{};           // the tray hand (character-local)
+};
+
+namespace {
+
+// A keyframed move of one of his arms, starting from where the hand is now.
+void startBoyTrack(Arm& A, std::vector<Key> keys) {
+    keys[0] = A.cur;
+    keys[0].t = 0.f;
+    A.track.keys = std::move(keys);
+    A.track.t = 0.f;
+    A.track.on = true;
+    A.track.nextKey = 1;
+}
+
+} // namespace
+
+// Back to the counter along the graph.
+void Cast::cayciGoHome() {
+    Cayci& b = boy;
+    std::vector<int> nodes = shortestPath(nearestNode(b.pos), 0);
+    b.path.clear();
+    for (int n : nodes) b.path.push_back({kNodes[n].x, 0.f, kNodes[n].z});
+    b.pathI = 1;
+    b.plan = 0;
+    b.state = 1;
+}
+
+void Cast::updateCayci(float dt) {
+    CayciFrame F;
+    cayciDecide(dt, F);
+    cayciWalk(dt, F);
+    cayciServe(dt, F);
+    cayciBody(dt, F);
+    cayciFace(dt);
+}
+
+// ---- the brain: when to set out (our table, a round for everyone, a background table), the replies from the counter
+void Cast::cayciDecide(float dt, CayciFrame& F) {
+    Cayci& b = boy;
     b.nextOurs -= dt;
     b.nextBg -= dt;
     b.timer -= dt;
-
-    // ---- decisions
-    auto serveStopFor = [&](int gi) {
-        const int n = serveNode(gi, tavlaSeat);
-        return Vector3{kNodes[n].x, 0.f, kNodes[n].z};
-    };
-    bool atStop = false;
-    Vector3 faceTarget{};
-    bool hasFaceTarget = false;
     if (b.state == 0) {  // at the counter
-        faceTarget = Vector3Add(b.pos, {0, 0, -1.f});
-        hasFaceTarget = true;
-        if (!titleMode || true) {
-            // (Ocakçı) every trip starts from the ocakçı's hands: ocakTrayGate() holds it until he filled the tray
-            if (b.roundQueued && b.timer <= 0.f && ocakTrayGate()) {  // "Çaylar benden!": our table, then everybody
-                planTrip(true, -1);
-                b.roundQueued = false;
-                b.roundBg.clear();
-                for (int t = 0; t < (int)bgTables.size(); ++t)
-                    if (!bgTables[(size_t)t].patrons.empty() && patrons[bgTables[(size_t)t].patrons[0]].present) b.roundBg.push_back(t);
-                b.nextOurs = rng.f(70.f, 100.f);
-            } else if ((b.nextOurs <= 0.f || (b.called && b.nextOurs < 40.f)) && b.timer <= 0.f && ocakTrayGate()) {
-                planTrip(true, -1);
-                b.nextOurs = rng.f(60.f, 90.f);
-            } else if (b.nextBg <= 0.f && b.timer <= 0.f && ocakTrayGate()) {
-                planTrip(false, pickBgTable());
-                b.nextBg = rng.f(26.f, 48.f);
-            }
+        F.faceTarget = Vector3Add(b.pos, {0, 0, -1.f});
+        F.hasFaceTarget = true;
+        // (Ocakçı) every trip starts from the ocakçı's hands: ocakTrayGate() holds it until he filled the tray
+        if (b.roundQueued && b.timer <= 0.f && ocakTrayGate()) {  // "Çaylar benden!": our table, then everybody
+            planTrip(true, -1);
+            b.roundQueued = false;
+            b.roundBg.clear();
+            for (int t = 0; t < (int)bgTables.size(); ++t)
+                if (!bgTables[(size_t)t].patrons.empty() && patrons[bgTables[(size_t)t].patrons[0]].present) b.roundBg.push_back(t);
+            b.nextOurs = rng.f(70.f, 100.f);
+        } else if ((b.nextOurs <= 0.f || (b.called && b.nextOurs < 40.f)) && b.timer <= 0.f && ocakTrayGate()) {
+            planTrip(true, -1);
+            b.nextOurs = rng.f(60.f, 90.f);
+        } else if (b.nextBg <= 0.f && b.timer <= 0.f && ocakTrayGate()) {
+            planTrip(false, pickBgTable());
+            b.nextBg = rng.f(26.f, 48.f);
         }
     }
     if (b.called && b.state == 0 && b.nextOurs > 4.f) b.nextOurs = rng.f(2.f, 4.f);
@@ -542,8 +584,11 @@ void Cast::updateCayci(float dt) {
             pushLine(4, kReplies[rng.i(4)], 1.8f, 2.5f);
         }
     }
+}
 
-    // ---- walking along the path
+// ---- along the path, stopping at each glass of the tour; then where his body stands this frame
+void Cast::cayciWalk(float dt, CayciFrame& F) {
+    Cayci& b = boy;
     float targetSpeed = 0.f;
     if (b.state == 1) {
         if (b.pathI < b.path.size()) {
@@ -555,7 +600,8 @@ void Cast::updateCayci(float dt) {
             // arriving at a serve stop of the tour?
             bool isStop = false;
             if (b.plan == 1 && b.serveIdx < (int)b.tour.size()) {
-                Vector3 s = serveStopFor(b.tour[b.serveIdx]);
+                const int n = serveNode(b.tour[b.serveIdx], tavlaSeat);
+                const Vector3 s{kNodes[n].x, 0.f, kNodes[n].z};
                 isStop = std::hypot(s.x - tgt.x, s.z - tgt.z) < 0.1f;
             }
             float slow = (last || isStop) ? clampf(dist / 0.55f, 0.25f, 1.f) : 1.f;
@@ -592,69 +638,46 @@ void Cast::updateCayci(float dt) {
         }
     }
     b.speed = approachExp(b.speed, targetSpeed, 5.f, dt);
-    Vector3 fwd{-std::sin(b.yaw), 0, -std::cos(b.yaw)};
-    b.pos = Vector3Add(b.pos, Vector3Scale(fwd, b.speed * dt));
+    F.fwd = {-std::sin(b.yaw), 0, -std::cos(b.yaw)};
+    b.pos = Vector3Add(b.pos, Vector3Scale(F.fwd, b.speed * dt));
     b.phase += b.speed * dt / 1.35f;
     b.phase -= std::floor(b.phase);
 
-    // ---- root & body
     const float yawDeg = b.yaw * RAD2DEG;
-    Matrix root = trsYaw(b.pos, yawDeg, 1.f);
-    Matrix rootInv = MatrixInvert(root);
-    const float ph = b.phase * 2.f * PI_F;
-    const float walk = clampf(b.speed / 0.9f, 0.f, 1.f);
-    float bob = -0.012f * std::cos(2.f * ph) * walk;
-    Vector3 hip = Vector3Add(L.hipPivot, {0, bob - 0.01f * walk, 0});
+    F.root = trsYaw(b.pos, yawDeg, 1.f);
+    F.rootInv = MatrixInvert(F.root);
+    F.ph = b.phase * 2.f * PI_F;
+    F.walk = clampf(b.speed / 0.9f, 0.f, 1.f);
+    const float bob = -0.012f * std::cos(2.f * F.ph) * F.walk;
+    F.hip = Vector3Add(b.L.hipPivot, {0, bob - 0.01f * F.walk, 0});
+}
 
-    // ---- serving choreography (our table)
-    Arm& R = b.arm[0];
-    Arm& Lh = b.arm[1];
-    const float hs = L.handScale;
+// ---- the serving choreography: a glass of our table, a glass set down at a background table, idling at the counter
+void Cast::cayciServe(float dt, CayciFrame& F) {
+    Cayci& b = boy;
+    const float hs = b.L.handScale;
     // the askılı tepsi hangs from a nearly straight arm, the tray swinging around knee height
-    Vector3 trayHold = walk > 0.05f ? Vector3{-0.30f, 0.80f, -0.03f} : Vector3{-0.30f, 0.82f, -0.05f};
+    F.trayHold = F.walk > 0.05f ? Vector3{-0.30f, 0.80f, -0.03f} : Vector3{-0.30f, 0.82f, -0.05f};
     if (b.state == 2) {
-        atStop = true;
+        F.atStop = true;
         int gi = b.tour[b.serveIdx];
         TeaGlass& g = glass[gi];
-        faceTarget = g.rest;
-        hasFaceTarget = true;
-        trayHold = {-0.30f, 0.86f, -0.10f};
+        F.faceTarget = g.rest;
+        F.hasFaceTarget = true;
+        F.trayHold = {-0.30f, 0.86f, -0.10f};
         b.serveT += dt;
-        auto startTrackBoy = [&](int a, std::vector<Key> keys) {
-            Arm& A = b.arm[a];
-            keys[0] = A.cur;
-            keys[0].t = 0.f;
-            A.track.keys = std::move(keys);
-            A.track.t = 0.f;
-            A.track.on = true;
-            A.track.nextKey = 1;
-        };
         // on to the next glass of the round (or back to the counter when all are done)
         auto nextStop = [&]() {
             b.serveStep = 3;
             b.serveT = 0.f;
             ++b.serveIdx;
             if (b.serveIdx >= (int)b.tour.size()) {
-                banter.teaServed();
-                sfx(ui::Sfx::TeaClink);
-                if (!b.roundBg.empty()) {  // the round goes on to the other tables
-                    const int next = b.roundBg.front();
-                    b.roundBg.erase(b.roundBg.begin());
-                    b.roundReply = true;
-                    planTrip(false, next);
-                    return;
-                }
-                std::vector<int> nodes = shortestPath(nearestNode(b.pos), 0);
-                b.path.clear();
-                for (int n : nodes) b.path.push_back({kNodes[n].x, 0.f, kNodes[n].z});
-                b.pathI = 1;
-                b.plan = 0;
-                b.state = 1;
+                finishOurTour();
             } else {
                 b.state = 1;
             }
         };
-        Vector3 gl = xfPoint(rootInv, g.rest);
+        Vector3 gl = xfPoint(F.rootInv, g.rest);
         Vector3 f0, p0;
         {
             Vector3 fl = vnorm({gl.x + 0.1f, 0, gl.z});
@@ -664,18 +687,18 @@ void Cast::updateCayci(float dt) {
             p0 = Vector3CrossProduct(a, fl);
         }
         Vector3 gripP = Vector3Add(gl, {0, 0.055f, 0});
-        Vector3 wGrip = wristAt(gripP, f0, p0, GRIP_CENTER, hs, false);
-        Vector3 trayTop = xfPoint(rootInv, xfPoint(b.trayW, {0, -0.30f + 0.02f, 0}));
-        Vector3 wTray = wristAt(Vector3Add(trayTop, {0.03f, 0.055f + 0.01f, 0.02f}), f0, p0, GRIP_CENTER, hs, false);
+        Vector3 wGrip = wristFor(gripP, f0, p0, GRIP_CENTER, hs, false);
+        Vector3 trayTop = xfPoint(F.rootInv, xfPoint(b.trayW, {0, -0.30f + 0.02f, 0}));
+        Vector3 wTray = wristFor(Vector3Add(trayTop, {0.03f, 0.055f + 0.01f, 0.02f}), f0, p0, GRIP_CENTER, hs, false);
         switch (b.serveStep) {
         case 0:
             if (g.holder >= 0 && b.serveT > 4.f) {  // he's still drinking it: leave him be
                 nextStop();
             } else if (b.serveT > 0.35f && g.holder < 0) {
                 std::vector<Key> k{Key{}};
-                k.push_back(kk(0.5f, Vector3Add(wGrip, {0.02f, 0.04f, 0.03f}), f0, p0, HandPose::Hold, 0.03f));
-                k.push_back(kk(0.7f, wGrip, f0, p0, HandPose::Grip, 0.f, 0, KE_GrabGlass));
-                startTrackBoy(0, k);
+                k.push_back(mkOrtho(0.5f, Vector3Add(wGrip, {0.02f, 0.04f, 0.03f}), f0, p0, HandPose::Hold, 0.03f));
+                k.push_back(mkOrtho(0.7f, wGrip, f0, p0, HandPose::Grip, 0.f, 0, KE_GrabGlass));
+                startBoyTrack(b.arm[0], k);
                 b.serveStep = 1;
                 b.serveT = 0.f;
                 if (b.serveIdx == 0 && !titleMode && rng.chance(0.6f)) {
@@ -685,13 +708,18 @@ void Cast::updateCayci(float dt) {
             }
             break;
         case 1:
-            if (b.serveT > 0.75f) {
+            if (b.serveT > 0.75f && g.holder != 4) {  // somebody picked it up first (the player): on to the next one
                 std::vector<Key> k{Key{}};
-                k.push_back(kk(0.5f, wTray, f0, p0, HandPose::Grip, 0.06f));
-                k.push_back(kk(0.65f, wTray, f0, p0, HandPose::Grip));
-                k.push_back(kk(1.15f, wGrip, f0, p0, HandPose::Grip, 0.06f, 0, KE_ReleaseGlass));
-                k.push_back(kk(1.4f, Vector3Add(wGrip, {0.03f, 0.05f, 0.04f}), f0, p0, HandPose::Rest, 0.f, 1));
-                startTrackBoy(0, k);
+                k.push_back(mkOrtho(0.45f, Vector3Add(wGrip, {0.03f, 0.05f, 0.04f}), f0, p0, HandPose::Rest, 0.f, 1));
+                startBoyTrack(b.arm[0], k);
+                nextStop();
+            } else if (b.serveT > 0.75f) {
+                std::vector<Key> k{Key{}};
+                k.push_back(mkOrtho(0.5f, wTray, f0, p0, HandPose::Grip, 0.06f));
+                k.push_back(mkOrtho(0.65f, wTray, f0, p0, HandPose::Grip));
+                k.push_back(mkOrtho(1.15f, wGrip, f0, p0, HandPose::Grip, 0.06f, 0, KE_ReleaseGlass));
+                k.push_back(mkOrtho(1.4f, Vector3Add(wGrip, {0.03f, 0.05f, 0.04f}), f0, p0, HandPose::Rest, 0.f, 1));
+                startBoyTrack(b.arm[0], k);
                 b.serveStep = 2;
                 b.serveT = 0.f;
             }
@@ -711,29 +739,23 @@ void Cast::updateCayci(float dt) {
         if (gi == 0 && b.serveStep >= 1) b.gaze = viewerPos();  // eye contact while serving the human
     }
     if (b.state == 3) {  // at a background table: set a glass down
-        atStop = true;
+        F.atStop = true;
         const BgTable& T = bgTables[(size_t)std::clamp(b.bgTarget, 0, 3)];
-        faceTarget = T.c;
-        hasFaceTarget = true;
-        trayHold = {-0.30f, 0.86f, -0.10f};
+        F.faceTarget = T.c;
+        F.hasFaceTarget = true;
+        F.trayHold = {-0.30f, 0.86f, -0.10f};
         b.serveT += dt;
         if (b.serveStep == 0 && b.serveT > 0.4f) {
-            Vector3 tl = xfPoint(rootInv, Vector3Add(T.c, {0, BY, 0}));
+            Vector3 tl = xfPoint(F.rootInv, Vector3Add(T.c, {0, BY, 0}));
             Vector3 dst = Vector3Add(Vector3Scale(vnorm({tl.x, 0, tl.z}), 0.55f), {0, BY + 0.03f, 0});
             Vector3 f = vnorm({dst.x, -0.4f, dst.z}), pl{0, -1, 0};
             std::vector<Key> k{Key{}};
-            k.push_back(kk(0.55f, wristAt(dst, f, pl, PALM_CENTER, hs, false), f, pl, HandPose::Grip, 0.05f, 0, 0));
+            k.push_back(mkOrtho(0.55f, wristFor(dst, f, pl, PALM_CENTER, hs, false), f, pl, HandPose::Grip, 0.05f, 0, 0));
             Key back;
-            back = kk(1.2f, wristAt({0.22f, 0.86f, -0.05f}, {0, -1, -0.1f}, {-1, 0, 0}, PALM_CENTER, hs, false), {0, -1, -0.1f},
+            back = mkOrtho(1.2f, wristFor({0.22f, 0.86f, -0.05f}, {0, -1, -0.1f}, {-1, 0, 0}, PALM_CENTER, hs, false), {0, -1, -0.1f},
                       {-1, 0, 0}, HandPose::Rest);
             k.push_back(back);
-            Arm& A = b.arm[0];
-            k[0] = A.cur;
-            k[0].t = 0.f;
-            A.track.keys = k;
-            A.track.t = 0.f;
-            A.track.on = true;
-            A.track.nextKey = 1;
+            startBoyTrack(b.arm[0], k);
             b.serveStep = 1;
             sfx(ui::Sfx::GlassSet);
             ocakTrayServed();  // (Ocakçı) a glass off the tray
@@ -752,87 +774,61 @@ void Cast::updateCayci(float dt) {
                 planTrip(false, next);
             } else {
                 b.roundReply = false;
-                std::vector<int> nodes = shortestPath(nearestNode(b.pos), 0);
-                b.path.clear();
-                for (int n : nodes) b.path.push_back({kNodes[n].x, 0.f, kNodes[n].z});
-                b.pathI = 1;
-                b.plan = 0;
-                b.state = 1;
+                cayciGoHome();
             }
         }
     }
     if (b.state == 0) {
         // idle at the counter: now and then pour/arrange a glass
         b.counterIdleT -= dt;
-        if (b.counterIdleT <= 0.f && !R.track.on) {
+        if (b.counterIdleT <= 0.f && !b.arm[0].track.on) {
             b.counterIdleT = rng.f(3.f, 7.f);
             Vector3 f{-0.2f, -0.3f, -0.93f}, pl{0, -1, 0};
-            Vector3 w = wristAt({0.12f, 1.02f, -0.34f}, f, pl, PALM_CENTER, hs, false);
+            Vector3 w = wristFor({0.12f, 1.02f, -0.34f}, f, pl, PALM_CENTER, hs, false);
             std::vector<Key> k{Key{}};
-            k.push_back(kk(0.6f, w, f, pl, HandPose::Hold, 0.02f));
-            k.push_back(kk(1.4f, Vector3Add(w, {-0.06f, 0.01f, 0}), f, pl, HandPose::Grip));
-            k.push_back(kk(2.1f, wristAt({0.22f, 0.86f, -0.05f}, {0, -1, -0.1f}, {-1, 0, 0}, PALM_CENTER, hs, false), {0, -1, -0.1f},
+            k.push_back(mkOrtho(0.6f, w, f, pl, HandPose::Hold, 0.02f));
+            k.push_back(mkOrtho(1.4f, Vector3Add(w, {-0.06f, 0.01f, 0}), f, pl, HandPose::Grip));
+            k.push_back(mkOrtho(2.1f, wristFor({0.22f, 0.86f, -0.05f}, {0, -1, -0.1f}, {-1, 0, 0}, PALM_CENTER, hs, false), {0, -1, -0.1f},
                            {-1, 0, 0}, HandPose::Rest));
-            R.track.keys = k;
-            R.track.keys[0] = R.cur;
-            R.track.t = 0.f;
-            R.track.on = true;
-            R.track.nextKey = 1;
+            startBoyTrack(b.arm[0], k);
         }
     }
     // face the serve target while standing
-    if (hasFaceTarget && (atStop || b.state == 0)) {
-        Vector3 d = Vector3Subtract(faceTarget, b.pos);
+    if (F.hasFaceTarget && (F.atStop || b.state == 0)) {
+        Vector3 d = Vector3Subtract(F.faceTarget, b.pos);
         float want = std::atan2(-d.x, -d.z);
         float diff = wrapAngle(want - b.yaw);
         b.yaw = wrapAngle(b.yaw + clampf(diff, -3.5f * dt, 3.5f * dt));
     }
+}
 
+// ---- the body: torso, head, legs, arms (the events of their tracks), the tray's swing
+void Cast::cayciBody(float dt, CayciFrame& F) {
+    Cayci& b = boy;
+    const PersonLook& L = b.L;
+    const float hs = L.handScale;
+    Arm& R = b.arm[0];
+    Arm& Lh = b.arm[1];
     // ---- torso / head
-    float leanGoal = 0.05f * walk + (atStop ? 0.16f : 0.f);
+    float leanGoal = 0.05f * F.walk + (F.atStop ? 0.16f : 0.f);
     spring(b.lean, b.leanV, leanGoal, 5.f, dt);
-    float twist = 0.06f * std::cos(ph) * walk;
+    float twist = 0.06f * std::cos(F.ph) * F.walk;
     Matrix tl = mul(RY(twist), RX(-b.lean));
-    Matrix torsoLocal = mul(tl, T(hip));
-    b.torsoW = mul(torsoLocal, root);
+    Matrix torsoLocal = mul(tl, T(F.hip));
+    b.torsoW = mul(torsoLocal, F.root);
     // gaze: ahead while walking, at the glass / table while serving
     Vector3 gz;
-    if (b.state == 1) gz = Vector3Add(b.pos, Vector3Add(Vector3Scale(fwd, 2.2f), {0, 1.2f, 0}));
-    else if (atStop) gz = Vector3Add(faceTarget, {0, 0.05f, 0});
+    if (b.state == 1) gz = Vector3Add(b.pos, Vector3Add(Vector3Scale(F.fwd, 2.2f), {0, 1.2f, 0}));
+    else if (F.atStop) gz = Vector3Add(F.faceTarget, {0, 0.05f, 0});
     else gz = Vector3Add(b.pos, {0, 1.05f, -0.5f});
     if (b.state == 2 && b.tour[std::min(b.serveIdx, (int)b.tour.size() - 1)] == 0 && b.serveStep >= 1) gz = viewerPos();
     b.gaze = approachExp(b.gaze, gz, 6.f, dt);
-    {
-        Matrix inv = MatrixInvert(b.torsoW);
-        Vector3 tgt = xfPoint(inv, b.gaze);
-        Vector3 eyes{0, L.spineLen + 0.10f, L.headZ - 0.07f};
-        Vector3 d = Vector3Subtract(tgt, eyes);
-        float yawN = clampf(std::atan2(-d.x, -d.z) * 0.8f, -1.1f, 1.1f);
-        float pitchN = clampf(std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z)) * 0.7f, -0.7f, 0.4f);
-        spring(b.hYaw, b.hYawV, yawN, 6.f, dt);
-        spring(b.hPitch, b.hPitchV, pitchN, 6.f, dt);
-    }
-    Matrix headT = mul(mul(RX(b.hPitch + 0.02f * std::sin(ph * 2.f) * walk), RY(b.hYaw)), T({0, L.spineLen, L.headZ}));
+    headLookSpring(b.torsoW, L, b.gaze, 0.7f, -0.7f, 6.f, dt, b.hYaw, b.hYawV, b.hPitch, b.hPitchV);
+    Matrix headT = mul(mul(RX(b.hPitch + 0.02f * std::sin(F.ph * 2.f) * F.walk), RY(b.hYaw)), T({0, L.spineLen, L.headZ}));
     b.headW = mul(headT, b.torsoW);
 
     // ---- legs
-    for (int i = 0; i < 2; ++i) {
-        const float sd = i == 0 ? 1.f : -1.f;
-        float lp = ph + (i == 0 ? 0.f : PI_F);
-        float u = std::fmod(b.phase + (i == 0 ? 0.f : 0.5f), 1.f);
-        float thigh = 0.38f * std::cos(lp) * walk + 0.02f;
-        auto bump = [](float x, float c, float w) { return std::exp(-((x - c) / w) * ((x - c) / w)); };
-        float knee = 0.06f + (0.12f * bump(u, 0.12f, 0.08f) + 0.95f * bump(u, 0.72f, 0.13f) + 0.95f * bump(u, -0.28f, 0.13f)) * walk;
-        Vector3 hipJ = xfPoint(root, Vector3Add(hip, {sd * 0.088f, -0.03f, 0.01f}));
-        Vector3 thighDir = xfDir(root, {0.012f * sd, -std::cos(thigh), -std::sin(thigh)});
-        Vector3 kneeP = Vector3Add(hipJ, Vector3Scale(vnorm(thighDir), 0.44f));
-        float sh = thigh - knee;
-        Vector3 shinDir = xfDir(root, {0.f, -std::cos(sh), -std::sin(sh)});
-        Vector3 ankle = Vector3Add(kneeP, Vector3Scale(vnorm(shinDir), 0.43f));
-        Vector3 back = xfDir(root, {0, 0, 1});
-        b.thighW[i] = boneMatrix(hipJ, kneeP, back);
-        b.shinW[i] = boneMatrix(kneeP, ankle, back);
-    }
+    walkLegs(F.root, F.hip, b.phase, F.walk, b.thighW, b.shinW);
 
     // ---- arms
     // right (free) arm swings while walking unless a track runs
@@ -842,22 +838,16 @@ void Cast::updateCayci(float dt) {
             A.track.t += dt;
             while (A.track.nextKey < (int)A.track.keys.size() && A.track.keys[A.track.nextKey].t <= A.track.t) {
                 int ev = A.track.keys[A.track.nextKey].event;
-                if (ev == KE_GrabGlass && b.state == 2) {
+                if (ev == KE_GrabGlass && b.state == 2 && glass[b.tour[b.serveIdx]].holder < 0) {
                     TeaGlass& g = glass[b.tour[b.serveIdx]];
-                    g.holder = 4;
-                    g.holderArm = a;
+                    setGlassHolder(g, 4, a);
                     // right-hand grip
                     const float inv = 1.f / hs;
                     Vector3 ay{-1, 0, 0}, ax{0, 1, 0}, az{0, 0, 1};
                     Vector3 t0 = Vector3Subtract(GRIP_CENTER, Vector3Scale(ay, 0.055f * inv));
                     g.inHand = basisMatrix(Vector3Scale(ax, inv), Vector3Scale(ay, inv), Vector3Scale(az, inv), t0);
-                    g.from = g.world;
-                    g.blend = 0.f;
-                } else if (ev == KE_ReleaseGlass && b.state == 2) {
-                    TeaGlass& g = glass[b.tour[b.serveIdx]];
-                    g.holder = -1;
-                    g.from = g.world;
-                    g.blend = 0.f;
+                } else if (ev == KE_ReleaseGlass && b.state == 2 && glass[b.tour[b.serveIdx]].holder == 4) {
+                    setGlassHolder(glass[b.tour[b.serveIdx]], -1);
                     sfx(ui::Sfx::GlassSet);
                 }
                 ++A.track.nextKey;
@@ -868,22 +858,22 @@ void Cast::updateCayci(float dt) {
             }
         }
     }
-    const float sw = -0.32f * std::cos(ph) * walk;
+    const float sw = -0.32f * std::cos(F.ph) * F.walk;
     Key rk;
     if (R.track.on) {
         evalTrack(R.track, R.track.t, rk);
-    } else if (walk > 0.05f || b.state == 1) {
+    } else if (F.walk > 0.05f || b.state == 1) {
         Vector3 pl{-1, 0, 0};
         Vector3 hand{0.215f, 1.40f - 0.57f * std::cos(sw), -0.57f * std::sin(sw) + 0.02f};
-        rk = kk(0, hand, {0, -std::cos(sw), -std::sin(sw)}, pl, HandPose::Rest);
+        rk = mkOrtho(0, hand, {0, -std::cos(sw), -std::sin(sw)}, pl, HandPose::Rest);
         R.hold = rk;
     } else {
         rk = R.hold;
     }
     R.cur = rk;
-    Key lk = kk(0, trayHold, {0.25f, -0.25f, -0.93f}, {0.9f, -0.35f, 0.25f}, HandPose::Grip);
-    lk.pos = wristAt(Vector3Add(trayHold, {0, 0.01f, 0}), lk.fingers, lk.palm, GRIP_CENTER, hs, true);
-    ocakBoyTrayHand(lk, rootInv, hs);  // (Ocakçı) reaching for the tray / the hand free while the ocakçı has it
+    Key lk = mkOrtho(0, F.trayHold, {0.25f, -0.25f, -0.93f}, {0.9f, -0.35f, 0.25f}, HandPose::Grip);
+    lk.pos = wristFor(Vector3Add(F.trayHold, {0, 0.01f, 0}), lk.fingers, lk.palm, GRIP_CENTER, hs, true);
+    ocakBoyTrayHand(lk, F.rootInv, hs);  // (Ocakçı) reaching for the tray / the hand free while the ocakçı has it
     Lh.cur = lk;
     Lh.cur.pos = approachExp(Lh.localWrist, lk.pos, 3.f, dt);
     Lh.localWrist = Lh.cur.pos;
@@ -894,81 +884,69 @@ void Cast::updateCayci(float dt) {
         Key k = keys[a];
         A.localWrist = k.pos;
         A.shoulder = xfPoint(b.torsoW, {sd * L.shoulderW, L.shoulderY, 0.012f});
-        Vector3 w = xfPoint(root, k.pos);
+        Vector3 w = xfPoint(F.root, k.pos);
         // the tray arm hangs with its elbow tucked back; the free arm bends outward a little
-        Vector3 pole = xfDir(root, a == 1 ? vnorm({-0.25f, -0.25f, 1.f}) : vnorm({sd * 0.45f, -0.7f, 0.4f}));
+        Vector3 pole = xfDir(F.root, a == 1 ? vnorm({-0.25f, -0.25f, 1.f}) : vnorm({sd * 0.45f, -0.7f, 0.4f}));
         A.elbow = solveTwoBone(A.shoulder, w, L.upperArm, L.foreArm, pole);
         A.wrist = w;
-        Vector3 back = xfDir(root, {0, 0, 1});
+        Vector3 back = xfDir(F.root, {0, 0, 1});
         A.upper = boneMatrix(A.shoulder, A.elbow, back);
         A.fore = boneMatrix(A.elbow, A.wrist, back);
-        A.hand = handMatrix(A.wrist, xfDir(root, k.fingers), xfDir(root, k.palm), hs);
+        A.hand = handMatrix(A.wrist, xfDir(F.root, k.fingers), xfDir(F.root, k.palm), hs);
         A.pose = k.pose;
     }
 
     // ---- the askılı tepsi: a pendulum hanging from the left hand's grip. A çaycı steadies it, so it answers
     // only to the smoothed motion of his hand, swings at most ~16° (the tea stays in the glasses, and it
     // doesn't look like spilling), settles quickly when he stops, and its rim never swings into his thigh
-    Vector3 pivot = xfPoint(Lh.hand, mirrorX3(GRIP_CENTER));
+    Vector3 pivot = xfPoint(Lh.hand, mirrorL(GRIP_CENTER, true));
     const float Lr = 0.30f;
     if (!b.trayInit) {
         b.trayPivotF = pivot;
         b.trayP = b.trayPrev = Vector3Add(pivot, {0, -Lr, 0});
         b.trayInit = true;
     }
-    {
-        const float h = std::min(dt, 0.05f);
-        b.trayPivotF = approachExp(b.trayPivotF, pivot, 10.f, h);
-        const Vector3 v = Vector3Scale(Vector3Subtract(b.trayP, b.trayPrev), std::exp(-(walk > 0.05f ? 8.f : 12.f) * h));
-        b.trayPrev = b.trayP;
-        b.trayP = Vector3Add(Vector3Add(b.trayP, v), {0, -9.81f * h * h, 0});
-        Vector3 d = vnorm(Vector3Subtract(b.trayP, b.trayPivotF));
-        const float maxSwing = 16.f * DEG2RAD;
-        if (-d.y < std::cos(maxSwing)) {
-            const Vector3 side = vnorm({d.x, 0.f, d.z});
-            d = Vector3Add(Vector3Scale(side, std::sin(maxSwing)), {0.f, -std::cos(maxSwing), 0.f});
+    {  // Verlet at a fixed step (a varying h would bend the velocity it keeps)
+        constexpr float h = 1.f / 240.f;
+        const float damp = std::exp(-(F.walk > 0.05f ? 8.f : 12.f) * h);
+        b.trayAcc = std::min(b.trayAcc + dt, 0.05f);
+        for (; b.trayAcc >= h - 1e-6f; b.trayAcc -= h) {
+            b.trayPivotF = approachExp(b.trayPivotF, pivot, 10.f, h);
+            const Vector3 v = Vector3Scale(Vector3Subtract(b.trayP, b.trayPrev), damp);
+            b.trayPrev = b.trayP;
+            b.trayP = Vector3Add(Vector3Add(b.trayP, v), {0, -9.81f * h * h, 0});
+            Vector3 d = vnorm(Vector3Subtract(b.trayP, b.trayPivotF));
+            const float maxSwing = 16.f * DEG2RAD;
+            if (-d.y < std::cos(maxSwing)) {
+                const Vector3 side = vnorm({d.x, 0.f, d.z});
+                d = Vector3Add(Vector3Scale(side, std::sin(maxSwing)), {0.f, -std::cos(maxSwing), 0.f});
+            }
+            b.trayP = Vector3Add(b.trayPivotF, Vector3Scale(d, Lr));
         }
-        b.trayP = Vector3Add(b.trayPivotF, Vector3Scale(d, Lr));
+        b.trayAcc = std::max(b.trayAcc, 0.f);
     }
     Vector3 down = vnorm(Vector3Subtract(b.trayP, b.trayPivotF));
     {
         // keep the tray (radius 0.14) clear of the left thigh (axis 0.088 off the middle, radius ~0.07)
-        Vector3 cl = xfPoint(rootInv, Vector3Add(pivot, Vector3Scale(down, Lr)));
+        Vector3 cl = xfPoint(F.rootInv, Vector3Add(pivot, Vector3Scale(down, Lr)));
         const float xMax = -(0.088f + 0.07f + 0.14f + 0.012f);
         if (cl.x > xMax) {
             cl.x = xMax;
-            down = vnorm(Vector3Subtract(xfPoint(root, cl), pivot));
+            down = vnorm(Vector3Subtract(xfPoint(F.root, cl), pivot));
         }
     }
     const Vector3 up = Vector3Negate(down);
-    Vector3 bk = xfDir(root, {0, 0, 1});
+    Vector3 bk = xfDir(F.root, {0, 0, 1});
     b.trayW = boneMatrix(pivot, Vector3Add(pivot, up), bk);
+}
 
+// ---- the face: blinks, eyes, lips following his voice
+void Cast::cayciFace(float dt) {
+    Cayci& b = boy;
     // ---- face
-    b.blinkIn -= dt;
-    if (b.blinkIn <= 0.f && b.blinkT < 0.f) {
-        b.blinkT = 0.f;
-        b.blinkIn = rng.f(2.f, 5.f);
-    }
-    float lidClose = 0.f;
-    if (b.blinkT >= 0.f) {
-        b.blinkT += dt;
-        lidClose = std::sin(clampf(b.blinkT / 0.15f, 0.f, 1.f) * PI_F);
-        if (b.blinkT > 0.15f) b.blinkT = -1.f;
-    }
+    const float lidClose = blinkStep(rng, b.blinkIn, b.blinkT, dt, 5.f, 0.15f);
     const FaceGeo& fg = b.pm->face;
-    Matrix headInv = MatrixInvert(b.headW);
-    Vector3 tH = xfPoint(headInv, b.gaze);
-    Vector3 dd = Vector3Subtract(tH, Vector3Lerp(fg.eye[0], fg.eye[1], 0.5f));
-    b.eYaw = approachExp(b.eYaw, clampf(std::atan2(-dd.x, -dd.z), -0.5f, 0.5f), 25.f, dt);
-    b.ePitch = approachExp(b.ePitch, clampf(std::atan2(dd.y, std::sqrt(dd.x * dd.x + dd.z * dd.z)), -0.45f, 0.35f), 25.f, dt);
-    float edge = lerpf(-0.40f - b.ePitch * 0.55f, 0.6f, lidClose);
-    const float es = fg.eyeR / 0.0135f;
-    for (int i = 0; i < 2; ++i) {
-        b.eyeW[i] = mul(mul(S3(es, es, es), RX(b.ePitch), RY(b.eYaw)), T(fg.eye[i]), b.headW);
-        b.lidW[i] = mul(mul(S3(es, es, es), RX(-edge)), T(fg.eye[i]), b.headW);
-        b.browW[i] = mul(RZ((i == 0 ? 1.f : -1.f) * -0.05f), T(fg.brow[i]), b.headW);
-    }
+    standingEyes(fg, b.headW, b.gaze, -0.40f, lidClose, -0.05f, dt, b.eYaw, b.ePitch, b.eyeW, b.lidW, b.browW);
     float jawGoal = 0.f;
     if (b.talkT >= 0.f) {
         b.talkT += dt;
@@ -977,10 +955,9 @@ void Cast::updateCayci(float dt) {
         if (b.talkT > b.talkDur) b.talkT = -1.f;
     }
     b.jaw = approachExp(b.jaw, clampf(jawGoal, 0.f, 1.f), 26.f, dt);
-    b.mouthW = mul(S3(1.1f, 0.06f + 0.9f * b.jaw, 1.f),
-                   T(Vector3Add(fg.mouth, {0, -0.004f * b.jaw, 0.004f - 0.004f * smooth01(b.jaw * 4.f)})), b.headW);
-    b.lipW = mul(T(Vector3Add(fg.mouth, {0, -0.0058f - 0.009f * b.jaw, -0.0015f})), b.headW);
+    standingMouth(fg, b.headW, b.jaw, b.mouthW, b.lipW);
 }
+
 
 } // namespace chr
 } // namespace r3d

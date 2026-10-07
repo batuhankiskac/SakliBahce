@@ -13,8 +13,9 @@ namespace chr {
 
 // His head, torso (white shirt, sleeves rolled up, a navy bib apron), brows, mustache, arms (CharactersOcakciMesh.inc,
 // compiled inside CharactersMesh.cpp) and the apron's skirt over his legs (local: the standing root, hips at y 0.94).
+// The SDF parts are queued on `J` (buildPeople's batch: one pass over the cores for everybody); the rest is built now.
 PersonLook lookOcakci();
-void buildOcakciPerson(PersonMeshes& pm, Mesh& apronSkirt, Renderer& r);
+void queueOcakciPerson(MeshJobs& J, PersonMeshes& pm, Mesh& apronSkirt, Renderer& r);
 
 // A thing he picks up: where it is (world), who holds it (0 nobody: it rests at `rest`, 1 his right hand, 2 his left),
 // and a short blend when it changes hands so it never pops.

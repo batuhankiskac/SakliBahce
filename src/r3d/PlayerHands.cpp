@@ -1133,7 +1133,6 @@ float PlayerHands::lead(HandCueKind k) const {
     }
 }
 
-void PlayerHands::debugIdle(const char* what) { impl_->debugAsk = what ? what : ""; }
 
 bool PlayerHands::shown() const {
     const Impl& m = *impl_;

@@ -72,6 +72,16 @@ struct Position {
 };
 
 // ---- geometry helpers (all in absolute indices) ----
+namespace detail {
+// The splitmix64 finaliser (the engine's position hashes, the bots' seeds). In `detail`: callers that use the whole
+// namespace keep their own mix64.
+inline uint64_t mix64(uint64_t z) {
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+} // namespace detail
+
 inline int direction(int p) { return p == 0 ? -1 : +1; }
 inline int homeLo(int p) { return p == 0 ? 0 : 18; }                 // home board = homeLo..homeLo+5
 inline bool inHome(int p, int i) { return i >= homeLo(p) && i < homeLo(p) + 6; }
@@ -252,7 +262,7 @@ public:
     explicit Game(const Rules& r = Rules());
 
     // ---- setup ----
-    void setRules(const Rules& r);                 // only between matches
+    void setRules(const Rules& r);                 // only between matches (ignored while a match is running)
     const Rules& rules() const { return rules_; }
     void setPlayer(int p, const std::string& name, bool human); // p = 0 (bottom) or 1 (across)
     void startMatch(uint64_t seed);                // scores 0, game 0 -> Stage::OpeningRoll
@@ -299,7 +309,6 @@ public:
     // possible / play the larger die if only one can be played" rule satisfiable. Empty unless Moving.
     // (Recomputed on every call; cache it per state in the UI.)
     std::vector<Step> legalSteps() const;
-    std::vector<Step> legalStepsFrom(int from) const; // for drag highlighting
     // All distinct complete plays from the current state with the remaining dice (bots / hints).
     std::vector<Play> allTurnPlays() const;
     // Moving and no legal step remains (only observable with Rules::confirmTurn; endTurn() is due).

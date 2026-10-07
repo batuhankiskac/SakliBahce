@@ -110,12 +110,9 @@ public:
         bots_[1] = std::make_unique<tavla::Bot>((tavla::BotLevel)std::clamp(level_, 0, 2), seed * 2 + 0x7A2ull);
         rng_.reseed(seed ^ 0x7A7Aull);
         replay_ = false;
-        hud_.clearToasts();
-        hud_.clearBanner();
+        resetTransient();
         results_.clear();
-        selected_ = -1;
         marsWarned_ = false;
-        hint_ = Hint();
         board_.hideDice();
         board_.setCube(false, 1, -1, 0);
         g_.startMatch(seed);
@@ -187,7 +184,27 @@ public:
                 if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) selected_ = -1;
             }
         }
-        // bots (Mahmut, and our seat in the Yapay Zeka mode)
+        updateBot(dt, aiSeat);
+        updateHighlights(aiSeat);
+        const tavla::Dice& d = g_.dice();
+        if (d.n > 0) board_.setDiceUsed(d.used, d.n, d.isDouble());
+        syncCube();
+        // the mars threat, said once per game when it begins
+        const int mt = marsThreat();
+        if (mt >= 0 && !marsWarned_) {
+            marsWarned_ = true;
+            hud_.toast(mt == 0 ? "Mars tehlikesi! Bir pul toplamadan bitirirse mars olursun" : names_[opp_] + " mars tehlikesinde!",
+                       mt == 0 ? ui::pal::Bad : ui::pal::Highlight, 3.f);
+            if (mt == 1) say(opp_, kOppMarsThreat[opp_]);
+            else if (rng_.chance(0.5f)) say(watcher(), "Aman ha, mars kapıda!");
+        }
+    }
+
+    void submit(r3d::Renderer& r) override { board_.submit(r); }
+
+    // ---- update()'s stages
+    // The bots: Mahmut (or whoever sits across), and our seat in the Yapay Zeka mode, each decision after its pause.
+    void updateBot(float dt, bool aiSeat) {
         if (!replay_ && !board_.animating() && !over()) {
             const int p = actorPlayer();
             if (p >= 0 && (p == 1 || aiSeat)) {
@@ -210,7 +227,9 @@ public:
                 }
             }
         }
-        // the player's highlights
+    }
+    // The player's highlights: the points he may move from / to, or the İpucu's step; the keyboard's target.
+    void updateHighlights(bool aiSeat) {
         std::vector<int> targets, sources;
         if (humanToAct() && !aiSeat && g_.stage() == tavla::Stage::Moving && g_.current() == 0) {
             const std::vector<tavla::Step> steps = g_.legalSteps();
@@ -236,47 +255,11 @@ public:
         }
         if (std::find(targets.begin(), targets.end(), kbTarget_) == targets.end()) kbTarget_ = targets.empty() ? -1 : targets[0];
         board_.setKeyFocus(ui::keyboardNav() && selected_ >= 0 ? kbTarget_ : -1);
-        const tavla::Dice& d = g_.dice();
-        if (d.n > 0) board_.setDiceUsed(d.used, d.n, d.isDouble());
-        syncCube();
-        // the mars threat, said once per game when it begins
-        const int mt = marsThreat();
-        if (mt >= 0 && !marsWarned_) {
-            marsWarned_ = true;
-            hud_.toast(mt == 0 ? "Mars tehlikesi! Bir pul toplamadan bitirirse mars olursun" : names_[opp_] + " mars tehlikesinde!",
-                       mt == 0 ? ui::pal::Bad : ui::pal::Highlight, 3.f);
-            if (mt == 1) say(opp_, kOppMarsThreat[opp_]);
-            else if (rng_.chance(0.5f)) say(watcher(), "Aman ha, mars kapıda!");
-        }
     }
-
-    void submit(r3d::Renderer& r) override { board_.submit(r); }
-
-
-    void drawHUD(const r3d::Renderer& r, Vector2 mouse, bool aiSeat) override {
-        hud_.beginFrame();
-        const bool aiTag = aiSeat && !replay_; // (the "Yapay Zeka" look; in a replay our seat is just its player)
-        const bool sen = replay_ && names_[0] == "Sen"; // (the default name: "Sıra sende", not "Sen oynuyor")
-        const std::string me = replay_ ? names_[0] : std::string("Yapay zeka");
-        aiSeat = aiSeat || replay_;            // no decisions of the player's here
-        const bool cube = g_.rules().doubling;
-        std::array<Vector3, 4> heads{};
-        std::array<r3d::GameHud::Plate, 4> plates{};
-        for (int s = 1; s < 4; ++s) heads[(size_t)s] = ctx_.characters ? ctx_.characters->headPosition(s) : Vector3{};
-        r3d::GameHud::Plate& p = plates[opp_];
-        p.show = true;
-        p.name = names_[opp_];
-        p.label = "Sayı";
-        p.value = std::to_string(g_.score(1));
-        p.turn = g_.current() == 1 && !over();
-        if (hints_ && g_.stage() != tavla::Stage::NotStarted) p.badges.push_back({"Pip " + std::to_string(g_.pipCount(1)), Color{70, 60, 50, 255}});
-        if (cube && g_.cubeOwner() == 1) p.badges.push_back({"Katlama " + std::to_string(g_.cubeValue()), Color{96, 52, 120, 255}});
-        if (g_.barCount(1) > 0) p.badges.push_back({"Kırık " + std::to_string(g_.barCount(1)), Color{168, 42, 34, 255}});
-        if (g_.offCount(1) > 0) p.badges.push_back({"Toplanan " + std::to_string(g_.offCount(1)), Color{52, 110, 64, 255}});
-        hud_.plates(r, heads, plates);
-
+    // ---- drawHUD()'s status line: the words (whose turn, what to do; `sen` / `me`: how our seat is named while it is
+    // played for us) and the parts after it (mars, the çeşit, pips, the cube, the score)
+    std::string statusText(bool aiSeat, bool sen, const std::string& me, Color& sc) const {
         std::string st;
-        Color sc = ui::pal::TextLight;
         const tavla::Dice& d = g_.dice();
         if (g_.stage() == tavla::Stage::GameOver) st = "Oyun bitti";
         else if (g_.stage() == tavla::Stage::MatchOver) st = "Maç bitti";
@@ -303,6 +286,10 @@ public:
         } else {
             st = names_[opp_] + (g_.stage() == tavla::Stage::NeedRoll ? " zarını atıyor…" : " oynuyor…");
         }
+        return st;
+    }
+    std::vector<std::pair<std::string, Color>> statusParts() const {
+        const bool cube = g_.rules().doubling;
         std::vector<std::pair<std::string, Color>> parts;
         const Color sep{226, 216, 196, 120};
         const int mt = marsThreat();
@@ -332,7 +319,36 @@ public:
         parts.push_back({"Sayı " + std::to_string(g_.score(0)) + " - " + std::to_string(g_.score(1)) + " (" +
                              std::to_string(g_.matchPoints()) + "'e)",
                          Color{238, 198, 112, 255}});
-        hud_.status(st, sc, humanToAct() && !aiSeat, parts, aiTag);
+        return parts;
+    }
+
+
+
+    void drawHUD(const r3d::Renderer& r, Vector2 mouse, bool aiSeat) override {
+        hud_.beginFrame();
+        const bool aiTag = aiSeat && !replay_; // (the "Yapay Zeka" look; in a replay our seat is just its player)
+        const bool sen = replay_ && names_[0] == "Sen"; // (the default name: "Sıra sende", not "Sen oynuyor")
+        const std::string me = replay_ ? names_[0] : std::string("Yapay zeka");
+        aiSeat = aiSeat || replay_;            // no decisions of the player's here
+        const bool cube = g_.rules().doubling;
+        std::array<Vector3, 4> heads{};
+        std::array<r3d::GameHud::Plate, 4> plates{};
+        for (int s = 1; s < 4; ++s) heads[(size_t)s] = ctx_.characters ? ctx_.characters->headPosition(s) : Vector3{};
+        r3d::GameHud::Plate& p = plates[opp_];
+        p.show = true;
+        p.name = names_[opp_];
+        p.label = "Sayı";
+        p.value = std::to_string(g_.score(1));
+        p.turn = g_.current() == 1 && !over();
+        if (hints_ && g_.stage() != tavla::Stage::NotStarted) p.badges.push_back({"Pip " + std::to_string(g_.pipCount(1)), Color{70, 60, 50, 255}});
+        if (cube && g_.cubeOwner() == 1) p.badges.push_back({"Katlama " + std::to_string(g_.cubeValue()), Color{96, 52, 120, 255}});
+        if (g_.barCount(1) > 0) p.badges.push_back({"Kırık " + std::to_string(g_.barCount(1)), Color{168, 42, 34, 255}});
+        if (g_.offCount(1) > 0) p.badges.push_back({"Toplanan " + std::to_string(g_.offCount(1)), Color{52, 110, 64, 255}});
+        hud_.plates(r, heads, plates);
+
+        Color sc = ui::pal::TextLight;
+        const std::string st = statusText(aiSeat, sen, me, sc);
+        hud_.status(st, sc, humanToAct() && !aiSeat, statusParts(), aiTag);
 
         // the button column: Katla (only while the player may double), Zar At, Geri Al, Hamleler
         const bool canR = !aiSeat && canRoll();
@@ -446,13 +462,8 @@ public:
         }
         for (auto& b : bots_)
             if (b) b->resetForGame();
-        hud_.clearToasts();
-        hud_.clearBanner();
-        sfxAt_.clear();
-        selected_ = -1;
-        hint_ = Hint();
+        resetTransient();
         marsWarned_ = marsThreat() >= 0;
-        botStage_ = -1;
         syncBoard(true);
         const tavla::Dice& d = g_.dice();
         if (d.n > 0) {
@@ -1011,6 +1022,16 @@ private:
     }
 
     int opp_ = 2;  // who plays player 1 at the tavla table (Settings::rakip, ui::twoPlayerOpponent)
+    // A new match or a restored one (the table may be reused from the last match): nothing selected, hovered, sounding
+    // or shown from before, and the bots' pacing starts afresh.
+    void resetTransient() {
+        hud_.clearToasts();
+        hud_.clearBanner();
+        sfxAt_.clear();
+        selected_ = hover_ = kbTarget_ = -1;
+        botPlayer_ = botTurn_ = botStage_ = -1;
+        hint_ = Hint();
+    }
     TableContext ctx_;
     tavla::Game g_;
     std::array<std::unique_ptr<tavla::Bot>, 2> bots_;

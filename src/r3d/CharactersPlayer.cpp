@@ -46,19 +46,13 @@ bool Characters::holdPlayerGlass(const Matrix* world) {
     chr::TeaGlass& g = m.glass[0];
     if (!world) {
         if (g.holder == 0) {
-            g.holder = -1;
-            g.from = g.world;
-            g.blend = 0.f;
+            chr::setGlassHolder(g, -1);
             m.sfx(ui::Sfx::GlassSet);
         }
         return true;
     }
     if (g.holder > 0) return false;  // the çaycı is filling it
-    if (g.holder < 0) {
-        g.holder = 0;
-        g.from = g.world;
-        g.blend = 0.f;
-    }
+    if (g.holder < 0) chr::setGlassHolder(g, 0);
     m.playerGlassW = *world;
     return true;
 }

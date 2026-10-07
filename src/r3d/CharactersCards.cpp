@@ -30,21 +30,6 @@ FanAxes fanAxes() {
     return a;
 }
 
-// A hand reaching out to `tL` (character-local) as far as it can with the body leaning in (as Cast::reachTo).
-Vector3 clampReach(const Opponent& o, int arm, Vector3 tL, Vector3 f, Vector3 p, Vector3 off) {
-    const bool left = arm == 1;
-    const float sd = left ? -1.f : 1.f;
-    const Vector3 shMax = shoulderAt(o.L, sd, o.leanBase + kMaxExtraLean);
-    const float reach = (o.L.upperArm + o.L.foreArm) * kReachFrac + kProtract - 0.01f;
-    for (int it = 0; it < 12; ++it) {
-        const float d = Vector3Distance(wristFor(tL, f, p, off, o.L.handScale, left), shMax);
-        if (d <= reach) break;
-        const Vector3 back = vnorm({shMax.x - tL.x, 0.f, shMax.z - tL.z});
-        tL = Vector3Add(tL, Vector3Scale(back, d - reach + 0.005f));
-    }
-    return tL;
-}
-
 // Palm down over the felt, fingers pointing along `dir` (flat), slightly cupped.
 void palmDown(Vector3 dir, Vector3& f, Vector3& p) {
     f = vnorm({dir.x, -0.18f, dir.z});
@@ -137,7 +122,6 @@ void Cast::playCardFromFan(Opponent& o, Vector3 world, bool toss) {
     Vector3 top = Vector3Add(kFanPalm, Vector3Add(Vector3Scale(ax.u, 0.080f), Vector3Scale(ax.r, 0.050f)));
     Matrix fan;
     if (cardFan(o, fan)) top = xfPoint(o.rootInv, xfPoint(fan, {0.026f, 0.002f, -0.074f}));
-    (void)ax;
     const Vector3 fp = vnorm({-0.42f, -0.42f, -0.80f});
     const Vector3 pp = vnorm(Vector3Subtract({0, -1, 0}, Vector3Scale(fp, -fp.y)));
     const Vector3 pick = wristFor(top, fp, pp, PINCH_POINT, hs, false);

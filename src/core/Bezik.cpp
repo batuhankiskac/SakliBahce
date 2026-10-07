@@ -63,7 +63,6 @@ std::vector<int> fullDeck() {
 std::string cardName(int id) { return kart::cardNameTR(faceOf(id)); }
 std::string cardAccusative(int id) { return kart::cardAccusativeTR(faceOf(id)); }
 const char* meldNameTR(MeldKind k) { return (int)k >= 0 && (int)k < NUM_MELDS ? kMeldNames[(int)k] : "?"; }
-int meldBasePoints(MeldKind k) { return Rules().points[(size_t)k]; }
 
 // ---------------------------------------------------------------------------------------------------------
 // LoggedAction
@@ -78,17 +77,7 @@ std::string LoggedAction::encode() const {
 bool LoggedAction::decode(const std::string& line, LoggedAction& out) {
     out = LoggedAction();
     std::vector<int> v;
-    const char* p = line.c_str();
-    while (true) {
-        while (*p == ' ' || *p == '\r' || *p == '\n') ++p;
-        if (!*p) break;
-        char* end = nullptr;
-        const long x = std::strtol(p, &end, 10);
-        if (end == p) return false;
-        v.push_back((int)x);
-        p = end;
-        if (v.size() > 8) return false;
-    }
+    if (!kart::parseIntList(line, v, 8)) return false;
     if (v.size() < 3 || v[0] < 0 || v[0] > (int)LogKind::NextHand) return false;
     out.kind = (LogKind)v[0];
     out.seat = v[1];
@@ -115,7 +104,7 @@ void Game::setPlayer(int seat, const std::string& name, bool human) {
 }
 
 void Game::push(GameEvent&& e) {
-    if (!silent_) events_.push_back(std::move(e));
+    if (!silent_) kart::pushEvent(events_, std::move(e));
 }
 
 std::vector<GameEvent> Game::drainEvents() {
@@ -310,11 +299,6 @@ bool Game::isLegal(int seat, int card) const {
 }
 
 ActionResult Game::playCard(int seat, int card) {
-    const ActionResult r = playImpl(seat, card);
-    return r;
-}
-
-ActionResult Game::playImpl(int seat, int card) {
     if (stage_ != Stage::Playing) return ActionResult::fail("Şimdi kâğıt oynanmaz.");
     if (seat != current_) return ActionResult::fail("Sıra sende değil.");
     if (!has(seat, card) && !inTable(seat, card)) return ActionResult::fail("Bu kâğıt elinde değil.");

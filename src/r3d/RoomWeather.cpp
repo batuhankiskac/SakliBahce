@@ -330,7 +330,7 @@ Texture2D genDropSprite() {
             over(glint, 0.65f * gl);
             px[y * N + x] = Color{(unsigned char)c.x, (unsigned char)c.y, (unsigned char)c.z, (unsigned char)std::clamp(a * cover * 255.f, 0.f, 255.f)};
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadTexture(img);
     SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
     UnloadImage(img);
     return t;
@@ -425,12 +425,12 @@ void Room::Impl::freeWeather(Renderer& r) {
     r.unloadMat(mDrops);
     for (Texture2D* t : {&texStreak, &texDropSprite})
         if (t->id) {
-            UnloadTexture(*t);
+            unloadTexture(*t);
             *t = Texture2D{};
         }
     for (RenderTexture2D* c : {&cvDrops[0], &cvDrops[1], &cvWalkers})
         if (c->id) {
-            UnloadRenderTexture(*c);
+            unloadCanvas(*c);
             *c = RenderTexture2D{};
         }
 }

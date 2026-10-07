@@ -17,10 +17,11 @@ void seat(Opponent& o, Vector3 pos, float yawDeg) {
     o.yawDeg = yawDeg;
     o.root = trsYaw(o.pos, o.yawDeg, 1.f);
     o.rootInv = MatrixInvert(o.root);
+    o.tespih.init = false;  // a world-space chain: it would whip across the room after him
 }
 
 void putGlass(TeaGlass& g, Vector3 saucer) {
-    g.holder = -1;
+    setGlassHolder(g, -1, 0, false);
     g.blend = 1.f;
     g.saucer = saucer;
     g.rest = Vector3Add(saucer, {0, SAUCER_TOP, 0});
@@ -59,6 +60,7 @@ void Characters::setTavlaTable(bool on, int seat) {
         w.state = -1;
         w.came = false;
     }
+    m.replanOurTrip();  // the çaycı halfway through a round of our table: his stops moved with the glasses
 }
 
 int Characters::tavlaSeat() const { return impl_->tavlaSeat; }

@@ -90,6 +90,11 @@ void CardTableBase::resetTable() {
     botSeat_ = -1;
     botWait_ = 0.f;
     hud_.clearToasts();
+    // (the table is reused by the next match of its game: nothing pending from the last one)
+    delayedSfx_.clear();
+    hint_ = Hint();
+    hintOn_ = false;
+    kbCard_ = -1;
 }
 
 void CardTableBase::dealFrom(int dealer) {

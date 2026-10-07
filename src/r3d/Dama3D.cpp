@@ -40,11 +40,8 @@ Texture2D makeSquareGlow(bool stripes) {
             }
             px[y * n + x] = Color{255, 255, 255, (unsigned char)std::clamp(a * 255.f, 0.f, 255.f)};
         }
-    Texture2D t = LoadTextureFromImage(img);
+    Texture2D t = uploadMipmapped(img, true);
     UnloadImage(img);
-    GenTextureMipmaps(&t);
-    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
     return t;
 }
 
@@ -142,7 +139,7 @@ void Dama3D::shutdown(Renderer& r) {
                    &matPieceSel_, &matGlowTarget_, &matGlowTargetCB_, &matGlowFocus_, &matDoomed_, &matRing_, &matShadowRim_})
         r.unloadMat(*m);
     for (Texture2D* t : {&frameTex_, &sqTex_[0], &sqTex_[1], &pieceTex_[0], &pieceTex_[1], &glowTex_, &stripeTex_})
-        if (t->id) UnloadTexture(*t);
+        if (t->id) unloadTexture(*t);
     ready_ = false;
 }
 

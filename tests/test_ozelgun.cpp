@@ -49,9 +49,14 @@ int main() {
         const char* ramazanBayrami;
         const char* kurban;
     };
-    const Known known[] = {{1446, "2025-03-01", "2025-03-30", "2025-06-06"},
+    const Known known[] = {{1444, "2023-03-23", "2023-04-21", "2023-06-28"},
+                           {1445, "2024-03-11", "2024-04-10", "2024-06-16"},
+                           {1446, "2025-03-01", "2025-03-30", "2025-06-06"},
                            {1447, "2026-02-19", "2026-03-20", "2026-05-27"},
-                           {1448, "2027-02-08", "2027-03-09", "2027-05-16"}};
+                           {1448, "2027-02-08", "2027-03-09", "2027-05-16"},
+                           {1449, "2028-01-28", "2028-02-26", "2028-05-05"},
+                           {1450, "2029-01-16", "2029-02-14", "2029-04-24"},
+                           {1451, "2030-01-05", "2030-02-04", "2030-04-13"}};
     for (const Known& k : known) {
         check(ymd(gun::hijriMonthStart(k.hy, 9)) == k.ramazan, std::string("Ramazan ") + k.ramazan + " got " + ymd(gun::hijriMonthStart(k.hy, 9)));
         check(ymd(gun::hijriMonthStart(k.hy, 10)) == k.ramazanBayrami,
@@ -65,6 +70,34 @@ int main() {
         check(s - r == 29 || s - r == 30, "Ramazan length " + std::to_string(hy));
         check(z - s >= 58 && z - s <= 60, "Şevval + Zilkade " + std::to_string(hy));
         check(gun::hijriMonthStart(hy + 1, 1) - z == 29 || gun::hijriMonthStart(hy + 1, 1) - z == 30, "Zilhicce " + std::to_string(hy));
+    }
+    check(ymd(gun::hijriMonthStart(1452, 9)) == "2030-12-26", "Ramazan 2030-12-26 (the second one of 2030)");
+    // every Gregorian year 2024-2035 has its Ramazan Bayramı and Kurban Bayramı through dayKind (also when a year has two
+    // Ramazans or none starting in it), the days around them included
+    for (int gy = 2024; gy <= 2035; ++gy) {
+        int bayram = 0, kurban = 0, ramazan = 0;
+        for (long t = gun::daysFromCivil(gy, 1, 1); t < gun::daysFromCivil(gy + 1, 1, 1); ++t) {
+            int y, m, d;
+            gun::civilFromDays(t, y, m, d);
+            const int k = gun::dayKind(y, m, d, wday(y, m, d));
+            bayram += k == GunRamazanBayrami;
+            kurban += k == GunKurbanBayrami;
+            ramazan += k == GunRamazan;
+        }
+        const std::string y = std::to_string(gy);
+        // (2030: Ramazan Bayramı in February and Ramazan again from 26 December; 2033/2034: two Ramazan Bayramı)
+        check(bayram == 3 || bayram == 6, "Ramazan Bayramı days in " + y + ": " + std::to_string(bayram));
+        check(kurban == 4 || kurban == 8, "Kurban Bayramı days in " + y + ": " + std::to_string(kurban));
+        check(ramazan >= 5, "Ramazan days in " + y + ": " + std::to_string(ramazan));
+    }
+    for (int hy = 1445; hy <= 1457; ++hy) {  // dayKind agrees with the month starts on every bayram day
+        const long s = gun::hijriMonthStart(hy, 10), z = gun::hijriMonthStart(hy, 12);
+        for (long t : {s, s + 2, z + 9, z + 12, s - 1}) {
+            int y, m, d;
+            gun::civilFromDays(t, y, m, d);
+            const int want = t == s - 1 ? GunRamazan : t < z ? GunRamazanBayrami : GunKurbanBayrami;
+            check(gun::dayKind(y, m, d, wday(y, m, d)) == want, "dayKind " + ymd(t) + " (" + std::to_string(hy) + ")");
+        }
     }
     // the day kinds
     check(gun::dayKind(2026, 3, 20, wday(2026, 3, 20)) == GunRamazanBayrami, "20 Mar 2026 Ramazan Bayramı");

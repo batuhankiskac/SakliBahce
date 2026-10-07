@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <unordered_map>
 
 namespace okey {
 
@@ -34,9 +33,6 @@ struct Key {
     uint64_t a, b;
     bool operator==(const Key& o) const { return a == o.a && b == o.b; }
 };
-struct KeyHash {
-    size_t operator()(const Key& k) const { return (size_t)(k.a * 0x9E3779B97F4A7C15ull ^ (k.b + (k.a >> 31))); }
-};
 
 Key keyOf(const Counts& k) {
     Key key{0, 0};
@@ -49,13 +45,31 @@ Key keyOf(const Counts& k) {
     return key;
 }
 
-// A meld as faces (face index or -1 for a joker), in display order.
-using FaceMeld = std::vector<int>;
+// A meld as faces (face index or -1 for a joker), in display order. Fixed capacity (a run has at most 13 tiles):
+// the searches build thousands of these, so they stay off the heap.
+struct FaceMeld {
+    std::array<int8_t, NUM_NUMBERS> f{};
+    uint8_t len = 0;
+
+    FaceMeld() = default;
+    FaceMeld(int n, int v) : len((uint8_t)n) { std::fill(f.begin(), f.begin() + n, (int8_t)v); }
+    FaceMeld(const FaceMeld& m, int n) : f(m.f), len((uint8_t)n) {} // the first n faces of m
+    void push_back(int g) { f[len++] = (int8_t)g; }
+    size_t size() const { return len; }
+    const int8_t* begin() const { return f.data(); }
+    const int8_t* end() const { return f.data() + len; }
+};
+
+// The candidate lists of all open search frames, as one stack (each frame appends its candidates and drops them on
+// return): no allocation per search node.
+std::vector<FaceMeld>& candStack() {
+    thread_local std::vector<FaceMeld> stack;
+    return stack;
+}
 
 // Candidate melds containing face `f` (the lowest remaining face of its color: no lower number of that color is
-// left), built greedily from real tiles, jokers filling what is missing.
+// left), built greedily from real tiles, jokers filling what is missing. Appended to `out`.
 void candidates(const Counts& k, int f, std::vector<FaceMeld>& out) {
-    out.clear();
     const int c = f / NUM_NUMBERS, n = f % NUM_NUMBERS + 1;
     // groups: n in color c plus 2..3 of the other colors (real or joker)
     for (int mask = 0; mask < 16; ++mask) {
@@ -97,7 +111,7 @@ void candidates(const Counts& k, int f, std::vector<FaceMeld>& out) {
                 if (e - s + 1 >= 3) out.push_back(m);
             }
             // runs that end right at the tile (jokers before it)
-            if (pos - s + 1 >= 3) out.push_back(FaceMeld(m.begin(), m.begin() + (pos - s + 1)));
+            if (pos - s + 1 >= 3) out.push_back(FaceMeld(m, pos - s + 1));
         }
     };
     addRuns(n);
@@ -125,24 +139,108 @@ void candidates(const Counts& k, int f, std::vector<FaceMeld>& out) {
     }
 }
 
+// Removes the meld's tiles from `k`; false (and `k` unchanged) when they aren't all there.
 bool take(Counts& k, const FaceMeld& m) {
-    for (int g : m) {
+    size_t i = 0;
+    for (; i < m.size(); ++i) {
+        const int g = m.f[i];
         if (g < 0) {
-            if (k.jokers <= 0) return false;
+            if (k.jokers <= 0) break;
             --k.jokers;
         } else {
-            if (k.n[g] == 0) return false;
+            if (k.n[g] == 0) break;
             --k.n[g];
         }
     }
-    return true;
+    if (i == m.size()) return true;
+    while (i-- > 0) {
+        const int g = m.f[i];
+        if (g < 0) ++k.jokers;
+        else ++k.n[g];
+    }
+    return false;
+}
+void untake(Counts& k, const FaceMeld& m) {
+    for (int g : m) {
+        if (g < 0) ++k.jokers;
+        else ++k.n[g];
+    }
 }
 
+// Open-addressing cache of search values (both solvers' states are plain face counts: valid across calls and
+// whatever the okey is). Entries live until the table passes LIMIT at the start of a top-level call; then a new
+// generation empties it at once (no clear in the middle of a search, no node frees, no rehash once it has grown).
+class FastMemo {
+public:
+    static constexpr size_t LIMIT = 250000;
+    void begin() {
+        if (table_.empty()) resize(1u << 12);
+        if (used_ <= LIMIT) return;
+        if (++gen_ == 0) {
+            for (Entry& e : table_) e.gen = 0;
+            gen_ = 1;
+        }
+        used_ = 0;
+    }
+    bool find(const Key& k, int& v) const {
+        for (size_t i = hash(k) & mask_;; i = (i + 1) & mask_) {
+            const Entry& e = table_[i];
+            if (e.gen != gen_) return false;
+            if (e.k.a == k.a && e.k.b == k.b) {
+                v = e.v;
+                return true;
+            }
+        }
+    }
+    void insert(const Key& k, int v) {
+        if ((used_ + 1) * 2 > table_.size()) grow();
+        place(k, v);
+        ++used_;
+    }
+
+private:
+    struct Entry {
+        Key k{0, 0};
+        int32_t v = 0;
+        uint32_t gen = 0;
+    };
+    static size_t hash(const Key& k) {
+        uint64_t h = k.a * 0x9E3779B97F4A7C15ull ^ (k.b + 0x632BE59BD9B4E019ull) * 0xC2B2AE3D27D4EB4Full;
+        h ^= h >> 29;
+        h *= 0xBF58476D1CE4E5B9ull;
+        h ^= h >> 32;
+        return (size_t)h;
+    }
+    void place(const Key& k, int v) {
+        size_t i = hash(k) & mask_;
+        while (table_[i].gen == gen_) i = (i + 1) & mask_;
+        table_[i] = Entry{k, v, gen_};
+    }
+    void resize(size_t n) {
+        table_.assign(n, Entry());
+        mask_ = n - 1;
+    }
+    void grow() {
+        std::vector<Entry> old;
+        old.swap(table_);
+        const uint32_t g = gen_;
+        resize(old.size() * 2);
+        gen_ = 1;
+        for (const Entry& e : old)
+            if (e.gen == g) place(e.k, e.v);
+    }
+
+    std::vector<Entry> table_;
+    size_t mask_ = 0;
+    uint32_t gen_ = 1;
+    size_t used_ = 0;
+};
+
 struct Solver {
-    std::unordered_map<Key, int, KeyHash> memo;
+    FastMemo memo;
 
     // most tiles covered by melds
-    int best(const Counts& k) {
+    int best(Counts& k) { // (k is restored before returning)
         int f = -1;
         for (int i = 0; i < FACES; ++i)
             if (k.n[i]) {
@@ -151,20 +249,24 @@ struct Solver {
             }
         if (f < 0) return 0; // only jokers left: they can't form a meld on their own here (they join others)
         const Key key = keyOf(k);
-        auto it = memo.find(key);
-        if (it != memo.end()) return it->second;
+        int v;
+        if (memo.find(key, v)) return v;
         // leave one copy of f over
-        Counts r = k;
-        --r.n[f];
-        int v = best(r);
-        std::vector<FaceMeld> cand;
+        --k.n[f];
+        v = best(k);
+        ++k.n[f];
+        std::vector<FaceMeld>& cand = candStack();
+        const size_t from = cand.size();
         candidates(k, f, cand);
-        for (const FaceMeld& m : cand) {
-            Counts q = k;
-            if (!take(q, m)) continue;
-            v = std::max(v, (int)m.size() + best(q));
+        const size_t to = cand.size();
+        for (size_t i = from; i < to; ++i) {
+            const FaceMeld m = cand[i];
+            if (!take(k, m)) continue;
+            v = std::max(v, (int)m.size() + best(k));
+            untake(k, m);
         }
-        memo.emplace(key, v);
+        cand.resize(from);
+        memo.insert(key, v);
         return v;
     }
 
@@ -179,7 +281,7 @@ struct Solver {
                 }
             if (f < 0) return;
             const int target = best(k);
-            std::vector<FaceMeld> cand;
+            std::vector<FaceMeld> cand; // (not the shared stack: best() below pushes onto it)
             candidates(k, f, cand);
             bool used = false;
             for (const FaceMeld& m : cand) {
@@ -220,9 +322,9 @@ std::vector<std::vector<int>> toIds(const std::vector<FaceMeld>& melds, const st
 // Value-only search with a cache that outlives the call: the state is the face counts, the okeys and whether a meld
 // has been made (spare okeys at the end join it).
 struct FastSolver {
-    std::unordered_map<Key, int, KeyHash> memo;
+    FastMemo memo;
 
-    int best(const Counts& k, bool meld) {
+    int best(Counts& k, bool meld) { // (k is restored before returning)
         int f = -1;
         for (int i = 0; i < FACES; ++i)
             if (k.n[i]) {
@@ -232,20 +334,23 @@ struct FastSolver {
         if (f < 0) return meld ? k.jokers : 0;
         Key key = keyOf(k);
         if (meld) key.b |= 1ull << 60;
-        auto it = memo.find(key);
-        if (it != memo.end()) return it->second;
-        Counts r = k;
-        --r.n[f];
-        int v = best(r, meld);
-        std::vector<FaceMeld> cand;
+        int v;
+        if (memo.find(key, v)) return v;
+        --k.n[f];
+        v = best(k, meld);
+        ++k.n[f];
+        std::vector<FaceMeld>& cand = candStack();
+        const size_t from = cand.size();
         candidates(k, f, cand);
-        for (const FaceMeld& m : cand) {
-            Counts q = k;
-            if (!take(q, m)) continue;
-            v = std::max(v, (int)m.size() + best(q, true));
+        const size_t to = cand.size();
+        for (size_t i = from; i < to; ++i) {
+            const FaceMeld m = cand[i];
+            if (!take(k, m)) continue;
+            v = std::max(v, (int)m.size() + best(k, true));
+            untake(k, m);
         }
-        if (memo.size() > 250000) memo.clear(); // (bounded: a rehash of a huge table is a long stall)
-        memo.emplace(key, v);
+        cand.resize(from);
+        memo.insert(key, v);
         return v;
     }
 };
@@ -254,7 +359,9 @@ struct FastSolver {
 
 int classicCoverFast(const std::vector<int>& tiles, const OkeyInfo& ok) {
     thread_local FastSolver s; // the state is plain face counts: valid whatever the okey is
-    return s.best(countsOf(tiles, ok), false);
+    s.memo.begin();
+    Counts k = countsOf(tiles, ok);
+    return s.best(k, false);
 }
 
 std::vector<int> classicRun(const std::vector<int>& ids, const OkeyInfo& ok) {
@@ -338,7 +445,8 @@ bool classicMeldValid(const std::vector<int>& ids, const OkeyInfo& ok) {
 
 int classicCover(const std::vector<int>& tiles, const OkeyInfo& ok, std::vector<std::vector<int>>* melds) {
     const Counts k = countsOf(tiles, ok);
-    Solver s;
+    thread_local Solver s; // exact values of face-count states: shared by the calls (classicFinishKind tries each tile)
+    s.memo.begin();
     std::vector<FaceMeld> fm;
     s.split(k, fm);
     std::vector<std::vector<int>> ms = toIds(fm, tiles, ok);

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Embeds the rules pages of the other games (docs/kurallar_*.md) into src/ui/RulesText.inc.
 
-The game parses that light markdown at runtime (Screens.cpp, parseRulesMd): '## ' headings, paragraphs,
+The game parses that light markdown at runtime (ScreensRules.cpp, parseRulesMd): '## ' headings, paragraphs,
 '- ' / '1. ' bullets, '**bold**' and simple '| a | b |' tables. The '# ' title and the 'Kaynaklar' section
 are left out of the game (the sources stay in the docs). Run after editing a doc:  python3 tools/gen_rules.py
+With --check it writes nothing and exits 1 when RulesText.inc is not what the docs make (make rulescheck).
 """
 import pathlib
+import sys
 
 root = pathlib.Path(__file__).resolve().parent.parent
 games = ["tavla", "pisti", "batak", "king", "altmisalti", "dama", "bezik", "konken"]
@@ -22,5 +24,14 @@ for g in games:
     body = "\n".join(keep).strip() + "\n"
     out.append(f'static const char* const kRules_{g} = R"RULES({body})RULES";')
     out.append("")
-(root / "src" / "ui" / "RulesText.inc").write_text("\n".join(out), encoding="utf-8")
+target = root / "src" / "ui" / "RulesText.inc"
+generated = "\n".join(out)
+if "--check" in sys.argv[1:]:
+    current = target.read_text(encoding="utf-8") if target.exists() else None
+    if current != generated:
+        print("src/ui/RulesText.inc is stale: run python3 tools/gen_rules.py (docs/kurallar_*.md changed)")
+        sys.exit(1)
+    print("src/ui/RulesText.inc is up to date")
+    sys.exit(0)
+target.write_text(generated, encoding="utf-8")
 print("wrote src/ui/RulesText.inc")

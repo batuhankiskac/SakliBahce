@@ -470,8 +470,9 @@ ActionResult Game::openHandImpl(int seat, const std::vector<std::vector<int>>& g
 
     // Yandan alıp açma: the player who discarded that tile pays its number x10 (series) or x20 (pairs).
     if (leftTile >= 0 && cfg_.leftOpenPenalty) {
+        constexpr int PER_NUMBER_SERIES = 10, PER_NUMBER_PAIRS = 20;
         const int giver = leftOf(seat);
-        const int amount = leftNumber * (c.pairs ? 20 : 10);
+        const int amount = leftNumber * (c.pairs ? PER_NUMBER_PAIRS : PER_NUMBER_SERIES);
         const std::string t = tileText(leftTile, okey_);
         addPenalty(giver,
                    says(giver, t + " attı, onunla açıldı", t + " attın, onunla açıldı") + ": " +
@@ -508,23 +509,53 @@ ActionResult Game::layMeldsImpl(int seat, const std::vector<std::vector<int>>& g
     return ActionResult::success();
 }
 
-ActionResult Game::addToMeldImpl(int seat, int tile, int meldIndex, AddSide side) {
+ActionResult Game::checkAdd(int seat, int tile, int meldIndex, AddSide side, Meld* out) const {
     ActionResult r = checkTurn(seat, TurnStage::Play);
     if (!r.ok) return r;
     if (classic()) return yuzbirOnly();
     const PlayerInfo& p = players_[seat];
-    if (!p.opened) return ActionResult::fail("Önce elini açmalısın");
-    if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
-        return ActionResult::fail("Açtığın turda işleyemezsin, sonraki turunu bekle");
+    if (!canWorkTable(seat))
+        return ActionResult::fail(!p.opened ? "Önce elini açmalısın"
+                                            : "Açtığın turda işleyemezsin, sonraki turunu bekle");
     if (meldIndex < 0 || meldIndex >= (int)table_.size()) return ActionResult::fail("Böyle bir per yok");
     if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
     if (table_[meldIndex].kind == MeldKind::Pair) return ActionResult::fail("Çiftlere taş işlenemez");
-    Meld out;
-    if (!tryAddTile(table_[meldIndex], tile, okey_, side, out)) return ActionResult::fail("Bu taş o pere işlenemez");
+    Meld m;
+    if (!tryAddTile(table_[meldIndex], tile, okey_, side, m)) return ActionResult::fail("Bu taş o pere işlenemez");
     if (p.hand.size() <= 1) return ActionResult::fail("Elde en az bir taş kalmalı");
     // The tile kept for the discard can't be the pending left tile (it can't be discarded).
     if (pendingLeftTile_ >= 0 && tile != pendingLeftTile_ && p.hand.size() <= 2)
         return ActionResult::fail("Yandan aldığın taş dışında elde bir taş kalmalı");
+    if (out) *out = std::move(m);
+    return ActionResult::success();
+}
+
+ActionResult Game::checkSwap(int seat, int tile, int meldIndex, Meld* out, int* freed) const {
+    ActionResult r = checkTurn(seat, TurnStage::Play);
+    if (!r.ok) return r;
+    if (classic()) return yuzbirOnly();
+    const PlayerInfo& p = players_[seat];
+    if (!canWorkTable(seat))
+        return ActionResult::fail(!p.opened ? "Önce elini açmalısın"
+                                            : "Açtığın turda okey alamazsın, sonraki turunu bekle");
+    if (meldIndex < 0 || meldIndex >= (int)table_.size()) return ActionResult::fail("Böyle bir per yok");
+    if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
+    const Meld& m = table_[meldIndex];
+    if (m.kind == MeldKind::Pair) return ActionResult::fail("Çiftteki okey alınamaz");
+    if (!m.hasJoker()) return ActionResult::fail("Bu perde okey yok");
+    if (okey_.isJoker(tile)) return ActionResult::fail("Okeyin yerine okey konmaz");
+    Meld res;
+    int f = -1;
+    if (!trySwapJoker(m, tile, okey_, res, f)) return ActionResult::fail("Bu taş okeyin yerine konamaz");
+    if (out) *out = std::move(res);
+    if (freed) *freed = f;
+    return ActionResult::success();
+}
+
+ActionResult Game::addToMeldImpl(int seat, int tile, int meldIndex, AddSide side) {
+    Meld out;
+    ActionResult r = checkAdd(seat, tile, meldIndex, side, &out);
+    if (!r.ok) return r;
 
     table_[meldIndex] = std::move(out);
     removeFromHand(seat, tile);
@@ -542,22 +573,10 @@ ActionResult Game::addToMeldImpl(int seat, int tile, int meldIndex, AddSide side
 }
 
 ActionResult Game::swapJokerImpl(int seat, int tile, int meldIndex) {
-    ActionResult r = checkTurn(seat, TurnStage::Play);
-    if (!r.ok) return r;
-    if (classic()) return yuzbirOnly();
-    const PlayerInfo& p = players_[seat];
-    if (!p.opened) return ActionResult::fail("Önce elini açmalısın");
-    if (cfg_.waitTurnAfterOpening && p.openedTurn == turnNumber_)
-        return ActionResult::fail("Açtığın turda okey alamazsın, sonraki turunu bekle");
-    if (meldIndex < 0 || meldIndex >= (int)table_.size()) return ActionResult::fail("Böyle bir per yok");
-    if (!handHas(seat, tile)) return ActionResult::fail("Bu taş sende yok");
-    const Meld& m = table_[meldIndex];
-    if (m.kind == MeldKind::Pair) return ActionResult::fail("Çiftteki okey alınamaz");
-    if (!m.hasJoker()) return ActionResult::fail("Bu perde okey yok");
-    if (okey_.isJoker(tile)) return ActionResult::fail("Okeyin yerine okey konmaz");
     Meld out;
     int freed = -1;
-    if (!trySwapJoker(m, tile, okey_, out, freed)) return ActionResult::fail("Bu taş okeyin yerine konamaz");
+    ActionResult r = checkSwap(seat, tile, meldIndex, &out, &freed);
+    if (!r.ok) return r;
 
     table_[meldIndex] = std::move(out);
     removeFromHand(seat, tile);

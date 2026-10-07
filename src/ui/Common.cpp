@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
+#include <cstring>
+#include <unordered_map>
 #include <vector>
 
 namespace ui {
@@ -112,9 +114,14 @@ Font loadFontFile(const char* path, int baseSize, std::vector<int>& cps) {
     return LoadFontFromMemory(".ttf", face.data(), (int)face.size(), baseSize, cps.data(), (int)cps.size());
 }
 
+// Wrapped lines by (font, size, width, text): the screens wrap the same strings every frame (the guide card, the
+// game cards' blurbs); a wrap measures every word, so it is done once per string. Cleared with the fonts.
+std::unordered_map<std::string, std::vector<std::string>> g_wrapCache;
+
 } // namespace
 
 void loadFonts() {
+    g_wrapCache.clear();
     std::vector<int> cps = fontCodepoints();
     for (int i = 0; i < (int)FontId::Count; ++i) {
         FontSlot& slot = g_fonts[i];
@@ -135,6 +142,7 @@ void loadFonts() {
 }
 
 void unloadFonts() {
+    g_wrapCache.clear();
     for (FontSlot& slot : g_fonts) {
         if (slot.loaded) UnloadFont(slot.font);
         slot.loaded = false;
@@ -167,20 +175,30 @@ void drawTextShadow(FontId f, const std::string& s, Vector2 pos, float size, Col
     drawText(f, s, pos, size, c, spacing);
 }
 
-float drawTextWrapped(FontId f, const std::string& s, Rectangle box, float size, Color c, float lineGap) {
-    const float lh = lineHeight(f, size) + lineGap;
-    float y = box.y;
+const std::vector<std::string>& wrapLines(FontId f, const std::string& s, float width, float size) {
+    std::string key;
+    key.reserve(s.size() + 16);
+    const unsigned tex = font(f).texture.id;
+    key.append((const char*)&tex, sizeof tex);
+    key.push_back((char)f);
+    key.append((const char*)&size, sizeof size);
+    key.append((const char*)&width, sizeof width);
+    key += s;
+    auto it = g_wrapCache.find(key);
+    if (it != g_wrapCache.end()) return it->second;
+    if (g_wrapCache.size() > 512) g_wrapCache.clear(); // (dynamic texts: keep it small)
+
+    std::vector<std::string> lines;
     std::string line;
     std::string word;
     auto flushLine = [&]() {
-        drawText(f, line, {box.x, y}, size, c);
-        y += lh;
+        lines.push_back(line);
         line.clear();
     };
     auto pushWord = [&]() {
         if (word.empty()) return;
         std::string candidate = line.empty() ? word : line + " " + word;
-        if (!line.empty() && measureText(f, candidate, size).x > box.width) {
+        if (!line.empty() && measureText(f, candidate, size).x > width) {
             flushLine();
             line = word;
         } else {
@@ -200,6 +218,23 @@ float drawTextWrapped(FontId f, const std::string& s, Rectangle box, float size,
     }
     pushWord();
     if (!line.empty()) flushLine();
+    return g_wrapCache.emplace(std::move(key), std::move(lines)).first->second;
+}
+
+float measureWrapped(FontId f, const std::string& s, float width, float size, float lineGap, float originY) {
+    const float lh = lineHeight(f, size) + lineGap;
+    float y = originY; // (summed as drawTextWrapped does at that y: the same float rounding)
+    for (size_t i = 0, n = wrapLines(f, s, width, size).size(); i < n; ++i) y += lh;
+    return y - originY;
+}
+
+float drawTextWrapped(FontId f, const std::string& s, Rectangle box, float size, Color c, float lineGap) {
+    const float lh = lineHeight(f, size) + lineGap;
+    float y = box.y;
+    for (const std::string& line : wrapLines(f, s, box.width, size)) {
+        drawText(f, line, {box.x, y}, size, c);
+        y += lh;
+    }
     return y - box.y;
 }
 

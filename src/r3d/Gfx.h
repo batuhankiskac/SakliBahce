@@ -137,7 +137,6 @@ public:
     // Ray from a virtual-canvas point (e.g. ui::virtualMouse()) into the world.
     Ray rayFromVirtual(Vector2 virtualPos) const;
 
-    Shader litShader() const;
     Texture2D whiteTexture() const;
     Texture2D puffTexture() const;  // soft smoke puff (for custom billboards)
     Texture2D glowTexture() const;  // radial glow
@@ -193,6 +192,16 @@ Texture2D genFeltTexture(int size, Color base, uint32_t seed);
 Texture2D genNoiseTexture(int size, Color a, Color b, float scale, uint32_t seed);
 Texture2D genPlasterTexture(int size, Color base, uint32_t seed);   // stained, uneven wall paint
 Texture2D textureFromImage(Image img);                              // upload + mipmaps + trilinear + repeat
+// The renderer gives opaque materials a depth pre-pass when their texture is known to be fully opaque
+// (textureFromImage notes it). A raw upload (no mipmaps, raylib's defaults) goes through uploadTexture(), which forgets
+// any stale note on its recycled id; unload r3d textures / canvases through unloadTexture() / unloadCanvas() (they
+// forget the note too and zero the handle). setTextureOpaque() notes a foreign texture (e.g. a ui atlas) either way.
+Texture2D uploadTexture(Image img);
+// uploadTexture + mipmaps + trilinear (+ CLAMP wrapping): the glows, halos and dice faces (the image stays the caller's)
+Texture2D uploadMipmapped(const Image& img, bool clamp);
+void setTextureOpaque(const Texture2D& t, bool opaque);
+void unloadTexture(Texture2D& t);
+void unloadCanvas(RenderTexture2D& canvas);
 // Render 2D content (in pixel units, y down) into a texture for 3D surfaces (chalkboards, TV screen,
 // signs). Keep the returned RenderTexture alive; redraw it whenever its content changes. Canvas textures
 // are stored upside-down (OpenGL convention) — put them on a genCanvasQuad(), which flips v for you.

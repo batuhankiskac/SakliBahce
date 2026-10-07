@@ -10,6 +10,7 @@
 // the lit table, height fog whose colour is lit by the lamps (ray-marched key-light in-scatter and closed-form
 // point-light in-scatter), then a Hable filmic curve with a gentle warm/cool split tone.
 #include "r3d/Gfx.h"
+#include "r3d/Noise.h"
 #include "ui/Common.h"
 
 #include <raymath.h>
@@ -30,8 +31,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <tuple>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace r3d {
 
@@ -61,9 +63,20 @@ constexpr float ATT_R2 = 0.1225f;
 // Textures known to be fully opaque (generated here, or uploaded through textureFromImage without any
 // translucent pixel). Opaque submissions using them take the depth pre-pass; anything else (canvases,
 // foreign textures, albedo alpha < 255) keeps plain blended drawing so transparent-background quads work.
-std::unordered_set<unsigned int>& opaqueTextures() {
-    static std::unordered_set<unsigned int> set;
-    return set;
+// Each id keeps the size / mip count / format it was registered with: an id the GL recycled for another texture
+// (one unloaded elsewhere without unloadTexture(), e.g. the ui's atlases) no longer matches and is not trusted.
+struct OpaqueSig {
+    int width, height, mipmaps, format;
+};
+std::unordered_map<unsigned int, OpaqueSig>& opaqueTextures() {
+    static std::unordered_map<unsigned int, OpaqueSig> map;
+    return map;
+}
+bool isOpaqueTexture(const Texture2D& t) {
+    const auto& m = opaqueTextures();
+    const auto it = m.find(t.id);
+    return it != m.end() && it->second.width == t.width && it->second.height == t.height && it->second.mipmaps == t.mipmaps &&
+           it->second.format == t.format;
 }
 
 // ============================================================================ shaders
@@ -104,7 +117,7 @@ uniform vec3 viewPos;
 uniform vec3 ambSky;
 uniform vec3 ambGround;
 uniform int numLights;
-uniform int lightMask;       // bit i: point light i can reach this draw (CPU culled by range)
+uniform int lightMask;       // bit i: point light i lights this draw directly, bit 12 + i: through in-scatter (CPU culled by range)
 uniform vec4 lightPosRange[12];
 uniform vec3 lightColor[12];
 
@@ -277,7 +290,7 @@ vec3 applyFog(vec3 col, vec3 P, bool additive, float jitter) {
     sc *= dt * scatterParams.x;
     for (int i = 0; i < 12; ++i) {
         if (i >= numLights) break;
-        if (((lightMask >> i) & 1) == 0) continue;
+        if (((lightMask >> (i + 12)) & 1) == 0) continue;
         vec3 toL = lightPosRange[i].xyz - viewPos;
         float t0 = dot(toL, rd);
         float h2 = max(dot(toL, toL) - t0 * t0, 0.0);
@@ -449,37 +462,19 @@ void main() {
 )";
 
 // ============================================================================ noise
-uint32_t hash32(uint32_t x) {
-    x ^= x >> 16;
-    x *= 0x7feb352dU;
-    x ^= x >> 15;
-    x *= 0x846ca68bU;
-    x ^= x >> 16;
-    return x;
-}
-float hash2(int x, int y, uint32_t seed) {
-    return (hash32((uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u ^ seed * 83492791u) & 0xffffff) /
-           16777215.f;
-}
+using noise::hash32;
+inline float hash2(int x, int y, uint32_t seed) { return noise::lattice01(x, y, seed); }
 float rnd(uint32_t& s) {
     s = hash32(s + 0x9e3779b9u);
     return (s & 0xffffff) / 16777215.f;
 }
-float smooth(float t) { return t * t * (3.f - 2.f * t); }
 float smoothstepf(float a, float b, float x) {
     float t = std::clamp((x - a) / (b - a), 0.f, 1.f);
     return t * t * (3.f - 2.f * t);
 }
-int wrapi(int i, int n) { return ((i % n) + n) % n; }
+inline int wrapi(int i, int n) { return noise::wrap(i, n); }
 // Tileable value noise with periods px, py (lattice units).
-float valueNoise(float x, float y, int px, int py, uint32_t seed) {
-    int x0 = (int)std::floor(x), y0 = (int)std::floor(y);
-    float fx = x - x0, fy = y - y0;
-    int xa = wrapi(x0, px), xb = wrapi(x0 + 1, px), ya = wrapi(y0, py), yb = wrapi(y0 + 1, py);
-    float a = hash2(xa, ya, seed), b = hash2(xb, ya, seed), c = hash2(xa, yb, seed), d = hash2(xb, yb, seed);
-    float u = smooth(fx), v = smooth(fy);
-    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-}
+inline float valueNoise(float x, float y, int px, int py, uint32_t seed) { return noise::valueTiled(x, y, px, py, seed); }
 // Tileable fbm over the unit square (u, v in [0,1)), base frequency fx x fy lattice cells.
 float fbm2(float u, float v, int fx, int fy, int octaves, uint32_t seed) {
     float sum = 0.f, amp = 0.5f, norm = 0.f;
@@ -551,7 +546,7 @@ struct DrawItem {
     uint32_t flags;
     Vector3 center;  // world bounding sphere (radius < 0: unknown, never culled)
     float radius;
-    int lights;      // point-light mask for this draw
+    int lights;      // point-light masks for this draw: bits 0-11 direct, bits 12-23 in-scatter
 };
 struct Glow {
     Vector3 pos;
@@ -586,8 +581,16 @@ struct Sphere {
 struct BoundsEntry {  // cached local bounds of an uploaded mesh, validated against the mesh it came from
     Sphere s;
     const float* vertices;
-    int vertexCount;
+    int vertexCount, triangleCount;
+    unsigned int vbo;   // (the VAO id alone is recycled after an UnloadMesh)
+    float probe[9];     // the first, middle and last vertex: a new mesh in a recycled VAO, buffer and allocation
 };
+// The probe vertices of a mesh (see BoundsEntry).
+inline void boundsProbe(const Mesh& m, float out[9]) {
+    const int idx[3] = {0, m.vertexCount / 2, m.vertexCount - 1};
+    for (int k = 0; k < 3; ++k)
+        for (int c = 0; c < 3; ++c) out[k * 3 + c] = m.vertices[idx[k] * 3 + c];
+}
 struct Frustum {
     Vector4 p[6];  // inside: dot(p.xyz, x) + p.w >= 0, xyz normalised
     // Gribb-Hartmann planes of a raylib view-projection matrix (math: clip = M * x)
@@ -719,15 +722,13 @@ struct Renderer::Impl {
     void genSpriteTextures() {
         {
             Image w = GenImageColor(4, 4, WHITE);
-            white = LoadTextureFromImage(w);
+            white = uploadTexture(w);
             UnloadImage(w);
         }
         {   // public single puff (custom billboards) = atlas variant 0 at 128 px
             Image img = GenImageColor(128, 128, Color{255, 255, 255, 0});
             paintPuff((Color*)img.data, 128, 128, 0, 0, 0);
-            puff = LoadTextureFromImage(img);
-            GenTextureMipmaps(&puff);
-            SetTextureFilter(puff, TEXTURE_FILTER_TRILINEAR);
+            puff = uploadMipmapped(img, false);
             UnloadImage(img);
         }
         {   // particle atlas: 2x2 cells of 256 px: three billowy puffs + one steam wisp
@@ -735,10 +736,7 @@ struct Renderer::Impl {
             Image img = GenImageColor(S, S, Color{255, 255, 255, 0});
             Color* px = (Color*)img.data;
             for (int v = 0; v < 4; ++v) paintPuff(px, S, C, (v % 2) * C, (v / 2) * C, v);
-            puffAtlas = LoadTextureFromImage(img);
-            GenTextureMipmaps(&puffAtlas);
-            SetTextureFilter(puffAtlas, TEXTURE_FILTER_TRILINEAR);
-            SetTextureWrap(puffAtlas, TEXTURE_WRAP_CLAMP);
+            puffAtlas = uploadMipmapped(img, true);
             UnloadImage(img);
         }
         auto radial = [](int S, auto fn) {
@@ -750,10 +748,7 @@ struct Renderer::Impl {
                     float r = std::sqrt(dx * dx + dy * dy) * 2.f;
                     px[y * S + x] = Color{255, 255, 255, u8(std::clamp(fn(r), 0.f, 1.f) * 255.f)};
                 }
-            Texture2D t = LoadTextureFromImage(img);
-            GenTextureMipmaps(&t);
-            SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-            SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+            Texture2D t = uploadMipmapped(img, true);
             UnloadImage(img);
             return t;
         };
@@ -776,10 +771,7 @@ struct Renderer::Impl {
                     px[y * S * 2 + x] = Color{255, 255, 255, u8(std::clamp(halo, 0.f, 1.f) * 255.f)};
                     px[y * S * 2 + S + x] = Color{255, 255, 255, u8(std::clamp(core, 0.f, 1.f) * 255.f)};
                 }
-            glowAtlas = LoadTextureFromImage(img);
-            GenTextureMipmaps(&glowAtlas);
-            SetTextureFilter(glowAtlas, TEXTURE_FILTER_TRILINEAR);
-            SetTextureWrap(glowAtlas, TEXTURE_WRAP_CLAMP);
+            glowAtlas = uploadMipmapped(img, true);
             UnloadImage(img);
         }
     }
@@ -929,9 +921,19 @@ struct Renderer::Impl {
     }
     bool prepassSafe(const DrawItem& it) const {
         const MaterialMap& mm = it.mat->material.maps[MATERIAL_MAP_ALBEDO];
-        return mm.color.a == 255 && it.mesh->vaoId != 0 && opaqueTextures().count(mm.texture.id) != 0;
+        return mm.color.a == 255 && it.mesh->vaoId != 0 && isOpaqueTexture(mm.texture);
     }
 
+    // True when the upper 3x3 of `m` is a rotation times a uniform scale (orthogonal columns of equal length).
+    static bool conformal(const Matrix& m) {
+        const float a0 = m.m0 * m.m0 + m.m1 * m.m1 + m.m2 * m.m2, a1 = m.m4 * m.m4 + m.m5 * m.m5 + m.m6 * m.m6,
+                    a2 = m.m8 * m.m8 + m.m9 * m.m9 + m.m10 * m.m10;
+        const float d01 = m.m0 * m.m4 + m.m1 * m.m5 + m.m2 * m.m6, d02 = m.m0 * m.m8 + m.m1 * m.m9 + m.m2 * m.m10,
+                    d12 = m.m4 * m.m8 + m.m5 * m.m9 + m.m6 * m.m10;
+        const float eps = 1e-5f * a0;
+        return a0 > 1e-20f && std::fabs(a1 - a0) < eps && std::fabs(a2 - a0) < eps && std::fabs(d01) < eps && std::fabs(d02) < eps &&
+               std::fabs(d12) < eps;
+    }
     // Lean draw of one mesh with the currently bound program (raylib's DrawMesh does far more per call).
     static void drawVao(const Mesh& m) {
         glBindVertexArray(m.vaoId);
@@ -962,14 +964,21 @@ struct Renderer::Impl {
         }
         glUniformMatrix4fv(locMvp, 1, GL_FALSE, MatrixToFloatV(MatrixMultiply(it.xf, viewProj)).v);
         glUniformMatrix4fv(locModel, 1, GL_FALSE, MatrixToFloatV(it.xf).v);
-        glUniformMatrix4fv(locNormalMat, 1, GL_FALSE, MatrixToFloatV(MatrixTranspose(MatrixInvert(it.xf))).v);
+        // the normal matrix: for a rotation with a uniform scale (nearly every draw) the model matrix itself gives the
+        // same normalised normals, without the inverse
+        glUniformMatrix4fv(locNormalMat, 1, GL_FALSE, MatrixToFloatV(conformal(it.xf) ? it.xf : MatrixTranspose(MatrixInvert(it.xf))).v);
         drawVao(*it.mesh);
     }
 
     // Local bounding sphere of a mesh (cached by VAO); used to sort transparent meshes by their real centre.
     Sphere meshBounds(const Mesh& m) {
+        float probe[9] = {};
+        if (m.vertices && m.vertexCount > 0) boundsProbe(m, probe);
+        const unsigned int vbo = m.vboId ? m.vboId[0] : 0u;
         auto it = bounds.find(m.vaoId);
-        if (it != bounds.end() && it->second.vertices == m.vertices && it->second.vertexCount == m.vertexCount)
+        if (it != bounds.end() && it->second.vertices == m.vertices && it->second.vertexCount == m.vertexCount &&
+            it->second.triangleCount == m.triangleCount && it->second.vbo == vbo &&
+            std::memcmp(it->second.probe, probe, sizeof probe) == 0)
             return it->second.s;
         Sphere s{{0, 0, 0}, 0.f};
         if (m.vertices && m.vertexCount > 0) {
@@ -982,16 +991,24 @@ struct Renderer::Impl {
             s.c = Vector3Scale(Vector3Add(lo, hi), 0.5f);
             s.r = Vector3Distance(hi, s.c);
         }
-        if (m.vaoId) bounds[m.vaoId] = {s, m.vertices, m.vertexCount};
+        if (m.vaoId) {
+            BoundsEntry& e = bounds[m.vaoId];
+            e.s = s;
+            e.vertices = m.vertices;
+            e.vertexCount = m.vertexCount;
+            e.triangleCount = m.triangleCount;
+            e.vbo = vbo;
+            std::memcpy(e.probe, probe, sizeof probe);
+        }
         return s;
     }
 
     // World bounding sphere of every submission (for culling and sorting) and the point lights that can
-    // reach it: directly (its sphere is within a light's range) or through in-scatter along the view rays
-    // (the capsule from the camera to its sphere passes within range). Lights reach exactly 0 at their range,
-    // so this culling is exact.
+    // reach it: directly (its sphere is within a light's range: the low 12 bits) and through in-scatter along the
+    // view rays (the capsule from the camera to its sphere passes within range: bits 12-23). Lights reach exactly 0 at
+    // their range, so this culling is exact; the direct set is the (much) smaller one in a small room.
     void prepareItems(Vector3 camPos) {
-        const int all = (1 << nLights) - 1;
+        const int all = ((1 << nLights) - 1) * ((1 << MAX_POINT_LIGHTS) + 1);
         for (DrawItem& it : items) {
             it.radius = -1.f;
             it.lights = all;
@@ -1010,7 +1027,8 @@ struct Renderer::Impl {
                 Vector3 d = Vector3Subtract(lPos[i], camPos);
                 float t = segLen2 > 1e-12f ? std::clamp(Vector3DotProduct(d, seg) / segLen2, 0.f, 1.f) : 0.f;
                 float dist = Vector3Distance(lPos[i], Vector3Add(camPos, Vector3Scale(seg, t)));
-                if (dist - it.radius < lRange[i]) mask |= 1 << i;
+                if (dist - it.radius < lRange[i]) mask |= 1 << (i + MAX_POINT_LIGHTS);
+                if (Vector3Distance(lPos[i], it.center) - it.radius < lRange[i]) mask |= 1 << i;
             }
             it.lights = mask;
         }
@@ -1376,7 +1394,7 @@ bool Renderer::init() {
     I.locPostParams = GetShaderLocation(I.post, "postParams");
 
     I.genSpriteTextures();
-    opaqueTextures().insert(I.white.id);
+    setTextureOpaque(I.white, true);
     I.setupShadowMap();
     I.items.reserve(1024);
     I.sorted.reserve(2048);
@@ -1400,11 +1418,11 @@ void Renderer::shutdown() {
     I.spriteCap = 0;
     RL_FREE(I.depthMat.maps);
     I.depthMat.maps = nullptr;
-    UnloadTexture(I.white);
-    UnloadTexture(I.puff);
-    UnloadTexture(I.puffAtlas);
-    UnloadTexture(I.glow);
-    UnloadTexture(I.glowAtlas);
+    unloadTexture(I.white);
+    unloadTexture(I.puff);
+    unloadTexture(I.puffAtlas);
+    unloadTexture(I.glow);
+    unloadTexture(I.glowAtlas);
     if (I.shadowFbo) glDeleteFramebuffers(1, &I.shadowFbo);
     if (I.shadowTex) glDeleteTextures(1, &I.shadowTex);
     GLuint s[2] = {I.samplerCmp, I.samplerRaw};
@@ -1740,7 +1758,6 @@ Ray Renderer::rayFromVirtual(Vector2 v) const {
     return GetScreenToWorldRayEx(s, I.lastCam, I.renderW, I.renderH);
 }
 
-Shader Renderer::litShader() const { return impl_->lit; }
 Texture2D Renderer::whiteTexture() const { return impl_->white; }
 Texture2D Renderer::puffTexture() const { return impl_->puff; }
 Texture2D Renderer::glowTexture() const { return impl_->glow; }
@@ -2149,20 +2166,60 @@ Texture2D textureFromImage(Image img) {
         opaque = true;
         for (int i = 0, n = img.width * img.height; i < n && opaque; ++i) opaque = px[i].a == 255;
     }
-    if (t.id) {
-        if (opaque) opaqueTextures().insert(t.id);
-        else opaqueTextures().erase(t.id);
-    }
     GenTextureMipmaps(&t);
     SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);   // min: linear-mipmap-linear, mag: linear
     rlTextureParameters(t.id, RL_TEXTURE_FILTER_ANISOTROPIC, 8);
     SetTextureWrap(t, TEXTURE_WRAP_REPEAT);
+    setTextureOpaque(t, opaque);  // (after the mipmaps: the signature holds the final mip count)
     return t;
+}
+Texture2D uploadTexture(Image img) {
+    Texture2D t = LoadTextureFromImage(img);
+    setTextureOpaque(t, false);
+    return t;
+}
+Texture2D uploadMipmapped(const Image& img, bool clamp) {
+    Texture2D t = uploadTexture(img);
+    GenTextureMipmaps(&t);
+    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+    if (clamp) SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+    return t;
+}
+void setTextureOpaque(const Texture2D& t, bool opaque) {
+    if (!t.id) return;
+    if (opaque) opaqueTextures()[t.id] = OpaqueSig{t.width, t.height, t.mipmaps, t.format};
+    else opaqueTextures().erase(t.id);
+}
+void unloadTexture(Texture2D& t) {
+    if (!t.id) return;
+    opaqueTextures().erase(t.id);
+    UnloadTexture(t);
+    t = Texture2D{};
+}
+void unloadCanvas(RenderTexture2D& c) {
+    if (!c.id) return;
+    opaqueTextures().erase(c.texture.id);
+    UnloadRenderTexture(c);
+    c = RenderTexture2D{};
 }
 
 // Grain runs along u (horizontal); growth rings stack along v. `rings` is rounded so the texture tiles.
 Texture2D genWoodTexture(int size, Color light, Color dark, uint32_t seed, float rings) {
     size = std::max(size, 16);
+    // The boards regenerate their wood on every game switch: the painted images are kept for the session (a few MB).
+    struct WoodKey {
+        int size;
+        uint32_t light, dark, seed, rings;
+        bool operator<(const WoodKey& o) const {
+            return std::tie(size, light, dark, seed, rings) < std::tie(o.size, o.light, o.dark, o.seed, o.rings);
+        }
+    };
+    auto packc = [](Color c) { return (uint32_t)c.r | (uint32_t)c.g << 8 | (uint32_t)c.b << 16 | (uint32_t)c.a << 24; };
+    uint32_t ringBits;
+    std::memcpy(&ringBits, &rings, sizeof ringBits);
+    static std::map<WoodKey, Image> cache;
+    const WoodKey key{size, packc(light), packc(dark), seed, ringBits};
+    if (const auto it = cache.find(key); it != cache.end()) return textureFromImage(it->second);
     const int R = std::max(1, (int)std::lround(rings));
     Image img = GenImageColor(size, size, light);
     Color* px = (Color*)img.data;
@@ -2187,9 +2244,8 @@ Texture2D genWoodTexture(int size, Color light, Color dark, uint32_t seed, float
             float warm = 1.f + streak * 0.08f;
             px[y * size + x] = scalec(c, warm, 1.f, 1.f / warm);
         }
-    Texture2D t = textureFromImage(img);
-    UnloadImage(img);
-    return t;
+    cache[key] = img;  // (kept: textureFromImage does not take the image)
+    return textureFromImage(img);
 }
 
 // Worn baize: soft mottling, a fine nap and thousands of short fibres (all wrapped, so it tiles).
@@ -2285,7 +2341,7 @@ Texture2D genPlasterTexture(int size, Color base, uint32_t seed) {
 
 RenderTexture2D makeCanvas(int width, int height) {
     RenderTexture2D rt = LoadRenderTexture(width, height);
-    opaqueTextures().erase(rt.texture.id);
+    setTextureOpaque(rt.texture, false);
     SetTextureFilter(rt.texture, TEXTURE_FILTER_BILINEAR);
     return rt;
 }

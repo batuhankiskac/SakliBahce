@@ -397,9 +397,29 @@ void testMemoryBanter() {
         for (int s = 0; s < 3; ++s) CHECK(row[s].n >= 4);
 }
 
+// (denetim: ui) the first letter goes upper case the Turkish way; bubbles last by characters, not bytes
+void testCaseAndTiming() {
+    CHECK_STR(capitalizeFirst("iyi oyun"), "\xC4\xB0yi oyun");             // İyi
+    CHECK_STR(capitalizeFirst("\xC4\xB1s\xC4\xB1r"), "Is\xC4\xB1r");       // ısır -> Isır
+    CHECK_STR(capitalizeFirst("\xC3\xA7" "ay"), "\xC3\x87" "ay");               // çay -> Çay
+    CHECK_STR(capitalizeFirst("\xC4\x9F"), "\xC4\x9E");                      // ğ -> Ğ
+    CHECK_STR(capitalizeFirst("\xC3\xB6yle"), "\xC3\x96yle");                // öyle -> Öyle
+    CHECK_STR(capitalizeFirst("\xC5\x9F" "ans"), "\xC5\x9E" "ans");             // şans -> Şans
+    CHECK_STR(capitalizeFirst("\xC3\xBCzg\xC3\xBCn"), "\xC3\x9Czg\xC3\xBCn"); // üzgün -> Üzgün
+    CHECK_STR(capitalizeFirst("Hadi"), "Hadi");
+    CHECK_STR(capitalizeFirst("3 el"), "3 el");
+    CHECK_STR(capitalizeFirst(""), "");
+    CHECK(utf8Count("\xC3\xA7\xC4\x9F\xC5\x9F") == 3);
+    const std::string ascii = "Bu el benim, haberiniz olsun!";
+    CHECK(bubbleSeconds(ascii) == std::clamp(1.9f + 0.045f * (float)ascii.size(), 2.4f, 4.6f));
+    CHECK(bubbleSeconds("\xC5\x9Fu \xC3\xA7" "ay\xC4\xB1 i\xC3\xA7" "elim art\xC4\xB1k") ==
+          bubbleSeconds("su cayi icelim artik"));
+}
+
 } // namespace
 
 int main() {
+    testCaseAndTiming();
     testSuffixes();
     testRecording();
     testPersistence();

@@ -1,5 +1,6 @@
 // Altmışaltı (66) engine (see Altmisalti.h, docs/kurallar_altmisalti.md).
 #include "core/Altmisalti.h"
+#include "core/TurkishText.h"
 
 #include <algorithm>
 
@@ -10,32 +11,12 @@ using kart::suitOf;
 
 namespace {
 
-std::string capitalizeFirst(std::string s) {
-    if (!s.empty() && s[0] >= 'a' && s[0] <= 'z') s[0] = (char)(s[0] - 'a' + 'A');
-    return s;
-}
+using trtext::capitalizeFirst;
 
 int nineOf(int suit) { return kart::makeCard(suit, 9); }
 int partnerOf(int card) { return kart::makeCard(suitOf(card), rankOf(card) == kart::Kiz ? kart::Papaz : kart::Kiz); }
 
 } // namespace
-
-CardMask maskOf(const std::vector<int>& cards) {
-    CardMask m = 0;
-    for (int c : cards)
-        if (kart::isValidCard(c)) m |= cardBit(c);
-    return m;
-}
-
-std::vector<int> cardsOf(CardMask m) {
-    std::vector<int> v;
-    while (m) {
-        const int c = lowestCard(m);
-        v.push_back(c);
-        m &= m - 1;
-    }
-    return v;
-}
 
 int cardPoints(int card) {
     switch (rankOf(card)) {
@@ -195,7 +176,7 @@ std::string Game::says(int p, const std::string& third, const std::string& secon
     return human_[(size_t)p] ? capitalizeFirst(second) : names_[(size_t)p] + " " + third;
 }
 
-void Game::push(GameEvent e) { events_.push_back(std::move(e)); }
+void Game::push(GameEvent e) { kart::pushEvent(events_, std::move(e)); }
 
 std::vector<GameEvent> Game::drainEvents() {
     std::vector<GameEvent> v;
@@ -338,7 +319,6 @@ ActionResult Game::playCard(int p, int card) {
     log_.push_back({LogKind::Play, p, card});
     const int stockBefore = deal_.stockN;
     const int trumpBefore = deal_.stockN > 0 ? deal_.stock[0] : -1;
-    const int leaderBefore = deal_.leader;
     deal_.play(p, card);
 
     if (rec.marriage > 0) {
@@ -371,7 +351,6 @@ ActionResult Game::playCard(int p, int card) {
         won_[(size_t)w].push_back(deal_.trickCards[0]);
         won_[(size_t)w].push_back(deal_.trickCards[1]);
         push(std::move(t));
-        (void)leaderBefore;
         if (deal_.drew[0] >= 0) {
             for (int k = 0; k < 2; ++k) {
                 const int q = k == 0 ? w : 1 - w;

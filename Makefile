@@ -2,9 +2,12 @@
 #   make            -> ./saklibahce (the game)
 #   make run        -> build and start the game
 #   make test       -> engine + AI tests and short headless bot-vs-bot simulations
-#   make asan       -> AddressSanitizer + UBSan build in build/asan/ (game + tests), then runs the tests
+#   make asan       -> AddressSanitizer + UBSan build in build/asan/ (game + tests), then runs every test `make test` runs
+#   make tools      -> every developer harness in tools/ (snapshots, audio and voice renders) into $(BUILD)/
+#   make rulescheck -> fails when src/ui/RulesText.inc is stale against docs/kurallar_*.md (tools/gen_rules.py)
 #   make clean
-# Only src/ is compiled into the game; tools/ (developer snapshot harnesses) is not.
+# Only src/ is compiled into the game; tools/ (developer snapshot harnesses) is not (see `make tools`).
+# BUILD=dir puts the objects (and tests, tools) elsewhere; the game still links to ./saklibahce unless GAME=... is given.
 UNAME_S  := $(shell uname -s)
 ifeq ($(origin CXX),default)
 CXX      := clang++
@@ -37,6 +40,7 @@ TEST_NAMES += test_bezik bezik_sim # Bezik
 TEST_NAMES += test_dama dama_sim # Dama
 TEST_NAMES += test_konken konken_sim # Konken
 TEST_NAMES += test_ozelgun # Özel günler (ozelgun)
+TEST_NAMES += test_settings test_save # (denetim: app) settings lines, saves, the atomic writer, the books
 TEST_SRC := $(TEST_NAMES:%=tests/%.cpp)
 CORE_OBJ := $(CORE_SRC:%.cpp=$(BUILD)/%.o)
 UI_OBJ   := $(UI_SRC:%.cpp=$(BUILD)/%.o)
@@ -46,7 +50,7 @@ TESTS    := $(TEST_NAMES:%=$(BUILD)/%)
 
 ASAN_FLAGS := -std=c++17 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra
 
-.PHONY: all test tests run clean asan tablescheck cardsnapshot basarimcheck catwalk
+.PHONY: all test tests tools run clean asan tablescheck cardsnapshot boardsnapshot basarimcheck catwalk rulescheck
 all: $(GAME)
 
 $(GAME): $(CORE_OBJ) $(UI_OBJ) $(APP_OBJ)
@@ -102,11 +106,20 @@ test: $(TESTS)
 	$(BUILD)/test_analysis
 	$(BUILD)/test_achievements
 	$(BUILD)/test_ozelgun # Özel günler
+	$(BUILD)/test_settings # (denetim: app)
+	$(BUILD)/test_save # (denetim: app)
 
 # The other table games played by the mouse in a hidden window (needs a display: run it awake, not over ssh)
 TABLES_CHECK_OBJ := $(CORE_OBJ) $(UI_OBJ) $(filter-out $(BUILD)/src/app/App%.o $(BUILD)/src/app/main.o,$(APP_OBJ))
-$(BUILD)/tables_check: $(BUILD)/tools/tables_check.o $(TABLES_CHECK_OBJ)
+# Every developer harness in tools/ links against the same objects (the app minus its App*.o and main.o):
+# `make tools` builds them all into $(BUILD)/, `make $(BUILD)/<name>` one of them.
+TOOL_NAMES := audio_render board_snapshot cards_snapshot characters_snapshot gfx_demo room_snapshot \
+              screens_snapshot table3d_snapshot tables_check voice_render
+TOOL_OBJ   := $(TOOL_NAMES:%=$(BUILD)/tools/%.o)
+TOOLS      := $(TOOL_NAMES:%=$(BUILD)/%)
+$(TOOLS): $(BUILD)/%: $(BUILD)/tools/%.o $(TABLES_CHECK_OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+tools: $(TOOLS)
 # Linux without a display (the cloud, CI): a virtual one through xvfb-run. TABLESCHECK_ARGS=--no-3d skips the 3D
 # pass (a software GL draws a frame in ~0.1 s: the full run takes ~45 min, without 3D a few minutes).
 TABLESCHECK_ARGS ?=
@@ -116,8 +129,6 @@ HEADLESS := $(if $(shell command -v xvfb-run),xvfb-run -a -s "-screen 0 1920x108
 endif
 endif
 # The regulars' card-game hands close up (tools/cards_snapshot.cpp): pictures into build/cards/
-$(BUILD)/cards_snapshot: $(BUILD)/tools/cards_snapshot.o $(TABLES_CHECK_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 cardsnapshot: $(BUILD)/cards_snapshot
 	@mkdir -p build/cards
 	$(HEADLESS) $(BUILD)/cards_snapshot build/cards
@@ -131,14 +142,10 @@ basarimcheck: $(GAME)
 	  HOME=$$d $(HEADLESS) ./$(GAME) --achievement-test --seed 3 --game $$g --speed 4 --no-audio \
 	    --snapshot $$d/basarim.png --state game --frames 400000 > $$d/out.txt; r=$$?; \
 	  grep basarim-test $$d/out.txt; [ $$r -eq 0 ] || exit 1; done; rm -rf $$d
-$(BUILD)/room_snapshot: $(BUILD)/tools/room_snapshot.o $(TABLES_CHECK_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 catwalk: $(BUILD)/room_snapshot
 	$(HEADLESS) $(BUILD)/room_snapshot build/room 1800 catwalk
 
 # Rakip (round 5): the opponent's hands at the tavla table close up (tools/board_snapshot.cpp): pictures into build/board/
-$(BUILD)/board_snapshot: $(BUILD)/tools/board_snapshot.o $(TABLES_CHECK_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 boardsnapshot: $(BUILD)/board_snapshot
 	@mkdir -p build/board
 	$(HEADLESS) $(BUILD)/board_snapshot build/board
@@ -150,21 +157,12 @@ run: $(GAME)
 	./$(GAME)
 
 # Sanitized build: build/asan/saklibahce (try: build/asan/saklibahce --ai --speed 8 --no-audio)
+# (the tests and the short simulations are `make test`'s own list, so a new test runs here too)
 asan:
 	$(MAKE) BUILD=build/asan GAME=build/asan/saklibahce CXXFLAGS="$(ASAN_FLAGS)" LDFLAGS="-fsanitize=address,undefined" \
 	    build/asan/saklibahce tests
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_engine
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_ai
-	ASAN_OPTIONS=detect_leaks=0 build/asan/sim --hands 200 --seed 5 --levels 2,1,0,2
-	ASAN_OPTIONS=detect_leaks=0 build/asan/sim --hands 40 --seed 6 --levels 2,1,0,2 --okey
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_tavla
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_batak
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_king
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_pisti
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_altmisalti
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_bezik
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_dama
-	ASAN_OPTIONS=detect_leaks=0 build/asan/test_konken
+	ASAN_OPTIONS=detect_leaks=0 $(MAKE) BUILD=build/asan GAME=build/asan/saklibahce CXXFLAGS="$(ASAN_FLAGS)" \
+	    LDFLAGS="-fsanitize=address,undefined" test
 
 # Optional static checks (fixes, 2026-10): clang-tidy over src/ with a small check set; skipped (not a failure) when
 # clang-tidy is not installed (macOS: brew install llvm, it is then in $(brew --prefix llvm)/bin). Narrow it with
@@ -178,6 +176,11 @@ tidy:
 	    $(CLANG_TIDY) --quiet -checks='$(TIDY_CHECKS)' $(TIDY_SRC) -- -std=c++17 -Isrc -isystem $(RAYLIB)/include || true; fi
 
 clean:
-	rm -rf build/make build/asan $(GAME)
+	rm -rf build/make build/asan $(BUILD) $(GAME) build/cards build/board build/room build/screens
 
--include $(CORE_OBJ:.o=.d) $(UI_OBJ:.o=.d) $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d)
+# RulesText.inc is generated from docs/kurallar_*.md: this fails (and says so) when someone edited a doc and forgot
+# to run python3 tools/gen_rules.py
+rulescheck:
+	python3 tools/gen_rules.py --check
+
+-include $(CORE_OBJ:.o=.d) $(UI_OBJ:.o=.d) $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(TOOL_OBJ:.o=.d)

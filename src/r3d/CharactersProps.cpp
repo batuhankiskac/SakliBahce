@@ -9,7 +9,7 @@
 namespace r3d {
 namespace chr {
 
-void buildPeople(Meshes& M, Renderer& r);
+void buildPeople(Meshes& M, Renderer& r, const std::function<void(MeshJobs&)>& more);
 void freePerson(PersonMeshes& pm, Renderer& r);
 
 namespace {
@@ -245,8 +245,9 @@ void buildSpectacles(Mesh& frame, Mesh& lenses) {
 }
 
 // Askılı tepsi: tray-local origin at the handle ring the hand holds; the tray hangs 0.30 m below.
-void buildTray(Mesh& hanger, Mesh& glasses, Mesh& tea) {
-    MeshBuilder h, g, t;
+// The askılı tepsi's hanger and tray (its glasses are the ocakçı's to fill: Cast::submitTray).
+void buildTray(Mesh& hanger) {
+    MeshBuilder h;
     const float trayY = -0.300f, R = 0.140f;
     // handle: a vertical loop and a hub
     {
@@ -281,21 +282,7 @@ void buildTray(Mesh& hanger, Mesh& glasses, Mesh& tea) {
              {R - 0.004f, 0.006f}, {R - 0.012f, 0.0025f}, {0.0f, 0.0025f}},
             40, false, false, WHITE);
     h.resetTransform();
-    // three glasses on saucers between the arms
-    for (int k = 0; k < 3; ++k) {
-        float a = PI_F * 0.5f + 2.f * PI_F * k / 3.f + PI_F / 3.f;
-        Vector3 p{std::cos(a) * 0.078f, trayY + 0.0025f, std::sin(a) * 0.078f};
-        Matrix m = MatrixTranslate(p.x, p.y, p.z);
-        t.setTransform(m);
-        appendSaucer(t, rgb(242, 238, 230), rgb(200, 160, 70));
-        t.setTransform(MatrixTranslate(p.x, p.y + SAUCER_TOP, p.z));
-        appendLiquid(t, 0.93f, rgb(150, 44, 14));
-        g.setTransform(MatrixTranslate(p.x, p.y + SAUCER_TOP, p.z));
-        appendGlass(g, rgb(236, 242, 248, 50), rgb(214, 170, 80, 255));
-    }
     hanger = h.build(true);
-    glasses = g.build(true);
-    tea = t.build(true);
 }
 
 Mesh buildDice() {
@@ -387,10 +374,9 @@ void drawNewspaperCanvas(RenderTexture2D& rt) {
 } // namespace
 
 float glassScale() { return GS; }
-float glassInnerRadius(float y) { return innerR(y / GS) * GS; }
 
-void buildAll(Meshes& M, Renderer& r, uint64_t seed) {
-    buildPeople(M, r);
+void buildAll(Meshes& M, Renderer& r, uint64_t seed, const std::function<void(MeshJobs&)>& morePeople) {
+    buildPeople(M, r, morePeople);
 
     M.woodTex = genWoodTexture(256, rgb(150, 98, 58), rgb(80, 48, 28), (uint32_t)(seed * 7u + 3u), 9.f);
     {
@@ -431,7 +417,7 @@ void buildAll(Meshes& M, Renderer& r, uint64_t seed) {
     M.imame = buildImame();
     M.tassel = buildTassel();
     buildSpectacles(M.spectacles, M.lenses);
-    buildTray(M.trayHanger, M.trayGlasses, M.trayTea);
+    buildTray(M.trayHanger);
     M.dice = buildDice();
     M.cardFan = buildCardFan();
     M.card = buildCard();
@@ -484,8 +470,6 @@ void freeAll(Meshes& M, Renderer& r) {
     U(M.spectacles);
     U(M.lenses);
     U(M.trayHanger);
-    U(M.trayGlasses);
-    U(M.trayTea);
     U(M.dice);
     U(M.cardFan);
     U(M.card);
@@ -500,11 +484,9 @@ void freeAll(Meshes& M, Renderer& r) {
                    &M.porcelain, &M.cigMat,   &M.emberMat, &M.amber,    &M.tassleMat, &M.lensMat,
                    &M.frameMat, &M.trayMat,   &M.diceMat,  &M.cardMat,  &M.paperMat, &M.lipMat};
     for (Mat* m : mats) r.unloadMat(*m);
-    if (M.woodTex.id) UnloadTexture(M.woodTex);
-    if (M.strawTex.id) UnloadTexture(M.strawTex);
-    if (M.paperCanvasOk) UnloadRenderTexture(M.paperCanvas);
-    M.woodTex = Texture2D{};
-    M.strawTex = Texture2D{};
+    unloadTexture(M.woodTex); // (r3d's: it also forgets the opaque note on the id)
+    unloadTexture(M.strawTex);
+    if (M.paperCanvasOk) unloadCanvas(M.paperCanvas);
     M.paperCanvasOk = false;
 }
 

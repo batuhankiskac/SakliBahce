@@ -200,6 +200,24 @@ protected:
     }
     // Maç tekrarı: the status while the player's seat is to move ("Sıra sende" for the default name "Sen").
     std::string replaySelfStatus() const { return names_[0] == "Sen" ? std::string("Sıra sende") : names_[0] + " düşünüyor…"; }
+    // The status line's ladder every card table shares, around the game's own words: `ended` ("El bitti", the match's
+    // end; null while neither), `dealText` while `dealingNow`, the replay's or the Yapay Zeka's turn in our seat, a
+    // regular's turn (his name + `thinking`). The player's own decision is the game's: `mine()`, shown highlighted
+    // (`sc`). Empty when nobody acts.
+    template <class Mine>
+    std::string statusLine(const char* ended, bool dealingNow, const char* dealText, int a, bool aiSeat, Color& sc,
+                           Mine mine, const char* thinking = " düşünüyor…") const {
+        if (ended) return ended;
+        if (dealingNow) return dealText;
+        if (a == 0 && replay_) return replaySelfStatus();
+        if (a == 0 && aiSeat) return "Yapay zeka düşünüyor…";
+        if (a == 0) {
+            sc = ui::pal::Highlight;
+            return mine();
+        }
+        if (a > 0) return names_[(size_t)a] + thinking;
+        return {};
+    }
     // After a resume: the table shows the engine's state at once (hands, the trick, won piles, extras via layoutExtra;
     // nothing in flight, no toasts), and the player's / bots' turns go on from there.
     void restoreView();
